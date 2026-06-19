@@ -21,7 +21,9 @@ from __future__ import annotations
 import asyncio
 import glob
 import os
+import subprocess
 import time
+import types
 
 import pytest
 from textual.widgets import OptionList, Static
@@ -30,6 +32,18 @@ from omodel.app import OModelApp
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
 from omodel.resolve import Resolver
+
+
+@pytest.fixture(autouse=True)
+def _no_real_opencode(monkeypatch):
+    """Hard rule: no test calls the real opencode CLI. The detail pane now fetches
+    `opencode models <prov> --verbose` from a worker thread (~320 MB per process), so an
+    un-stubbed pilot run would spawn real opencode subprocesses that outlive the test and
+    pile up — that OOM'd a dev machine. Stub subprocess.run so the TUI stays hermetic."""
+    def _stub(*args, **kwargs):
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _stub)
 
 
 # ---------------------------------------------------------------------------

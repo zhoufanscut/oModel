@@ -14,11 +14,11 @@ def main(argv: list = None) -> int:
       (default)        → run the TUI (omodel.app.run_app)
       --config PATH    → use a specific config file
       --restore        → list recent backups (newest 10 + pinned original) and restore one
-      --refresh [--omo-src P] → regenerate suggestion data (omodel.refresh.refresh)
+      --refresh-omo [--omo-src P] → regenerate bundled omo suggestion data (omodel.refresh)
       --print          → print current resolved agent/category models, no UI
       --check          → dry-run: resolve candidate lists for every target, exit 0
                          (CI-safe; degrades to suggestions-only if `opencode` absent)
-      --sync-models    → passthrough to `opencode models --refresh`
+      --refresh-models → force `opencode models --refresh` + rebuild the local cache
       --version
     Returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -37,15 +37,16 @@ def main(argv: list = None) -> int:
         help="List recent backups (newest 10 + pinned original) and restore one interactively.",
     )
     parser.add_argument(
-        "--refresh",
+        "--refresh-omo",
         action="store_true",
-        help="Regenerate suggestion data from an omo checkout (requires bun).",
+        dest="refresh_omo",
+        help="Regenerate bundled omo suggestion data from an omo checkout (requires bun).",
     )
     parser.add_argument(
         "--omo-src",
         metavar="PATH",
         dest="omo_src",
-        help="Path to the oh-my-openagent checkout (used with --refresh).",
+        help="Path to the oh-my-openagent checkout (used with --refresh-omo).",
     )
     parser.add_argument(
         "--print",
@@ -59,10 +60,10 @@ def main(argv: list = None) -> int:
         help="Dry-run: resolve candidate lists for every target, exit 0 (CI-safe).",
     )
     parser.add_argument(
-        "--sync-models",
+        "--refresh-models",
         action="store_true",
-        dest="sync_models",
-        help="Passthrough to `opencode models --refresh`.",
+        dest="refresh_models",
+        help="Force `opencode models --refresh` and rebuild the local ~/.cache/omodel cache.",
     )
     parser.add_argument(
         "--version",
@@ -78,20 +79,30 @@ def main(argv: list = None) -> int:
         print(omodel.__version__)
         return 0
 
-    # --refresh [--omo-src PATH]: non-fatal if omo or bun are absent
-    if args.refresh:
+    # --refresh-omo [--omo-src PATH]: regenerate bundled omo data; non-fatal if omo/bun absent
+    if args.refresh_omo:
         from omodel.refresh import refresh
         return refresh(omo_src=args.omo_src)
 
-    # --sync-models: passthrough to `opencode models --refresh`
-    if args.sync_models:
-        import subprocess
-        try:
-            result = subprocess.run(["opencode", "models", "--refresh"])
-            return result.returncode
-        except FileNotFoundError:
+    # --refresh-models: force opencode upstream re-fetch + rebuild our cache
+    if args.refresh_models:
+        import shutil
+        from omodel.catalog import CatalogUnavailable, refresh as refresh_catalog
+
+        if shutil.which("opencode") is None:
             print("error: `opencode` not found on PATH", file=sys.stderr)
             return 1
+        try:
+            catalog = refresh_catalog()
+        except CatalogUnavailable as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        n_models = sum(len(v) for v in catalog.available.values())
+        print(
+            f"Refreshed {n_models} models across {len(catalog.connected)} providers; "
+            "cache updated."
+        )
+        return 0
 
     # --restore: list backups and prompt the user to pick one
     if args.restore:

@@ -9,7 +9,7 @@ updating this file (others depend on it).
 
 | Track | Owns (edit only these) |
 |---|---|
-| **Core logic** | `src/omodel/catalog.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
+| **Core logic** | `src/omodel/catalog.py`, `src/omodel/cache.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
 | **Config I/O** | `src/omodel/config_io.py` |
 | **TUI** | `src/omodel/app.py` |
 | **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
@@ -31,6 +31,11 @@ Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operat
    explicit temp `path`/`--config`. The Lead's gate enforces this.
 5. **Tests/imports run in a venv** with `textual json5 pytest` installed (PyPI reachable). Do
    not assume system-wide installs.
+6. **REAL-CACHE SAFETY (hard rule).** The opencode-output cache lives at `~/.cache/omodel/`
+   (`$OMODEL_CACHE_DIR` → `$XDG_CACHE_HOME/omodel` → `~/.cache/omodel`). Tests must never touch
+   the real cache: the autouse `conftest.py` fixture points `$OMODEL_CACHE_DIR` at a tmp dir, and
+   any test exercising the TUI/catalog must stub `subprocess.run` (no real `opencode` — each call
+   is ~3s / ~320 MB RSS, and stacking them OOM'd a machine).
 
 ## Shared shapes (the integration seam)
 
@@ -65,8 +70,14 @@ the resolved substitute, not the omo id. `substitute_for` is display-only.
 The stub files ARE the signatures; implement their bodies. Summary:
 
 - `catalog.py`: `class CatalogUnavailable(Exception)`; `@dataclass Catalog(available: dict,
-  connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id)->dict|None`;
-  `load(opencode_bin="opencode")->Catalog`.
+  connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id, use_cache=True)->
+  dict|None`; `load(opencode_bin="opencode", use_cache=True)->Catalog`;
+  `refresh(opencode_bin="opencode")->Catalog` (force `opencode models --refresh` + rebuild cache).
+  All three opencode calls read through the on-disk cache (`cache.py`) and carry a `timeout=`.
+- `cache.py`: on-disk cache of opencode stdout (24h TTL, flat, under `~/.cache/omodel/`).
+  `cache_dir()->str`; `read(key, ttl_seconds=None)->str|None`; `write(key, stdout, args=None)->None`;
+  `age_seconds(key)->float|None`; `clear()->None`; `CACHE_VERSION`. Best-effort: missing/corrupt/
+  expired → miss; write errors swallowed (a non-writable cache never breaks the caller).
 - `suggestions.py`: `FAMILY_VENDOR` (frozen 14-map); `@dataclass Family`; `@dataclass
   Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
   Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
@@ -81,7 +92,8 @@ The stub files ARE the signatures; implement their bodies. Summary:
 - `app.py`: `class OModelApp(App)` (Textual) + `run_app(config_path=None)->None`. Stable widget
   IDs as documented in `app.py`'s docstring.
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint).
-- `refresh.py`: `refresh(omo_src=None)->int`.
+- `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
+  data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).
 
 ## Cross-module dependencies
 - `resolve.py` → `suggestions.py` + `catalog.py`.  `refresh.py` → `tools/snapshot_omo.ts`.

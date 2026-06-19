@@ -32,7 +32,7 @@ prefix and a valid variant, and saves a clean config.
   `requires-python` ≤ our floor (verify at lock time, else bump floor to 3.10).
 - **`opencode` CLI** on `PATH` — the source of "what you have". Degrades gracefully if missing or failing.
 - **No** dependency on a local omo checkout or omo cache at runtime.
-- **`bun`** (NOT node) is required **only** for the optional `omodel --refresh` — see §Refresh.
+- **`bun`** (NOT node) is required **only** for the optional `omodel --refresh-omo` — see §Refresh.
   Verified: `node --experimental-strip-types` cannot run omo's modules (extensionless relative
   imports → `ERR_MODULE_NOT_FOUND`); bun resolves them.
 
@@ -50,10 +50,11 @@ prefix and a valid variant, and saves a clean config.
 | 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. A dedicated provider serving the model wins; among gateways, tie-break by the suggestion's own `providers` order, then first-seen. `p` cycles the prefix (override); the shown prefix is saved. |
 | 9 | Suggestion data | **Bundled in the wheel** (`importlib.resources`); user-override dir supported. |
 | 10 | Availability source | **Live `opencode models` CLI** — not omo's cache, **not `auth list`** (see §Data sources). |
-| 11 | Refresh | `omodel --refresh` regenerates the suggestion JSON via **bun** + an omo checkout. |
+| 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
 | 12 | Distribution | **GitHub-only** (no PyPI): PyInstaller binary + `install.sh` primary; `pipx`/`uvx` from git secondary. |
 | 13 | First save | **Deletes the commented-out palette** (clean active-only); the original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
 | 14 | Variant validity | **Bundled family registry only** — never `opencode --verbose` (its `variants` is opencode's runtime namespace: different shape, empty for some providers). |
+| 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 
 ## Data sources
 
@@ -64,7 +65,8 @@ prefix and a valid variant, and saves a clean config.
   **Error rule (one definition, used by `catalog.load` too):** `opencode` not on `PATH` → banner +
   suggestions/add-model only; else exit code ≠ 0 **or** zero `provider/model` lines parsed → raise
   `CatalogUnavailable` → banner "couldn't read models", offer retry (`r`), degrade. (There is no other
-  "partial" state.) `opencode models --refresh` is exposed as `omodel --sync-models`.
+  "partial" state.) `opencode models --refresh` is exposed as `omodel --refresh-models`, which also
+  rebuilds the local cache (§cache.py).
 - **Why not `opencode auth list`:** it prints provider **display names** ("Moonshot AI (China)", not
   `moonshotai-cn`) wrapped in box-drawing/ANSI with **no `--json`/plain flag** (verified) — fragile,
   and would need a name→ID map. `opencode models` already yields the usable provider set as clean IDs
@@ -108,10 +110,10 @@ prefix and a valid variant, and saves a clean config.
 omodel                          # launch the TUI
 omodel --config PATH            # use a specific config file
 omodel --restore                # list recent backups (newest 10) and restore one
-omodel --refresh [--omo-src P]  # regenerate suggestion data from an omo checkout (bun required)
+omodel --refresh-omo [--omo-src P]  # regenerate bundled suggestion data from an omo checkout (bun required)
 omodel --print                  # print current resolved agent/category models, no UI
 omodel --check                  # dry-run: resolve candidate lists for every target, exit 0 (CI-safe; degrades to suggestions-only if `opencode` absent)
-omodel --sync-models            # passthrough to `opencode models --refresh`
+omodel --refresh-models         # force `opencode models --refresh` + rebuild the ~/.cache/omodel cache
 omodel --version
 ```
 
@@ -129,7 +131,7 @@ omodel --version
 │ CATEGORIES          │  openai/gpt-5.5 (medium)             │
 │   deep         gpt  │● zhipuai/glm-5.1  (≈ omo glm-5)      │
 │   quick        mini │ + add model…                         │
-└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · q quit ┘
+└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · r refresh · q quit ┘
 ```
 
 ## Repo layout (src-layout, PyPI-ready)
@@ -141,15 +143,16 @@ oModel/
   install.sh                     # curl|sh: detect os/arch → download release binary → ~/.local/bin
   src/omodel/
     __init__.py
-    cli.py            # argparse: default → TUI; --refresh/--config/--print/--check/--sync-models
+    cli.py            # argparse: default → TUI; --config/--restore/--print/--check/--refresh-omo/--refresh-models
     app.py            # Textual two-pane App (see §Textual contract)
-    catalog.py        # availability via `opencode models`; verbose-record parser; providers_for()
+    catalog.py        # availability via `opencode models`; verbose-record parser; providers_for(); refresh()
+    cache.py          # 24h on-disk cache of opencode stdout (~/.cache/omodel); read-through by catalog
     suggestions.py    # load bundled/override omo-suggestions.json; detect_family(); variants
     resolve.py        # prefix (prefer-dedicated), variant defaulting/validation, candidate assembly
     config_io.py      # read jsonc (json5) → dict; serialize(); diff+confirm save; .bak; scaffold
     refresh.py        # locate omo src + bun; run extractor; write repo or user-data override
     data/
-      omo-suggestions.json        # BUNDLED, committed (regenerated by --refresh)
+      omo-suggestions.json        # BUNDLED, committed (regenerated by --refresh-omo)
       default-config.jsonc        # BUNDLED starter — oModel's OWN minimal template (not vendored)
     tools/
       snapshot_omo.ts             # BUNDLED extractor (oModel's own code; imports omo at maintainer time)
@@ -197,10 +200,32 @@ oModel/
   `providers_for(model_id)`); run `opencode models <provider> --verbose`; split records on header
   lines `^(?P<prov>[a-z0-9_-]+)/(?P<model>\S+)$` (col 0), brace-count each block, `json.loads`, and
   pick the record whose header == `<provider>/<model_id>` → `{context, cost, reasoning, image}` for
-  the detail pane (display only).
+  the detail pane (display only). This is a ~3s subprocess, so `app.py` calls it from a background
+  worker (cached per model, debounced) — never on the UI thread (see §Textual two-pane contract).
+
+### `cache.py` — on-disk opencode cache
+- Both opencode subprocesses (`opencode models` ~3s, and `opencode models <prov> --verbose` ~3s /
+  ~320 MB RSS) are cached **24h** under `~/.cache/omodel/` (`$OMODEL_CACHE_DIR` → `$XDG_CACHE_HOME/omodel`
+  → `~/.cache/omodel`), **flat**: `models.json` + one `verbose-<provider>.json` per provider. Each file
+  wraps stdout as `{version, fetched_at, args, stdout}` — explicit `fetched_at` (not mtime; survives
+  copies) and a `version` that auto-invalidates on format change. Reads tolerate missing/corrupt/expired
+  (→ miss); writes are atomic (`os.replace`) and swallow errors, so a non-writable cache never breaks the
+  app. `clear()` removes only `*.json` (+ orphaned `*.tmp-*`), never foreign files.
+- `catalog.load()`/`detail()` read through it (`use_cache=True`). opencode presence is checked **first**,
+  so "not on `PATH` → empty" (above) is unchanged — the cache is a perf layer, not an availability
+  fallback. A live, successful run rewrites the cache; every opencode call carries a `timeout=`.
+- `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
+  (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
+  worker (off the UI thread); the `Providers:` header shows cache age (`cached 3h ago · r to refresh`).
+- **Memory safety (load-bearing):** `asyncio.to_thread` threads can't be killed, so the detail fetch is
+  **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
+  *current* target, which schedules the next — "chase the cursor"). Uncapped/un-stubbed, stacked
+  ~320 MB `--verbose` processes OOM'd a machine; a refresh bumps a generation counter so an in-flight
+  fetch discards its now-stale result. Tests stub `subprocess.run` and isolate the cache dir
+  (`tests/conftest.py` → `$OMODEL_CACHE_DIR`).
 
 ### `suggestions.py` — bundled omo data
-- Load order: `$OMODEL_SUGGESTIONS` → `$XDG_DATA_HOME/omodel/omo-suggestions.json` (from `--refresh`)
+- Load order: `$OMODEL_SUGGESTIONS` → `$XDG_DATA_HOME/omodel/omo-suggestions.json` (from `--refresh-omo`)
   → bundled `importlib.resources.files("omodel.data")/"omo-suggestions.json"`.
 - `detect_family(model_id)` — faithful port of `detectHeuristicModelFamily`: **ordered** iteration of
   `families`, `pattern` tested before `includes` within each entry, first match wins; run
@@ -315,7 +340,7 @@ oModel/
   — valid and minimal; the left pane is populated from the bundled snapshot, so empty maps still show
   all 11 agents / 8 categories as unset, and only what you set gets written.
 
-### `refresh.py` — `omodel --refresh`
+### `refresh.py` — `omodel --refresh-omo`
 - Locate omo src: `--omo-src` | `$OMO_SRC` | `~/source/oh-my-openagent` (needs
   `packages/model-core/src`). Runner: **bun only** (no node fallback — verified broken).
 - Run bundled `tools/snapshot_omo.ts` → JSON (RegExp→`.source`, Set→array, + `meta`).
@@ -337,23 +362,28 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Header** `Static#providers`: one line `Providers: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the
-  ⚠-unavailable explainer ("no listed provider serves this"). On `CatalogUnavailable` it shows the
-  banner + `r` retry instead.
+  ⚠-unavailable explainer ("no listed provider serves this"). When the list came from the 24h cache it
+  also shows its age (`cached 3h ago · r to refresh`; see §cache.py). On `CatalogUnavailable` it shows
+  the banner + `r` retry instead.
 - **Left** `OptionList#targets`: AGENTS then CATEGORIES; option IDs `agent:<name>`,
   `agent:<name>.ultrawork` / `.compaction` (indented sub-rows, shown when present in config or added
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`;
   `a` adds an `ultrawork`/`compaction` sub-target (verified: omo schema permits both on all 11 agents).
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
-  row matching the launch-time on-disk assignment is prefixed `● ` (others `  `).
+  row matching the launch-time on-disk assignment is prefixed `● ` (others `  `). The `catalog.detail`
+  line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
+  debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
+  of the pane renders instantly so highlighting is never blocked.
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
   `v` → push `OptionList` of the family's valid variants + `(none)`; `p` → cycle the highlighted
   candidate's prefix across `providers_for(model)` (dedicated + every gateway incl. openrouter),
   re-rendering the row and staging the shown `provider/`; `e` (or `enter` on `cand:add`) →
-  the add-model modal (below); `x` → clear; `a` → add sub-target; `s` → diff+confirm save; `q` → quit
-  (confirm if dirty). Pilot tests drive these via the stable IDs.
+  the add-model modal (below); `x` → clear; `a` → add sub-target; `s` → diff+confirm save; `r` → refresh
+  (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
+  `q` → quit (confirm if dirty). Pilot tests drive these via the stable IDs.
 - **Add-model modal (`e` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
   of what saves. A full `provider/model` → used **verbatim** (split on the *first* `/`, so
   `openrouter/anthropic/…` works); a bare id → auto-prefixed via `resolve_prefix` **if available**,
@@ -379,7 +409,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `uvx --from git+https://github.com/<you>/oModel omodel` ·
   `uv tool install git+https://github.com/<you>/oModel`.
 - **Maintainer:** `git clone … && uv pip install -e .`; refresh data with
-  `OMO_SRC=~/source/oh-my-openagent omodel --refresh`, commit `src/omodel/data/omo-suggestions.json`;
+  `OMO_SRC=~/source/oh-my-openagent omodel --refresh-omo`, commit `src/omodel/data/omo-suggestions.json`;
   `git tag vX.Y.Z && git push --tags` → `release.yml` builds and publishes the binary.
 - ⚠ **Licensing:** the bundled `omo-suggestions.json` is **data derived from omo source**, redistributed
   in both the repo and the binary. Confirm omo's `LICENSE.md`/`CLA.md`/`THIRD-PARTY-NOTICES.md` permit

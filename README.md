@@ -20,14 +20,14 @@ variant, then saves a clean `oh-my-openagent.jsonc` (timestamped backups each sa
 │ CATEGORIES          │ ✓ mine opencode/claude-opus-4-8      │
 │   deep         gpt  │ ✓ mine deepseek/deepseek-v4-pro      │
 │   quick        mini │ + add model…                         │
-└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · q quit ┘
+└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · r refresh · q quit ┘
 ```
 
 ## Requirements
 
 - Python ≥ 3.9
 - `opencode` CLI on `PATH` (degrades gracefully if absent)
-- `bun` — only for `omodel --refresh`
+- `bun` — only for `omodel --refresh-omo` (regenerating bundled suggestion data)
 
 ## Installation
 
@@ -67,12 +67,16 @@ uv pip install -e .
 omodel                          # launch the TUI
 omodel --config PATH            # use a specific config file
 omodel --restore                # list recent backups and restore one
-omodel --refresh [--omo-src P]  # regenerate suggestion data from an omo checkout
+omodel --refresh-omo [--omo-src P]  # regenerate bundled suggestion data from an omo checkout
+omodel --refresh-models         # force `opencode models --refresh` + rebuild the local cache
 omodel --print                  # print current resolved models, no UI
 omodel --check                  # dry-run CI check (exit 0; degrades if opencode absent)
-omodel --sync-models            # passthrough to `opencode models --refresh`
 omodel --version
 ```
+
+opencode's model list and per-model details are cached for 24h under `~/.cache/omodel/`, so
+warm launches are instant. Press `r` in the TUI (or run `omodel --refresh-models`) to force a
+live re-fetch and rebuild the cache.
 
 ### Key bindings (TUI)
 
@@ -86,13 +90,14 @@ omodel --version
 | `x` | Clear the current agent/category model |
 | `a` | Add an `ultrawork` / `compaction` sub-target |
 | `s` | Save (diff + confirm modal) |
+| `r` | Refresh models (live `opencode models --refresh` + rebuild cache, off-thread) |
 | `q` | Quit (confirm if unsaved changes) |
 
 ## How it works
 
 1. **Suggestion data** — oModel bundles a snapshot of the omo model requirements
    (11 agents, 8 categories, 14 families) generated from oh-my-openagent at build time.
-   Update it with `omodel --refresh`.
+   Update it with `omodel --refresh-omo`.
 
 2. **Available models** — fetched live from `opencode models`; groups into connected
    providers. The TUI degrades to suggestions-only if `opencode` is absent.
@@ -104,17 +109,22 @@ omodel --version
    timestamped backup; the very first save also pins `original.jsonc` (never pruned).
    `omodel --restore` lists the newest 10 backups + the pinned original.
 
+5. **Caching** — the two `opencode` calls (`models`, and `models <prov> --verbose` for the
+   detail pane) take ~3s each, so their output is cached for 24h under `~/.cache/omodel/`.
+   Warm launches and detail are instant; `r` / `omodel --refresh-models` force a live re-fetch.
+   The header shows how stale the list is (e.g. `cached 3h ago · r to refresh`).
+
 ## Refresh suggestion data
 
 ```sh
 # If omo is checked out at ~/source/oh-my-openagent (default):
-omodel --refresh
+omodel --refresh-omo
 
 # Or point to another checkout:
-omodel --refresh --omo-src /path/to/oh-my-openagent
+omodel --refresh-omo --omo-src /path/to/oh-my-openagent
 
 # Or via environment variable:
-OMO_SRC=/path/to/oh-my-openagent omodel --refresh
+OMO_SRC=/path/to/oh-my-openagent omodel --refresh-omo
 ```
 
 Requires `bun`. Non-fatal if absent: prints current bundled meta and exits 0.

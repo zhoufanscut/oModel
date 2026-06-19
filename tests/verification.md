@@ -117,21 +117,24 @@ compiled `re.Pattern` objects, not raw strings.
 
 ---
 
-## Check 6 — Refresh (`omodel --refresh`)
+## Check 6 — Refresh (`omodel --refresh-omo`)
 
-**Goal:** with omo src + bun present, `--refresh` regenerates `omo-suggestions.json` with
+**Goal:** with omo src + bun present, `--refresh-omo` regenerates `omo-suggestions.json` with
 bumped `meta`; without them, non-fatal (prints current bundled meta, exits 0).
 
 ```sh
 # Non-fatal path (no omo src):
-python -m omodel --refresh
+python -m omodel --refresh-omo
 # Expected: prints current bundled meta, exits 0, data file unchanged.
 
 # Live path (requires omo checkout at ~/source/oh-my-openagent and bun):
-OMO_SRC=~/source/oh-my-openagent python -m omodel --refresh
+OMO_SRC=~/source/oh-my-openagent python -m omodel --refresh-omo
 # Expected: src/omodel/data/omo-suggestions.json overwritten; meta.generatedAt bumped.
 # After refresh: re-run check #5 to confirm counts still valid.
 ```
+
+**Note:** `--refresh-omo` (bundled omo suggestions) is distinct from `--refresh-models`
+(opencode availability: runs `opencode models --refresh` + rebuilds `~/.cache/omodel/`).
 
 **Real-config safety:** writes to `src/omodel/data/` (maintainer) or
 `$XDG_DATA_HOME/omodel/` (user override); never touches `~/.config/opencode/`.
@@ -159,6 +162,11 @@ python -m pytest tests/test_app_pilot.py -v
 **Real-config safety:** HARD — pilot fixture uses `tmp_path` only; `OModelApp` must
 accept `config_path=` kwarg (stable API). No interaction with `~/.config/opencode/`.
 
+**Real-cache safety:** HARD — `tests/conftest.py` redirects `$OMODEL_CACHE_DIR` to a per-test
+tmp dir, and `test_app_pilot.py`'s autouse `_no_real_opencode` fixture stubs `subprocess.run`,
+so the pilot never spawns the real `opencode` CLI (~320 MB/call; un-stubbed it can OOM the box).
+The full suite must show zero `opencode`/`bun` processes spawned.
+
 **Note:** This test is currently skipped (`OModelApp not yet implemented`). It must be
 green after TUI integration before this check is cleared.
 
@@ -178,11 +186,15 @@ opencode models | head -5    # confirm models visible
 python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
-#   1. Verify Providers: header shows connected provider(s)
-#   2. Select agent:sisyphus
+#   1. Verify Providers: header shows connected provider(s) + cache age (e.g. "cached 0m ago · r to refresh")
+#   2. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
 #   3. Pick a model from the candidate list
-#   4. Press 's', confirm
-#   5. Quit
+#   4. Press 'r' — header shows "Refreshing…", then updates; ~/.cache/omodel/ is rebuilt
+#   5. Press 's', confirm
+#   6. Quit
+
+# Confirm the cache landed (and is the only place opencode output is cached by omodel):
+ls ~/.cache/omodel/    # models.json + verbose-<provider>.json
 
 # Verify output:
 cat /tmp/omodel-live-test.jsonc    # must be clean JSON (no comments)
