@@ -629,9 +629,16 @@ class OModelApp(App):
                 return
             chosen = result or None  # '' sentinel → clear
             row["variant"] = chosen
-            # Re-render the row in place and, if it's the staged assignment, restage.
             self._rows[target][idx] = row
-            self._stage_row(target, row)
+            # `v` adjusts the highlighted candidate's variant but must NOT create an
+            # assignment (DESIGN §Events: only Enter sets a model). Restage only when this
+            # row is already the staged assignment; otherwise just re-render so the chosen
+            # variant rides along if the user later picks the row with Enter.
+            model, _ = self._current_assignment(target)
+            if model and model.split("/", 1)[-1] == row["model"]:
+                self._stage_row(target, row)
+            else:
+                self._render_candidates(target)
 
         self.push_screen(VariantModal(variants), _apply)
 
@@ -703,9 +710,10 @@ class OModelApp(App):
         if to_add is None:
             self.bell()
             return
-        # Create an empty sub-object so it shows as a sub-row (and serializes when set).
+        # Create an empty sub-object so it shows as a sub-row. Do NOT mark dirty: an empty
+        # ultrawork/compaction is not a real edit — serialize() drops empty sub-objects, and
+        # only staging a model into it (which sets dirty) counts as a change.
         self._ensure_node(f"agent:{name}.{to_add}")
-        self.dirty = True
         self._populate_targets()
         # Highlight the freshly added sub-target.
         targets = self.query_one("#targets", OptionList)

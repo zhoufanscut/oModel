@@ -55,6 +55,24 @@ def load_config(path: str = None):
     return cfg, resolved
 
 
+def _clean_agents(agents: dict) -> dict:
+    """Return a COPY of the agents map with empty ultrawork/compaction sub-objects removed
+    (an added-but-unfilled sub-target must not persist — clean active-only). Never mutates
+    the input; preserves key order."""
+    out: dict = {}
+    for name, data in agents.items():
+        if not isinstance(data, dict):
+            out[name] = data
+            continue
+        cleaned = {}
+        for k, v in data.items():
+            if k in ("ultrawork", "compaction") and isinstance(v, dict) and not v.get("model"):
+                continue  # drop empty / model-less sub-object
+            cleaned[k] = v
+        out[name] = cleaned
+    return out
+
+
 def serialize(cfg: dict) -> str:
     """EXACT format (DESIGN §config_io serialize):
       (1) ordered dict preserving on-disk key order, but FORCE `$schema` to position 0 if present;
@@ -69,7 +87,10 @@ def serialize(cfg: dict) -> str:
     for k, v in cfg.items():
         if k == "$schema":
             continue  # already placed first
-        ordered[k] = v
+        if k == "agents" and isinstance(v, dict):
+            ordered[k] = _clean_agents(v)  # drop empty ultrawork/compaction sub-objects
+        else:
+            ordered[k] = v
 
     # (3) Serialize — json.dumps preserves insertion order for dicts in Python 3.7+
     body = json.dumps(ordered, indent=2, ensure_ascii=False)
@@ -234,6 +255,10 @@ def restore(path: str, backup_name: str) -> None:
         with open(snapshot_path, "w", encoding="utf-8") as f:
             f.write("")
 
-    # Copy the chosen backup verbatim to the live config path
-    src = os.path.join(backup_dir, backup_name)
+    # Copy the chosen backup verbatim to the live config path. Sanitize backup_name to a
+    # bare basename so it cannot escape .backup/ (path traversal), and require it to exist.
+    safe_name = os.path.basename(backup_name)
+    src = os.path.join(backup_dir, safe_name)
+    if not os.path.isfile(src):
+        raise FileNotFoundError(f"backup not found: {safe_name}")
     shutil.copy2(src, path)

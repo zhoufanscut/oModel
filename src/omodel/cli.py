@@ -157,11 +157,9 @@ def _cmd_restore(config_override: "str | None") -> int:
 def _cmd_print(config_override: "str | None") -> int:
     """Resolve current agent/category models from config + suggestions/catalog, print."""
     from omodel.config_io import load_config
-    from omodel.suggestions import load as load_suggestions
     from omodel.catalog import load as load_catalog, CatalogUnavailable
 
     cfg, path = load_config(config_override)
-    suggestions = load_suggestions()
 
     try:
         catalog = load_catalog()
@@ -209,7 +207,6 @@ def _cmd_print(config_override: "str | None") -> int:
 def _cmd_check(config_override: "str | None") -> int:
     """Dry-run: resolve candidate lists for every known target, CI-safe, always exit 0.
     Degrades gracefully if opencode is absent (suggestions-only)."""
-    from omodel.config_io import config_path
     from omodel.suggestions import load as load_suggestions
     from omodel.catalog import load as load_catalog, CatalogUnavailable
     from omodel.resolve import Resolver
@@ -231,7 +228,11 @@ def _cmd_check(config_override: "str | None") -> int:
     if degraded:
         print("[check] Degraded mode: no opencode catalog; using bundled suggestions only.")
 
-    resolver = Resolver.build(catalog, suggestions)
+    try:
+        resolver = Resolver.build(catalog, suggestions)
+    except Exception as exc:  # ironclad: --check must exit 0 (CI-safe)
+        print(f"[check] Could not build resolver ({exc}); suggestions-only.", file=sys.stderr)
+        return 0
 
     # Build the list of all known targets from bundled suggestions
     targets = []
