@@ -28,56 +28,42 @@ from textual.widgets import OptionList, Static
 
 from omodel.app import OModelApp
 from omodel.catalog import Catalog
-from omodel.config_io import list_backups, load_config
+from omodel.config_io import list_backups
 from omodel.resolve import Resolver
-from omodel.suggestions import load as load_suggestions
-
-
-# ---------------------------------------------------------------------------
-# Test catalog (same verified fixture as test_resolve.py)
-# ---------------------------------------------------------------------------
-
-def _make_test_catalog() -> Catalog:
-    """opencode (gateway) + dedicated providers. deepseek-v4-pro → dedicated wins."""
-    lines = [
-        "opencode/claude-opus-4-7", "opencode/claude-opus-4-8", "opencode/gpt-5.5",
-        "opencode/kimi-k2.5", "opencode/kimi-k2.6", "opencode/glm-5",
-        "opencode/deepseek-v4-pro", "opencode/big-pickle",
-        "deepseek/deepseek-v4-pro", "deepseek/deepseek-v4",
-        "moonshotai-cn/kimi-k2.5", "moonshotai-cn/kimi-k2.6",
-        "openai/gpt-5.5",
-        "zhipuai/glm-5",
-    ]
-    available: dict = {}
-    connected: list = []
-    for line in lines:
-        prov, model = line.split("/", 1)
-        if prov not in available:
-            available[prov] = []
-            connected.append(prov)
-        if model not in available[prov]:
-            available[prov].append(model)
-    return Catalog(available=available, connected=connected)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_app(cfg: dict, config_path: str) -> OModelApp:
-    """Construct OModelApp with the test catalog + real bundled suggestions."""
-    cat = _make_test_catalog()
-    sugg = load_suggestions()
-    try:
-        resolver = Resolver.build(cat, sugg)
-    except Exception:
-        resolver = None
+def _build_app(cfg_path: str) -> OModelApp:
+    """Hermetic DI constructor — no live opencode binary.
+    Catalog is hardcoded so deepseek/deepseek-v4-pro exists deterministically,
+    opencode is a multi-vendor gateway, and the dedicated providers match the
+    §Verification check #2 expectation (dedicated-first resolution).
+    This is CI-safe: no subprocess calls."""
+    from omodel import config_io as _config_io
+    from omodel import suggestions as suggestions_mod
+
+    suggestions = suggestions_mod.load()
+    catalog = Catalog(
+        available={
+            "opencode": ["claude-opus-4-7", "kimi-k2.5", "glm-5", "gpt-5.5"],
+            "deepseek": ["deepseek-v4-pro"],
+            "moonshotai-cn": ["kimi-k2.5"],
+            "zhipuai": ["glm-5"],
+            "openai": ["gpt-5.5"],
+        },
+        connected=["opencode", "deepseek", "moonshotai-cn", "zhipuai", "openai"],
+    )
+    resolver = Resolver.build(catalog, suggestions)
+    cfg, resolved = _config_io.load_config(cfg_path)
     return OModelApp(
-        catalog=cat,
-        suggestions=sugg,
+        catalog=catalog,
+        suggestions=suggestions,
         resolver=resolver,
         cfg=cfg,
-        config_path=config_path,
+        config_path=resolved,
     )
 
 
@@ -182,8 +168,7 @@ def test_pilot_set_model_and_save(pilot_config):
     cfg_path, tmp_dir = pilot_config
 
     async def _run():
-        cfg, _ = load_config(cfg_path)
-        app = _build_app(cfg, cfg_path)
+        app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
             # 1. Select agent:sisyphus to populate the right pane
@@ -250,8 +235,7 @@ def test_pilot_non_model_sections_unchanged(pilot_config):
     cfg_path, _ = pilot_config
 
     async def _run():
-        cfg, _ = load_config(cfg_path)
-        app = _build_app(cfg, cfg_path)
+        app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
@@ -285,8 +269,7 @@ def test_pilot_providers_header_visible(pilot_config):
     cfg_path, _ = pilot_config
 
     async def _run():
-        cfg, _ = load_config(cfg_path)
-        app = _build_app(cfg, cfg_path)
+        app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
             providers_widget = pilot.app.query_one("#providers", Static)
@@ -310,8 +293,7 @@ def test_pilot_second_save_adds_snapshot(pilot_config):
     cfg_path, tmp_dir = pilot_config
 
     async def _do_save(model_fragment: str):
-        cfg, _ = load_config(cfg_path)
-        app = _build_app(cfg, cfg_path)
+        app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
@@ -349,8 +331,7 @@ def test_pilot_sub_target_inherits_parent_chain(pilot_config):
     cfg_path, _ = pilot_config
 
     async def _run():
-        cfg, _ = load_config(cfg_path)
-        app = _build_app(cfg, cfg_path)
+        app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
             # Highlight sisyphus (no enter yet — just highlight so 'a' targets it)
