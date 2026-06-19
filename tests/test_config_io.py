@@ -11,11 +11,9 @@ import re
 import tempfile
 import time
 
-import pytest
 
 from omodel.config_io import (
     BackupInfo,
-    SaveResult,
     diff_text,
     list_backups,
     load_config,
@@ -107,7 +105,7 @@ class TestSerialize:
         text = serialize(MINIMAL_CONFIG)
         lines = text.splitlines()
         # Only the header line starts with //
-        comment_lines = [l for l in lines[1:] if l.strip().startswith("//")]
+        comment_lines = [line for line in lines[1:] if line.strip().startswith("//")]
         assert comment_lines == [], f"Unexpected comment lines: {comment_lines}"
 
     def test_non_model_sections_preserved(self):
@@ -261,7 +259,7 @@ class TestSave:
             # No LINES starting with '//' (after stripping whitespace) except the oModel header.
             # (Note: '//' inside a JSON string value like a URL is fine and expected.)
             lines = written.splitlines()
-            comment_lines = [l for l in lines[1:] if l.strip().startswith("//")]
+            comment_lines = [line for line in lines[1:] if line.strip().startswith("//")]
             assert comment_lines == [], (
                 "Comments inside the config body must be dropped on clean rewrite: "
                 + str(comment_lines)
@@ -280,7 +278,7 @@ class TestSave:
             written = _read_file(cfg_path)
             # Comments gone in the new file (only header allowed)
             body_lines = written.split("\n")[1:]
-            comment_lines = [l for l in body_lines if l.strip().startswith("//")]
+            comment_lines = [line for line in body_lines if line.strip().startswith("//")]
             assert comment_lines == [], f"Palette comments must be gone after save: {comment_lines}"
 
             # But original is verbatim

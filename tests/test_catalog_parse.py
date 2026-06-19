@@ -6,7 +6,6 @@ DESIGN §catalog.py / §Data sources / §Verification checks #2 and #3.
 from __future__ import annotations
 
 import json
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -191,7 +190,7 @@ class TestCatalogErrorRules:
 # Field names match the DESIGN spec: limit.context, cost.input/output, capabilities.
 _VERBOSE_RECORD_1 = {
     "limit": {"context": 200000},
-    "cost": {"input": "$3.00/M", "output": "$15.00/M"},
+    "cost": {"input": 3, "output": 15},  # numeric, as real opencode emits
     "capabilities": {
         "reasoning": False,
         "input": {"image": True, "pdf": True},
@@ -201,7 +200,7 @@ _VERBOSE_RECORD_1 = {
 
 _VERBOSE_RECORD_2 = {
     "limit": {"context": 128000},
-    "cost": {"input": "$1.00/M", "output": "$4.00/M", "cache": {"read": "$0.30/M", "write": "$0.50/M"}},
+    "cost": {"input": 1, "output": 4, "cache": {"read": 0.3, "write": 0.5}},
     "capabilities": {
         "reasoning": True,
         "input": {"image": False},
@@ -211,7 +210,7 @@ _VERBOSE_RECORD_2 = {
 
 _VERBOSE_RECORD_3 = {
     "limit": {"context": 64000},
-    "cost": {"input": "$0/M", "output": "$0/M"},
+    "cost": {"input": 0, "output": 0},
     "capabilities": {
         "reasoning": False,
         "input": {"image": False},
@@ -251,6 +250,20 @@ class TestVerboseParsing:
             result = cat.detail("claude-opus-4-7")
         assert result is not None
         assert result["cost"] is not None
+
+    def test_detail_line_renders_numeric_cost(self):
+        """app._detail_line renders the (numeric-cost) detail dict as '$in/$out' and never
+        '$$' — exercises the display path the reviewer found untested. Real opencode emits
+        numeric costs (verified), so the fixture uses numbers too."""
+        from omodel.app import OModelApp
+        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
+        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
+            info = cat.detail("claude-opus-4-7")
+        line = OModelApp._detail_line(info)
+        assert "ctx 200k" in line
+        assert "$3/$15" in line
+        assert "$$" not in line
+        assert "image" in line
 
     def test_detail_extracts_reasoning_capability(self):
         """detail() extracts capabilities.reasoning as a bool."""

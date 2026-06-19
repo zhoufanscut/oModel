@@ -350,17 +350,9 @@ class TestWarnFlags:
     def test_invalid_variant_warn_flag(self, resolver):
         """A row where variant is not in the family's variants list gets warn=['variant'].
         Use a synthetic entry with an invalid variant for a real family."""
-        # synthetic: kimi-k2.5 with variant='max' (kimi has ['low','medium','high'], no 'max')
-        synth_entry = {"providers": ["moonshotai-cn"], "model": "kimi-k2.5", "variant": "max"}
-        # Build a one-entry requirement and call candidates through a patched requirement
         from omodel.suggestions import load as load_sugg
         sugg = load_sugg()
-        cat = _make_catalog([
-            "opencode/claude-opus-4-7",
-            "moonshotai-cn/kimi-k2.5",
-        ])
-        res = Resolver.build(cat, sugg)
-        # Directly test the warn logic: kimi family has no 'max' → should warn
+        # kimi family has no 'max' → a candidate with variant='max' must warn.
         fam = sugg.detect_family("kimi-k2.5")
         assert fam is not None
         assert fam.family == "kimi"

@@ -20,7 +20,7 @@ def sugg():
 # ---------------------------------------------------------------------------
 
 class TestNormalizeModelId:
-    """re.sub(r'\.(\d+)', r'-\1', s).lower() — kimi-k2.7 → kimi-k2-7."""
+    r"""re.sub(r'\.(\d+)', r'-\1', s).lower() — kimi-k2.7 → kimi-k2-7."""
 
     def test_dot_version_replaced(self):
         # re.sub(r'\.(\d+)', r'-\1', s).lower() -> 'kimi-k2.7' -> 'kimi-k2-7'
@@ -173,7 +173,6 @@ class TestBundledSuggestionsLoad:
 
     def test_patterns_are_compiled(self, sugg):
         """All pattern fields are compiled re.Pattern objects (not raw strings)."""
-        import re
         for fam in sugg.families:
             if fam.pattern is not None:
                 assert hasattr(fam.pattern, "search"), (

@@ -13,3 +13,6 @@ venv/
 htmlcov/
 # Local backup dirs created at runtime next to a config (never the bundled data).
 .backup/
+
+# Local Claude Code agent state (per-project/subagent memory, etc.) — never publish.
+.claude/

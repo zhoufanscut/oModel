@@ -12,15 +12,15 @@ editable and installed forms; the PyInstaller binary also works.
 
 ```sh
 # Editable install (already in the shared venv)
-/tmp/omodel-venv/bin/python -m pip install -e /home/vanzhou/proj/oModel --quiet
+python -m pip install -e . --quiet
 
 # Version + CI-safe dry-run (no opencode required)
-/tmp/omodel-venv/bin/python -m omodel --version
-/tmp/omodel-venv/bin/python -m omodel --check
+python -m omodel --version
+python -m omodel --check
 
 # PyInstaller one-file build (run from repo root, bun not required for this check):
-/tmp/omodel-venv/bin/python -m pip install pyinstaller --quiet
-/tmp/omodel-venv/bin/pyinstaller --onefile --name omodel \
+python -m pip install pyinstaller --quiet
+pyinstaller --onefile --name omodel \
     --collect-data omodel \
     src/omodel/__main__.py
 ./dist/omodel --version
@@ -42,7 +42,7 @@ requires a config path.
 applies dedicated-first; live model count is NOT hard-asserted.
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/test_catalog_parse.py tests/test_resolve.py -v
+python -m pytest tests/test_catalog_parse.py tests/test_resolve.py -v
 ```
 
 **Key assertions:**
@@ -66,7 +66,7 @@ applies dedicated-first; live model count is NOT hard-asserted.
 `capabilities` extracted; `--verbose.variants` is never read.
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/test_catalog_parse.py::TestVerboseParsing -v
+python -m pytest tests/test_catalog_parse.py::TestVerboseParsing -v
 ```
 
 **Key assertions:**
@@ -85,7 +85,7 @@ IDs, plus ordering guards (openai-reasoning before gpt-5, kimi-thinking before k
 claude-opus before claude-non-opus).
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/test_detect_family.py -v
+python -m pytest tests/test_detect_family.py -v
 ```
 
 **Key cases (REAL omo IDs from bundled data):**
@@ -107,7 +107,7 @@ claude-opus before claude-non-opus).
 counts match the committed data (11 agents, 8 categories, 14 families, 9 knownVariants).
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v
+python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v
 ```
 
 **Pass criteria:** all assertions green; in particular the counts and that `patterns` are
@@ -124,11 +124,11 @@ bumped `meta`; without them, non-fatal (prints current bundled meta, exits 0).
 
 ```sh
 # Non-fatal path (no omo src):
-/tmp/omodel-venv/bin/python -m omodel --refresh
+python -m omodel --refresh
 # Expected: prints current bundled meta, exits 0, data file unchanged.
 
 # Live path (requires omo checkout at ~/source/oh-my-openagent and bun):
-OMO_SRC=~/source/oh-my-openagent /tmp/omodel-venv/bin/python -m omodel --refresh
+OMO_SRC=~/source/oh-my-openagent python -m omodel --refresh
 # Expected: src/omodel/data/omo-suggestions.json overwritten; meta.generatedAt bumped.
 # After refresh: re-run check #5 to confirm counts still valid.
 ```
@@ -144,7 +144,7 @@ OMO_SRC=~/source/oh-my-openagent /tmp/omodel-venv/bin/python -m omodel --refresh
 confirms the model updated and non-model sections are untouched.
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/test_app_pilot.py -v
+python -m pytest tests/test_app_pilot.py -v
 ```
 
 **Key assertions (all use a temp config dir — never `~/.config`):**
@@ -175,7 +175,7 @@ re-loads correctly.
 opencode models | head -5    # confirm models visible
 
 # Launch TUI against a TEMP config (never the live config during testing):
-/tmp/omodel-venv/bin/python -m omodel --config /tmp/omodel-live-test.jsonc
+python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
 #   1. Verify Providers: header shows connected provider(s)
@@ -201,7 +201,7 @@ automated checks pass and the user explicitly chooses to run against it.
 ## Running all automated checks at once
 
 ```sh
-/tmp/omodel-venv/bin/python -m pytest tests/ -x -q
+python -m pytest tests/ -x -q
 ```
 
 Expected outcome before full integration:
