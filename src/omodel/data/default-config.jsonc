@@ -1,0 +1,6 @@
+// oModel's own minimal starter — managed via `omodel`. (NOT vendored from omo.)
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json",
+  "agents": {},
+  "categories": {}
+}

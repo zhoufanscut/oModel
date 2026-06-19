@@ -1,0 +1,34 @@
+# Baseline pyproject — the CLI+packaging specialist owns the FINAL version
+# (classifiers, pinned Textual at lock time, full [project.urls], hatch artifacts/sdist).
+# This baseline is intentionally minimal but installable so the QA gate can `pip install -e .`.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "omodel"
+version = "0.1.0"
+description = "A TUI to quickly set OMO (oh-my-openagent) models"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "oModel" }]
+dependencies = [
+  "textual",
+  "json5",
+]
+
+[project.scripts]
+omodel = "omodel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/<you>/oModel"
+Repository = "https://github.com/<you>/oModel"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/omodel"]
+
+# Ensure non-Python payload ships in the wheel (importlib.resources reads it when frozen).
+[tool.hatch.build.targets.wheel.force-include]
+"src/omodel/data" = "omodel/data"
+"src/omodel/tools" = "omodel/tools"

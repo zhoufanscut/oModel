@@ -1,0 +1,88 @@
+# oModel — FROZEN CONTRACTS (read with DESIGN.md before coding)
+
+This is the contract-first boundary. **Read `DESIGN.md` in full first** — it is the spec.
+This file pins the shared shapes + ownership so the five tracks build in parallel and
+integrate cleanly. Do not change a public signature or shared shape without the Lead
+updating this file (others depend on it).
+
+## File ownership (DISJOINT — touch only your lane)
+
+| Track | Owns (edit only these) |
+|---|---|
+| **Core logic** | `src/omodel/catalog.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
+| **Config I/O** | `src/omodel/config_io.py` |
+| **TUI** | `src/omodel/app.py` |
+| **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
+| **QA / verification** | everything under `tests/` (incl. `conftest.py`) |
+
+Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operations + final wiring.
+
+## Rules for every track
+
+1. **Do NOT run any git command** (no add/commit/branch/checkout). The Lead owns git and integration.
+2. **Touch only your owned files.** Read others freely; never edit them. If you believe a
+   frozen signature is wrong, leave a `# CONTRACT-QUESTION:` comment in YOUR file and proceed
+   against the current signature — the Lead reconciles at integration.
+3. **Python floor is 3.9.** Put `from __future__ import annotations` at the top of every
+   module (already present in stubs). No runtime PEP-604 unions (`isinstance(x, A | B)`) and no
+   runtime PEP-585 generics; annotations-as-strings make `dict | None` in signatures fine.
+4. **REAL-CONFIG SAFETY (hard rule).** The live `~/.config/opencode/oh-my-openagent.jsonc`
+   is the user's real file. Never read-then-write it in tests or examples. Every test passes an
+   explicit temp `path`/`--config`. The Lead's gate enforces this.
+5. **Tests/imports run in a venv** with `textual json5 pytest` installed (PyPI reachable). Do
+   not assume system-wide installs.
+
+## Shared shapes (the integration seam)
+
+**`target` id** (string): `"agent:<name>"` · `"agent:<name>.ultrawork"` ·
+`"agent:<name>.compaction"` · `"cat:<name>"` — identical to the `OptionList#targets` option IDs.
+
+**`source` enum** (string): `"omo"` (a fallbackChain entry) · `"mine"` (a connected-provider
+model) · `"add"` (typed in the add-model modal).
+
+**candidate-row dict** — yielded by `Resolver.candidates()`, rendered by `app.py`:
+```python
+{
+  "source":   "omo" | "mine" | "add",
+  "model":    "kimi-k2.5",            # bare model id, no prefix
+  "provider": "moonshotai-cn",        # resolved prefix (resolve_prefix); for an unavailable
+                                      #   omo row, fall back to entry["providers"][0] if present
+  "variant":  "max" | None,           # per precedence; None = unset
+  "entry":    {...} | None,           # the omo fallbackChain entry, or None
+  "tags":     ["★"] | ["✓"] | ["★","✓"],
+  "warn":     [] | ["unavailable"] | ["variant"] | ["unavailable", "variant"],
+}
+```
+Value written to config = `f"{provider}/{model}"` plus `variant` (omitted when `None`).
+
+## Public signatures (authoritative = the stub modules)
+
+The stub files ARE the signatures; implement their bodies. Summary:
+
+- `catalog.py`: `class CatalogUnavailable(Exception)`; `@dataclass Catalog(available: dict,
+  connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id)->dict|None`;
+  `load(opencode_bin="opencode")->Catalog`.
+- `suggestions.py`: `FAMILY_VENDOR` (frozen 14-map); `@dataclass Family`; `@dataclass
+  Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
+  Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
+  `normalize_model_id(s)->str`; `load(path=None)->Suggestions`.
+- `resolve.py`: `@dataclass Resolver(catalog, suggestions, gateways)` with classmethod
+  `build(catalog, suggestions)`, `.vendors_served(p)->int`, `.resolve_prefix(model_id, source,
+  entry=None)->str|None`, `.candidates(target)->list[dict]`.
+- `config_io.py`: `config_path(cli_override=None)->str`; `load_config(path=None)->(cfg, path)`;
+  `serialize(cfg)->str`; `diff_text(cfg, path)->str`; `@dataclass SaveResult(changed, backup,
+  original_created)`; `save(cfg, path)->SaveResult`; `@dataclass BackupInfo(name, path,
+  is_original, size)`; `list_backups(path)->list`; `restore(path, backup_name)->None`.
+- `app.py`: `class OModelApp(App)` (Textual) + `run_app(config_path=None)->None`. Stable widget
+  IDs as documented in `app.py`'s docstring.
+- `cli.py`: `main(argv=None)->int` (console-script entrypoint).
+- `refresh.py`: `refresh(omo_src=None)->int`.
+
+## Cross-module dependencies
+- `resolve.py` → `suggestions.py` + `catalog.py`.  `refresh.py` → `tools/snapshot_omo.ts`.
+- `app.py` → all four modules (Lead wires final).  `config_io.py` + CLI+packaging are near-independent.
+
+## Bundled data (already generated by Lead — do not regenerate)
+- `data/omo-suggestions.json` — real omo v4.11.1 @ b949c34: 11 agents, 8 categories, 14
+  families, 9 knownVariants. Consume via `suggestions.load()`.
+- `data/default-config.jsonc` — oModel's own minimal starter.

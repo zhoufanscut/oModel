@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+# Local backup dirs created at runtime next to a config (never the bundled data).
+.backup/
