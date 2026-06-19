@@ -37,23 +37,28 @@ Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operat
 **`target` id** (string): `"agent:<name>"` · `"agent:<name>.ultrawork"` ·
 `"agent:<name>.compaction"` · `"cat:<name>"` — identical to the `OptionList#targets` option IDs.
 
-**`source` enum** (string): `"omo"` (a fallbackChain entry) · `"mine"` (a connected-provider
-model) · `"add"` (typed in the add-model modal).
+**`source` enum** (string): `"omo"` (a fallbackChain entry — exact or same-line substitute) ·
+`"add"` (typed in the add-model modal). (`"mine"` retired: `candidates()` no longer dumps every
+connected model — off-chain picks go through the add-model modal.)
 
 **candidate-row dict** — yielded by `Resolver.candidates()`, rendered by `app.py`:
 ```python
 {
-  "source":   "omo" | "mine" | "add",
-  "model":    "kimi-k2.5",            # bare model id, no prefix
-  "provider": "moonshotai-cn",        # resolved prefix (resolve_prefix); for an unavailable
-                                      #   omo row, fall back to entry["providers"][0] if present
+  "source":   "omo" | "add",
+  "model":    "glm-5.1",              # RESOLVED bare model id actually used (the substitute,
+                                      #   when this is a same-line stand-in), no prefix
+  "provider": "zhipuai",              # resolved prefix (resolve_prefix), dedicated-first; a
+                                      #   non-empty str (rows with no connected provider are
+                                      #   dropped from candidates(), never shown)
   "variant":  "max" | None,           # per precedence; None = unset
-  "entry":    {...} | None,           # the omo fallbackChain entry, or None
-  "tags":     ["★"] | ["✓"] | ["★","✓"],
-  "warn":     [] | ["unavailable"] | ["variant"] | ["unavailable", "variant"],
+  "entry":    {...} | None,           # the omo fallbackChain entry; None for an 'add' row
+  "substitute_for": None | "glm-5",   # None = exact id; else the omo id this same-line row fills
+  "warn":     [] | ["variant"],       # 'omo' rows: variant only ('unavailable' is skipped, not
+                                      #   shown). 'add' rows may also carry ["unavailable"].
 }
 ```
-Value written to config = `f"{provider}/{model}"` plus `variant` (omitted when `None`).
+Value written to config = `f"{provider}/{model}"` plus `variant` (omitted when `None`) — i.e.
+the resolved substitute, not the omo id. `substitute_for` is display-only.
 
 ## Public signatures (authoritative = the stub modules)
 

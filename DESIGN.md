@@ -7,8 +7,9 @@
 
 > **what omo suggests  +  what you already have  →  pick one  →  save a clean config.**
 
-Per agent/category you see **one merged list** — ★ the models omo suggests and ✓ the models you
-actually have (`opencode models`). You make **one small decision** (pick a model), and oModel fills in
+Per agent/category you see **omo's fallback chain, filtered to what you can actually run** —
+each recommended model you have (exactly, or via a same-line substitute like glm-5 → glm-5.1),
+resolved to a provider you're connected to. You make **one small decision** (pick a model), and oModel fills in
 the fiddly parts for you: the correct `provider/` prefix and a valid `variant` (both overridable, and
 it never blocks you — just ⚠-warns). See your options, choose, done. Everything below is just the
 detail that makes those three steps reliable.
@@ -41,9 +42,9 @@ prefix and a valid variant, and saves a clean config.
 |---|----------|--------|
 | 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
 | 2 | Save format | **Clean active-only** `.jsonc`; **timestamped backup each save** (`.backup/<ts>.jsonc`); non-model sections preserved. |
-| 3 | Picker | **One pick list** = ★ omo ∪ ✓ yours (deduped; tags ★/✓/★✓), uniform `enter` to pick — chain membership is just a tag; a `+ add model…` row (`e`) types anything not listed. Auto prefix + suggested variant. |
+| 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden). Dedicated-provider-first; `p` cycles. `enter` to pick; a `+ add model…` row (`e`) types anything off-chain. Auto prefix + suggested variant. |
 | 4 | Layout | **Two-pane master-detail**. |
-| 5 | Availability flagging | **Warn but allow** — ⚠ unavailable model / invalid variant, still saves. |
+| 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
 | 6 | Agent coverage | **omo-specific only** (11 with requirements). |
 | 7 | Categories | **omo's known set only** (8 with requirements). |
 | 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. A dedicated provider serving the model wins; among gateways, tie-break by the suggestion's own `providers` order, then first-seen. `p` cycles the prefix (override); the shown prefix is saved. |
@@ -123,10 +124,10 @@ omodel --version
 │     ↳ ultrawork opus│ variant: —     ctx 256k · $0.6/$2.5  │
 │   hephaestus   gpt  │                                      │
 │   oracle       gpt  │ ── candidates ──────────────────     │
-│   momus        gpt  │ ★ omo  opencode/claude-opus-4-7 (max)│
-│   ...               │ ★ omo  moonshotai-cn/kimi-k2.5       │
-│ CATEGORIES          │ ✓ mine opencode/claude-opus-4-8      │
-│   deep         gpt  │ ✓ mine deepseek/deepseek-v4-pro      │
+│   momus        gpt  │  opencode/claude-opus-4-7 (max)      │
+│   ...               │  moonshotai-cn/kimi-k2.5             │
+│ CATEGORIES          │  openai/gpt-5.5 (medium)             │
+│   deep         gpt  │● zhipuai/glm-5.1  (≈ omo glm-5)      │
 │   quick        mini │ + add model…                         │
 └ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · q quit ┘
 ```
@@ -169,18 +170,20 @@ oModel/
 ### Data contracts (shared shapes — fix once so `resolve.py` and `app.py` agree)
 - `target` id (string): `"agent:<name>"`, `"agent:<name>.ultrawork"`, `"agent:<name>.compaction"`, or
   `"cat:<name>"` — identical to the §Textual `OptionList#targets` option IDs.
-- `source` (string enum): `"omo"` (from a `fallbackChain` entry) · `"mine"` (a connected-provider
-  model) · `"add"` (typed in the add-model modal).
+- `source` (string enum): `"omo"` (a `fallbackChain` entry — exact or same-line substitute) ·
+  `"add"` (typed in the add-model modal). (`"mine"` retired — no connected-model dump.)
 - **candidate row** — dict yielded by `candidates()` and rendered by `app.py`:
   ```python
   {
-    "source":   "omo" | "mine" | "add",
-    "model":    "kimi-k2.5",                 # bare model id, no prefix
-    "provider": "moonshotai-cn",             # resolved prefix (resolve_prefix)
+    "source":   "omo" | "add",
+    "model":    "glm-5.1",                   # RESOLVED bare id actually used (the substitute,
+                                             #   for a same-line stand-in), no prefix
+    "provider": "zhipuai",                   # resolved prefix (resolve_prefix), dedicated-first;
+                                             #   non-empty str (no-provider rows are dropped)
     "variant":  "max" | None,                # per precedence; None = unset
-    "entry":    {...} | None,                # the omo fallbackChain entry, or None
-    "tags":     ["★"] | ["✓"] | ["★","✓"],  # render tag(s)
-    "warn":     [] | ["unavailable"] | ["variant"] | ["unavailable", "variant"],
+    "entry":    {...} | None,                # the omo fallbackChain entry; None for 'add'
+    "substitute_for": None | "glm-5",        # None = exact; else the omo id this same-line row fills
+    "warn":     [] | ["variant"],            # 'omo' rows: variant only; 'add' rows may add "unavailable"
   }
   ```
   The value written to config is `f"{provider}/{model}"` plus `variant` (omitted when `None`).
@@ -244,18 +247,33 @@ oModel/
   `glm-5`→`zhipuai/…`. (`kimi-k2.5/2.6` and `glm-5/5.1` exist under both opencode and a dedicated
   provider — dedicated wins; add a second gateway like `openrouter` and dedicated still wins, with `p`
   reaching openrouter.)
-- **`candidates(target)`:** one pick list. First, **every** `fallbackChain` entry as a ★ candidate
-  (resolved `provider/model (variant)`), in chain order — sisyphus has 7. **Variant precedence:**
-  entry `variant` → requirement top-level `variant` → **none** (the family registry only *validates*
-  variants — it designates no default — so an unspecified variant stays unset; the user may set one via
-  `v`). (Top-level requirement `variant` is presently **always empty** in omo — no agent/category sets
-  it — so exercise that tier with a *synthetic* fixture, not a real ID.) Then ✓ all connected-provider
-  models, **deduped against the ★ set** (same resolved `provider/model` appears once). **Row tag** =
-  `★` (omo suggests it) · `✓` (you have it) · `★✓` (both) — the "omo"/"mine" words in the §Layout
-  mockup are those glyphs spelled out. Last row is `+ add model…` (`cand:add`). Picking is uniform —
-  `enter` on any non-`add` row stages it; omo-chain membership is only the ★ tag, never a gate. Flags:
-  `⚠ unavailable` (model ∉ any connected provider), `⚠ variant` (variant ∉ family `variants` from the
-  **bundled registry only**).
+- **`candidates(target)`:** one pick list — a single filtered pass over the `fallbackChain`, in
+  chain (priority) order. For each entry: **(1) exact** — a connected provider serves the entry's
+  model verbatim → that model, prefix dedicated-first (`substitute_for=None`); **(2) same-line** —
+  else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
+  `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen), prefix dedicated-first
+  (`substitute_for=<omo id>`); a same-line id that is itself an exactly-available chain entry is
+  skipped here (its own entry shows it exact); **(3) else hidden** (neither exact nor same-line
+  connected — a model you can't run isn't offered). Rows are **deduped by resolved `provider/model`**
+  (higher-priority entry wins). **Variant precedence:** entry `variant` → requirement top-level
+  `variant` → **none** (the family registry only *validates* variants — designates no default — so an
+  unspecified variant stays unset; set one via `v`). (Top-level requirement `variant` is presently
+  **always empty** in omo, so exercise that tier with a *synthetic* fixture, not a real ID.) Last row
+  is `+ add model…` (`cand:add`) for off-chain picks; `enter` on any non-`add` row stages it. Flag:
+  `⚠ variant` (variant ∉ family `variants` from the **bundled registry only**). (Unavailable entries
+  are hidden, not flagged — decision #5.) **Current pick (`●`):** the row whose resolved
+  `provider/model` equals what `oh-my-openagent.jsonc` has on disk for this target — snapshotted at
+  launch (the file that becomes `.backup/original.jsonc`), so it stays put as you stage edits — is
+  prefixed `● `; all other rows get a 2-space prefix. If the on-disk model isn't in the (chain-only)
+  list (an off-chain hand-pick), nothing is marked.
+- **GPT-only agents (Hephaestus):** omo's `no-hephaestus-non-gpt` hook makes Hephaestus
+  GPT-exclusive (`isGptModel` = model name after the last `/`, lowercased, contains "gpt"; a non-GPT
+  model reassigns the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
+  `+ add model…` row stays, but the add modal is **gated** — a non-GPT model is **blocked** (enter
+  disabled, `⚠ Hephaestus is GPT-only`), so you can pick any GPT model you have but can't footgun a
+  non-GPT one; the detail pane shows a `⚑ GPT-only` tip. Encoded as `_GPT_ONLY_AGENTS` +
+  `_is_gpt_model` in `app.py` (matching omo's hard-coded agent key, not a data field — `requires*`
+  are activation flags, not user-choice restrictions).
 
 ### `config_io.py` — clean rewrite
 - Read `json5.load` → ordered dict; `agents`/`categories` editable, all other top-level keys
@@ -380,7 +398,8 @@ console.log(JSON.stringify({
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`;
   `a` adds an `ultrawork`/`compaction` sub-target (verified: omo schema permits both on all 11 agents).
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
-  `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row).
+  `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
+  row matching the launch-time on-disk assignment is prefixed `● ` (others `  `).
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
@@ -430,10 +449,11 @@ console.log(JSON.stringify({
    `opencode`/`openrouter`→gateway and `openai`/`zhipuai`/`moonshotai-cn`/`deepseek`→dedicated.
    `providers_for("gpt-5.5") == ["opencode","openai"]` → dedicated-first → `openai/gpt-5.5`;
    `claude-opus-4-7` → `["opencode"]` → `opencode/claude-opus-4-7`; `kimi-k2.5` →
-   `moonshotai-cn/kimi-k2.5`; `glm-5` → `zhipuai/glm-5`; `deepseek/deepseek-v4-pro` under ✓ mine;
-   `glm + max` and an absent model render ⚠ but accept. With `openrouter` also connected, a
-   both-gateways-only model resolves via `entry.providers`-then-first-seen, and `p` cycles the prefix
-   to `openrouter/…`.
+   `moonshotai-cn/kimi-k2.5`; `glm-5` → `zhipuai/glm-5`. A chain entry with no connected provider and
+   no same-line relative is **omitted** from `candidates()`; with only `glm-5.1` connected, the `glm-5`
+   entry resolves to a `zhipuai/glm-5.1` substitute row (`substitute_for="glm-5"`). `glm + max` renders
+   ⚠ variant but accepts. With `openrouter` also connected, a both-gateways-only model resolves via
+   `entry.providers`-then-first-seen, and `p` cycles the prefix to `openrouter/…`.
 3. **Verbose parsing (unit):** feed a captured multi-record `--verbose` blob → N records with
    `limit.context`/`cost`/`capabilities` extracted; confirm variant logic does NOT read it.
 4. **detect_family parity:** `kimi-k2.5`→`kimi` (no `max`), `k2p5`→`kimi-thinking`, `claude-opus-4-7`

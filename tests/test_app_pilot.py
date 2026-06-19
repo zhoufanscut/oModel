@@ -87,8 +87,8 @@ async def _select_candidate(pilot, model_fragment: str) -> str:
     Focuses #candidates and fires OptionSelected via enter. Returns the found option ID.
 
     model_fragment should be specific enough to match the desired 'provider/model' string
-    in the rendered row label (e.g. 'deepseek/deepseek-v4-pro' not just 'deepseek-v4-pro'),
-    since a model may appear under multiple providers as separate ✓ rows.
+    in the rendered row label (e.g. 'zhipuai/glm-5' not just 'glm-5'), so the dedicated-first
+    resolved prefix is pinned unambiguously.
     """
     candidates = pilot.app.query_one("#candidates", OptionList)
     found_id = None
@@ -159,7 +159,7 @@ def test_pilot_set_model_and_save(pilot_config):
     """Full headless pilot:
     1. Build OModelApp with test catalog + real suggestions + temp config.
     2. Select agent:sisyphus via OptionList index + enter.
-    3. In #candidates, highlight deepseek/deepseek-v4-pro + enter to set it.
+    3. In #candidates, highlight zhipuai/glm-5 + enter to set it.
     4. Press 's'; confirm ConfirmModal with 'y'.
     5. Re-json5.load the config and assert all contracts hold.
     """
@@ -174,13 +174,13 @@ def test_pilot_set_model_and_save(pilot_config):
             # 1. Select agent:sisyphus to populate the right pane
             await _select_target(pilot, "agent:sisyphus")
 
-            # 2. Find and select deepseek/deepseek-v4-pro in candidates.
-            # Use the full 'deepseek/deepseek-v4-pro' fragment so we match the dedicated
-            # provider row (not the 'opencode/deepseek-v4-pro' ✓ row that appears first).
-            found_id = await _select_candidate(pilot, "deepseek/deepseek-v4-pro")
+            # 2. Find and select zhipuai/glm-5 in candidates. glm-5 is a sisyphus chain
+            # entry served by opencode(gateway) + zhipuai(dedicated); the full
+            # 'zhipuai/glm-5' fragment pins the dedicated row (resolve_prefix: dedicated wins).
+            found_id = await _select_candidate(pilot, "zhipuai/glm-5")
             assert found_id is not None, (
-                "deepseek/deepseek-v4-pro must appear as a candidate for agent:sisyphus "
-                "under the deepseek/ dedicated provider (resolve_prefix: dedicated wins)."
+                "zhipuai/glm-5 must appear as a candidate for agent:sisyphus under the "
+                "zhipuai/ dedicated provider (resolve_prefix: dedicated wins)."
             )
 
             # 3. Save and confirm
@@ -192,9 +192,9 @@ def test_pilot_set_model_and_save(pilot_config):
     with open(cfg_path, encoding="utf-8") as f:
         saved = json5.load(f)
 
-    # Model updated; deepseek is dedicated → wins over opencode gateway
-    assert saved["agents"]["sisyphus"]["model"] == "deepseek/deepseek-v4-pro", (
-        f"Expected deepseek/deepseek-v4-pro, got {saved['agents']['sisyphus']['model']!r}"
+    # Model updated; zhipuai is dedicated → wins over opencode gateway
+    assert saved["agents"]["sisyphus"]["model"] == "zhipuai/glm-5", (
+        f"Expected zhipuai/glm-5, got {saved['agents']['sisyphus']['model']!r}"
     )
 
     # Non-model sections preserved BY VALUE
@@ -238,8 +238,8 @@ def test_pilot_non_model_sections_unchanged(pilot_config):
 
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
-            # moonshotai-cn/kimi-k2.5 is the ★✓ dedicated row; any model change is fine
-            # for this test — we care only about non-model section preservation
+            # moonshotai-cn/kimi-k2.5 is the dedicated-resolved chain row; any model change
+            # is fine for this test — we care only about non-model section preservation
             found_id = await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
             if found_id is None:
                 # fall back to deepseek dedicated row
@@ -298,8 +298,9 @@ def test_pilot_second_save_adds_snapshot(pilot_config):
             await _select_candidate(pilot, model_fragment)
             await _save_and_confirm(pilot)
 
-    # Use full 'provider/model' fragments to pick the right dedicated-provider rows
-    asyncio.run(_do_save("deepseek/deepseek-v4-pro"))
+    # Use full 'provider/model' fragments to pick the right dedicated-provider rows.
+    # Both are sisyphus chain entries resolved to their dedicated providers.
+    asyncio.run(_do_save("zhipuai/glm-5"))
     time.sleep(0.02)  # ensure distinct UTC timestamps
     asyncio.run(_do_save("moonshotai-cn/kimi-k2.5"))
 
@@ -324,52 +325,141 @@ def test_pilot_second_save_adds_snapshot(pilot_config):
 # ---------------------------------------------------------------------------
 
 def test_pilot_sub_target_inherits_parent_chain(pilot_config):
-    """agent:sisyphus.ultrawork candidates include the parent's 7 ★ rows.
-    TUI-track: 'a' key creates the sub-target; Core inheritance fix applied."""
+    """agent:sisyphus.ultrawork's pick list is IDENTICAL to the parent agent's (it inherits
+    the same fallbackChain). TUI-track: 'a' key creates the sub-target."""
     cfg_path, _ = pilot_config
+
+    def _real_candidate_ids(pilot):
+        candidates = pilot.app.query_one("#candidates", OptionList)
+        return [
+            candidates.get_option_at_index(i).id
+            for i in range(candidates.option_count)
+            if candidates.get_option_at_index(i).id not in (None, "cand:add")
+            and not (candidates.get_option_at_index(i).id or "").startswith("hdr:")
+        ]
 
     async def _run():
         app = _build_app(cfg_path)
 
         async with app.run_test() as pilot:
-            # Highlight sisyphus (no enter yet — just highlight so 'a' targets it)
+            # Populate the parent's pick list and record it.
+            await _select_target(pilot, "agent:sisyphus")
+            parent_ids = _real_candidate_ids(pilot)
+            assert len(parent_ids) > 0, "parent sisyphus must have candidates"
+
+            # Highlight sisyphus, then 'a' adds the ultrawork sub-target and highlights it.
             targets = pilot.app.query_one("#targets", OptionList)
-            idx = targets.get_option_index("agent:sisyphus")
-            targets.highlighted = idx
+            targets.highlighted = targets.get_option_index("agent:sisyphus")
             targets.focus()
             await pilot.pause()
-
-            # 'a' adds ultrawork sub-target and highlights it
             await pilot.press("a")
             await pilot.pause()
 
-            # Check whether agent:sisyphus.ultrawork now appears in #targets
-            targets = pilot.app.query_one("#targets", OptionList)
-            uw_present = False
-            for i in range(targets.option_count):
-                if targets.get_option_at_index(i).id == "agent:sisyphus.ultrawork":
-                    uw_present = True
-                    break
-
+            uw_present = any(
+                targets.get_option_at_index(i).id == "agent:sisyphus.ultrawork"
+                for i in range(targets.option_count)
+            )
             if not uw_present:
                 pytest.skip(
                     "agent:sisyphus.ultrawork not present after 'a' press — "
                     "sub-target inheritance not yet wired"
                 )
 
-            # Select the ultrawork sub-target to populate candidates
+            # Sub-target's pick list must equal the parent's (same chain, same rows).
             await _select_target(pilot, "agent:sisyphus.ultrawork")
-
-            # Sub-target must show parent's 7 ★ rows + ✓ mine rows
-            candidates = pilot.app.query_one("#candidates", OptionList)
-            real_ids = [
-                candidates.get_option_at_index(i).id
-                for i in range(candidates.option_count)
-                if candidates.get_option_at_index(i).id not in (None, "cand:add")
-                and not (candidates.get_option_at_index(i).id or "").startswith("hdr:")
-            ]
-            assert len(real_ids) >= 7, (
-                f"sub-target must inherit parent's >=7 rows; got {len(real_ids)}"
+            sub_ids = _real_candidate_ids(pilot)
+            assert sub_ids == parent_ids, (
+                f"sub-target must inherit the parent's pick list; "
+                f"parent={parent_ids} sub={sub_ids}"
             )
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 6: the on-disk (oh-my-openagent.jsonc) pick is marked ● in the list
+# ---------------------------------------------------------------------------
+
+def test_pilot_saved_model_marked(pilot_config):
+    """The candidate row matching what oh-my-openagent.jsonc has on disk is prefixed with ●;
+    other rows are not. Saved sisyphus = zhipuai/glm-5 (a chain entry in the pilot catalog)."""
+    cfg_path, _ = pilot_config
+    # Overwrite the config so sisyphus' on-disk model is a known in-list candidate.
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "zhipuai/glm-5" } } }')
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            labels = []
+            for i in range(cands.option_count):
+                opt = cands.get_option_at_index(i)
+                oid = opt.id or ""
+                if oid == "cand:add" or oid.startswith("hdr:"):
+                    continue
+                labels.append(str(opt.prompt))
+
+            glm = [s for s in labels if "zhipuai/glm-5" in s]
+            assert len(glm) == 1, f"expected one zhipuai/glm-5 row, got {glm}"
+            assert "●" in glm[0], f"saved row must be marked with ●: {glm[0]!r}"
+            others = [s for s in labels if "zhipuai/glm-5" not in s]
+            assert others, "expected other (unmarked) candidate rows too"
+            assert all("●" not in o for o in others), f"only the saved row may be marked: {others}"
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 7: Hephaestus is GPT-only — no add-model row + a tip
+# ---------------------------------------------------------------------------
+
+def test_pilot_hephaestus_gpt_only(pilot_config):
+    """Hephaestus (omo: GPT-exclusive) keeps the '+ add model…' row (the add modal is gated to
+    GPT models) and shows a GPT-only tip in the detail pane."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            # Both agents keep the add-model row; Hephaestus additionally shows the tip.
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            sis_ids = [cands.get_option_at_index(i).id for i in range(cands.option_count)]
+            assert "cand:add" in sis_ids, f"sisyphus must keep add-model: {sis_ids}"
+
+            await _select_target(pilot, "agent:hephaestus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            hep_ids = [cands.get_option_at_index(i).id for i in range(cands.option_count)]
+            assert "cand:add" in hep_ids, f"hephaestus keeps add-model (gated): {hep_ids}"
+
+            detail = str(pilot.app.query_one("#detail", Static).content)
+            assert "GPT-only" in detail, f"hephaestus detail must carry the GPT-only tip: {detail!r}"
+
+    asyncio.run(_run())
+
+
+def test_addmodal_gpt_only_gating():
+    """AddModelModal(require_gpt=True) blocks a non-GPT model (enter disabled) and accepts a
+    GPT one; without the flag the same non-GPT model is accepted (other agents unaffected)."""
+    from omodel.app import AddModelModal
+    from omodel import suggestions as suggestions_mod
+
+    suggestions = suggestions_mod.load()
+    catalog = Catalog(
+        available={"openai": ["gpt-5.5", "gpt-5"], "zhipuai": ["glm-5"]},
+        connected=["openai", "zhipuai"],
+    )
+    resolver = Resolver.build(catalog, suggestions)
+
+    gated = AddModelModal(resolver, suggestions, require_gpt=True)
+    row, _preview, ok = gated._build_row("openai/gpt-5")
+    assert ok and row is not None and row["model"] == "gpt-5", "GPT model must be accepted"
+    row, preview, ok = gated._build_row("zhipuai/glm-5")
+    assert not ok and row is None, "non-GPT model must be blocked"
+    assert "GPT" in preview, f"block preview should explain GPT-only: {preview!r}"
+
+    ungated = AddModelModal(resolver, suggestions, require_gpt=False)
+    row, _preview, ok = ungated._build_row("zhipuai/glm-5")
+    assert ok and row is not None, "non-GPT model accepted when not GPT-gated"

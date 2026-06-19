@@ -11,7 +11,8 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
                             'cat:<name>'.
   * Static#detail          — current model/variant + catalog.detail() line.
-  * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…).
+  * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
+                            row matching the launch-time on-disk assignment is prefixed '● '.
 
 KEYS: ↑↓ move · enter set (dispatch by row: cand:add → add-model modal, else set model +
 default variant) · v variant · p prefix (cycle providers_for) · e add · x clear ·
@@ -22,6 +23,7 @@ verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if avail
 """
 from __future__ import annotations
 
+import copy
 from typing import Optional
 
 from textual import on
@@ -42,12 +44,16 @@ from .suggestions import Suggestions
 # Sub-targets an agent may carry beyond its top-level `model`.
 _SUBKINDS = ("ultrawork", "compaction")
 
+# Agents omo locks to a single model family. Hephaestus is GPT-exclusive: omo's
+# `no-hephaestus-non-gpt` hook reassigns the session to Sisyphus for any non-GPT model. We
+# mirror that — the chain + add-model are both restricted to GPT models for these agents.
+_GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 
-def _tag_str(tags: list) -> str:
-    """Render the candidate-row tags list ('★'/'✓') as a fixed-width 2-glyph cell."""
-    has_star = "★" in tags
-    has_check = "✓" in tags
-    return ("★" if has_star else " ") + ("✓" if has_check else " ")
+
+def _is_gpt_model(model_id: str) -> bool:
+    """omo's `isGptModel` (model-core): the model name (after the LAST '/'), lowercased,
+    contains 'gpt'. Used to gate the add-model modal for GPT-only agents (Hephaestus)."""
+    return "gpt" in model_id.rsplit("/", 1)[-1].lower()
 
 
 def _warn_str(warn: list) -> str:
@@ -58,10 +64,14 @@ def _warn_str(warn: list) -> str:
 
 
 def _row_label(row: dict) -> str:
-    """One-line rendering of a candidate-row dict for OptionList#candidates."""
+    """One-line rendering of a candidate-row dict for OptionList#candidates.
+    A same-line substitute (substitute_for set) is suffixed `(≈ omo <id>)` so it reads
+    as a stand-in for the model omo actually named."""
     variant = row.get("variant")
     vtext = f" ({variant})" if variant else ""
-    return f"{_tag_str(row['tags'])} {row['provider']}/{row['model']}{vtext}{_warn_str(row['warn'])}"
+    sub = row.get("substitute_for")
+    subtext = f"  (≈ omo {sub})" if sub else ""
+    return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
 
 
 class AddModelModal(ModalScreen):
@@ -95,10 +105,15 @@ class AddModelModal(ModalScreen):
     }
     """
 
-    def __init__(self, resolver: Resolver, suggestions: Suggestions) -> None:
+    def __init__(
+        self, resolver: Resolver, suggestions: Suggestions, require_gpt: bool = False
+    ) -> None:
         super().__init__()
         self._resolver = resolver
         self._suggestions = suggestions
+        # GPT-only target (Hephaestus): a non-GPT model is BLOCKED (enter disabled), since omo
+        # would reject it and reassign the agent to Sisyphus.
+        self._require_gpt = require_gpt
         self._staged: Optional[dict] = None
 
     def compose(self) -> ComposeResult:
@@ -129,18 +144,23 @@ class AddModelModal(ModalScreen):
             if not provider:
                 return None, "⚠ unknown — add a provider/", False
 
+        # GPT-only target: block a non-GPT model (omo would reassign the agent to Sisyphus).
+        if self._require_gpt and not _is_gpt_model(model):
+            return None, "⚠ Hephaestus is GPT-only — the model name must contain 'gpt'", False
+
         warn = []
         if not self._resolver.catalog.providers_for(model):
             warn.append("unavailable")
-        # An add row is user-typed; tag it ✓ ("you asked for it") and let warn flag availability.
-        # Registry only validates variants (designates no default), so variant stays unset.
+        # An add row is user-typed ("you asked for it"); warn flags availability but never
+        # blocks. It is not a chain substitute, so substitute_for stays None. Registry only
+        # validates variants (designates no default), so variant stays unset.
         row = {
             "source": "add",
             "model": model,
             "provider": provider,
             "variant": None,
             "entry": None,
-            "tags": ["✓"],
+            "substitute_for": None,
             "warn": warn,
         }
         preview = f"saves: {provider}/{model}" + _warn_str(warn)
@@ -342,6 +362,10 @@ class OModelApp(App):
         self.cfg = cfg
         self.config_path = config_path
         self.catalog_error = catalog_error
+        # Snapshot of the on-disk config at launch (the oh-my-openagent.jsonc that becomes
+        # .backup/original.jsonc). Frozen for the session; used to mark (●) the candidate row
+        # that matches what your config currently has — staging edits self.cfg but not this.
+        self._saved_cfg = copy.deepcopy(cfg)
         # In-memory edit state.
         self.dirty = False
         # Cache of the candidate-row dicts currently rendered, keyed by target id. Each cache
@@ -429,22 +453,25 @@ class OModelApp(App):
 
     # ----- target → cfg node helpers ---------------------------------------------------
 
-    def _node_for(self, target: str):
-        """Return the cfg dict node holding {model, variant} for `target`, or None if its
-        parent agent/category isn't in cfg yet. Does NOT create nodes."""
+    def _node_for(self, target: str, cfg: "Optional[dict]" = None):
+        """Return the dict node holding {model, variant} for `target` in `cfg`
+        (default self.cfg), or None if its parent agent/category isn't present. Does NOT
+        create nodes. Pass self._saved_cfg to read the launch-time on-disk assignment."""
+        if cfg is None:
+            cfg = self.cfg
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
             if "." in rest:
                 name, kind = rest.split(".", 1)
-                agent = (self.cfg.get("agents") or {}).get(name)
+                agent = (cfg.get("agents") or {}).get(name)
                 if not isinstance(agent, dict):
                     return None
                 sub = agent.get(kind)
                 return sub if isinstance(sub, dict) else None
-            return (self.cfg.get("agents") or {}).get(rest)
+            return (cfg.get("agents") or {}).get(rest)
         if target.startswith("cat:"):
             name = target[len("cat:"):]
-            return (self.cfg.get("categories") or {}).get(name)
+            return (cfg.get("categories") or {}).get(name)
         return None
 
     def _ensure_node(self, target: str) -> dict:
@@ -470,6 +497,25 @@ class OModelApp(App):
         if not isinstance(node, dict):
             return "", None
         return node.get("model", "") or "", node.get("variant")
+
+    def _saved_model(self, target: str) -> str:
+        """The 'provider/model' string `target` had on disk at launch (self._saved_cfg), or
+        '' if unset. Fixed for the session — used to ● the candidate row matching your
+        current oh-my-openagent.jsonc."""
+        node = self._node_for(target, self._saved_cfg)
+        if not isinstance(node, dict):
+            return ""
+        return node.get("model", "") or ""
+
+    @staticmethod
+    def _gpt_only(target: str) -> bool:
+        """True if `target` (incl. its sub-targets) belongs to a GPT-exclusive agent —
+        currently Hephaestus (see _GPT_ONLY_AGENTS). Such agents hide the add-model escape
+        hatch and show a tip; the fallbackChain is the only valid source."""
+        if not target.startswith("agent:"):
+            return False
+        name = target[len("agent:"):].split(".", 1)[0]
+        return name in _GPT_ONLY_AGENTS
 
     # ----- right pane: detail + candidates ---------------------------------------------
 
@@ -506,6 +552,8 @@ class OModelApp(App):
         else:
             lines.append("model: — (unset)")
             lines.append("variant: —")
+        if self._gpt_only(target):
+            lines.append("⚑ GPT-only: Hephaestus needs a GPT model (omo) — non-GPT is blocked.")
         detail.update("\n".join(lines))
 
     @staticmethod
@@ -527,8 +575,12 @@ class OModelApp(App):
         cands = self.query_one("#candidates", OptionList)
         cands.clear_options()
         rows = self._build_rows(target)
+        # Mark (●) the row matching what oh-my-openagent.jsonc has on disk for this target.
+        saved = self._saved_model(target)
         for i, row in enumerate(rows):
-            cands.add_option(Option(_row_label(row), id=f"cand:{i}"))
+            matched = bool(saved) and f"{row['provider']}/{row['model']}" == saved
+            label = ("● " if matched else "  ") + _row_label(row)
+            cands.add_option(Option(label, id=f"cand:{i}"))
         cands.add_option(Option("+ add model…", id="cand:add"))
 
     def _refresh_right(self, target: str) -> None:
@@ -696,7 +748,10 @@ class OModelApp(App):
             self._render_candidates(target)
             self._stage_row(target, row)
 
-        self.push_screen(AddModelModal(self.resolver, self.suggestions), _accept)
+        self.push_screen(
+            AddModelModal(self.resolver, self.suggestions, require_gpt=self._gpt_only(target)),
+            _accept,
+        )
 
     def action_add_sub(self) -> None:
         """`a` — add an ultrawork/compaction sub-target to the highlighted agent."""

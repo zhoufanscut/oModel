@@ -212,26 +212,26 @@ class TestResolvePrefix:
 # candidates() shape — CONTRACTS.md
 # ---------------------------------------------------------------------------
 
-CANDIDATE_REQUIRED_KEYS = {"source", "model", "provider", "variant", "entry", "tags", "warn"}
-VALID_SOURCES = {"omo", "mine", "add"}
-VALID_TAG_SETS = {frozenset(["★"]), frozenset(["✓"]), frozenset(["★", "✓"])}
-VALID_WARN_VALUES = {"unavailable", "variant"}
+CANDIDATE_REQUIRED_KEYS = {"source", "model", "provider", "variant", "entry", "substitute_for", "warn"}
+VALID_SOURCES = {"omo", "add"}
+VALID_WARN_VALUES = {"variant"}  # candidates() omo rows: variant only (unavailable is hidden)
 
 
 def _assert_candidate_shape(row: dict, idx: int) -> None:
-    """Assert CONTRACTS.md candidate-row dict shape exactly."""
+    """Assert CONTRACTS.md candidate-row dict shape exactly (candidates() output)."""
     assert set(row.keys()) == CANDIDATE_REQUIRED_KEYS, (
         f"Row {idx} has wrong keys: {set(row.keys())}"
     )
     assert row["source"] in VALID_SOURCES, f"Row {idx}: invalid source {row['source']!r}"
     assert isinstance(row["model"], str) and row["model"], f"Row {idx}: model must be non-empty str"
-    # provider may be None for unavailable omo rows with no entry.providers
-    assert row["provider"] is None or isinstance(row["provider"], str)
+    # provider is always a non-empty str — rows with no connected provider are dropped.
+    assert isinstance(row["provider"], str) and row["provider"], f"Row {idx}: provider must be non-empty str"
     assert row["variant"] is None or isinstance(row["variant"], str)
-    # entry: dict or None
     assert row["entry"] is None or isinstance(row["entry"], dict)
-    assert isinstance(row["tags"], list) and len(row["tags"]) >= 1
-    assert frozenset(row["tags"]) in VALID_TAG_SETS, f"Row {idx}: invalid tags {row['tags']}"
+    assert (
+        row["substitute_for"] is None
+        or (isinstance(row["substitute_for"], str) and row["substitute_for"])
+    ), f"Row {idx}: substitute_for must be None or non-empty str"
     assert isinstance(row["warn"], list)
     for w in row["warn"]:
         assert w in VALID_WARN_VALUES, f"Row {idx}: unknown warn value {w!r}"
@@ -246,32 +246,38 @@ class TestCandidatesShape:
         for i, row in enumerate(rows):
             _assert_candidate_shape(row, i)
 
-    def test_sisyphus_has_7_star_rows(self, resolver):
-        """sisyphus has 7 fallbackChain entries → 7 ★ rows (before mine dedup)."""
+    def test_sisyphus_chain_filtered_to_available(self, resolver):
+        """Chain-only pick list: the fallbackChain entries you can run, in chain order.
+        STANDARD_MODELS serves every sisyphus entry exactly EXCEPT k2p5 (kimi-thinking —
+        no connected kimi-thinking model), which is hidden."""
         rows = resolver.candidates("agent:sisyphus")
-        star_rows = [r for r in rows if "★" in r["tags"]]
-        assert len(star_rows) == 7, f"Expected 7 ★ rows, got {len(star_rows)}"
+        models = [r["model"] for r in rows]
+        assert all(r["source"] == "omo" for r in rows)
+        assert "k2p5" not in models, "k2p5 has no same-line connected model → must be hidden"
+        assert models == [
+            "claude-opus-4-7", "kimi-k2.6", "kimi-k2.5", "gpt-5.5", "glm-5", "big-pickle",
+        ], f"Unexpected pick list: {models}"
 
-    def test_star_rows_use_omo_source(self, resolver):
-        """All ★ rows have source='omo'."""
+    def test_all_rows_use_omo_source(self, resolver):
+        """Every candidate row comes from the chain → source='omo' (no 'mine' dump)."""
         rows = resolver.candidates("agent:sisyphus")
         for row in rows:
-            if "★" in row["tags"]:
-                assert row["source"] == "omo", f"★ row has source={row['source']!r}"
+            assert row["source"] == "omo", f"row has source={row['source']!r}"
 
-    def test_mine_rows_use_mine_source(self, resolver):
-        """All ✓-only rows have source='mine'."""
+    def test_dedicated_first_provider(self, resolver):
+        """glm-5 served by opencode(gateway)+zhipuai(dedicated) → zhipuai wins."""
+        rows = resolver.candidates("agent:sisyphus")
+        glm = [r for r in rows if r["model"] == "glm-5"]
+        assert len(glm) == 1
+        assert glm[0]["provider"] == "zhipuai"
+
+    def test_exact_rows_have_no_substitute_for(self, resolver):
+        """STANDARD serves these exactly → substitute_for is None on every row."""
         rows = resolver.candidates("agent:sisyphus")
         for row in rows:
-            if row["tags"] == ["✓"]:
-                assert row["source"] == "mine"
-
-    def test_star_mine_overlap_row_has_both_tags(self, resolver):
-        """A model that is both suggested (★) and available (✓) gets tags=['★','✓']."""
-        rows = resolver.candidates("agent:sisyphus")
-        star_mine = [r for r in rows if "★" in r["tags"] and "✓" in r["tags"]]
-        # kimi-k2.5 is in sisyphus chain AND in moonshotai-cn/opencode
-        assert len(star_mine) >= 1, "Expected at least one ★✓ row (e.g. kimi-k2.5)"
+            assert row["substitute_for"] is None, (
+                f"{row['model']} should be exact, got substitute_for={row['substitute_for']!r}"
+            )
 
     def test_no_duplicate_provider_model(self, resolver):
         """No two rows have the same provider/model combination."""
@@ -280,18 +286,10 @@ class TestCandidatesShape:
         assert len(keys) == len(set(keys)), f"Duplicate provider/model keys: {keys}"
 
     def test_entry_is_dict_for_omo_rows(self, resolver):
-        """★ rows carry the original fallbackChain entry dict."""
+        """Every (omo) row carries its originating fallbackChain entry dict."""
         rows = resolver.candidates("agent:sisyphus")
         for row in rows:
-            if row["source"] == "omo":
-                assert isinstance(row["entry"], dict), "omo row must have entry dict"
-
-    def test_entry_is_none_for_mine_rows(self, resolver):
-        """✓-only rows have entry=None."""
-        rows = resolver.candidates("agent:sisyphus")
-        for row in rows:
-            if row["tags"] == ["✓"]:
-                assert row["entry"] is None
+            assert isinstance(row["entry"], dict), "omo row must have entry dict"
 
     def test_variant_precedence_entry_over_top(self, resolver):
         """claude-opus-4-7 in sisyphus chain has variant='max' in the entry — must appear."""
@@ -331,21 +329,30 @@ class TestWarnFlags:
         ])
         return Resolver.build(cat, sugg)
 
-    def test_unavailable_model_warn_flag(self, sugg):
-        """A model in the fallbackChain but not in any connected provider → warn=['unavailable']."""
-        # claude-opus-4-7 not served by any provider here
+    def test_unavailable_model_hidden(self, sugg):
+        """A chain entry with no connected provider AND no same-line relative is hidden
+        (decision #5 reversed for the pick list). claude-opus-4-7 is unavailable here and
+        no claude-opus model is connected → it must NOT appear; only exacts remain."""
         res = self._resolver_no_opencode(sugg)
         rows = res.candidates("agent:sisyphus")
-        opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
-        assert len(opus_rows) >= 1
-        assert "unavailable" in opus_rows[0]["warn"]
+        models = [r["model"] for r in rows]
+        assert "claude-opus-4-7" not in models
+        assert models == ["kimi-k2.5", "gpt-5.5", "glm-5"], f"Unexpected: {models}"
 
-    def test_unavailable_model_still_accepted(self, sugg):
-        """Unavailable model → warn but allow (decision #5): the row is present."""
-        res = self._resolver_no_opencode(sugg)
-        rows = res.candidates("agent:sisyphus")
-        opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
-        assert len(opus_rows) >= 1  # still present, not dropped
+    def test_candidates_variant_warn(self, sugg):
+        """A row whose variant ∉ family.variants gets warn=['variant'] (via candidates()).
+        glm has no 'max' → glm-5 + max warns."""
+        cat = _make_catalog(["zhipuai/glm-5"])
+        res = Resolver.build(cat, sugg)
+        synth = {
+            "variant": "",
+            "fallbackChain": [{"providers": ["zhipuai"], "model": "glm-5", "variant": "max"}],
+        }
+        with patch.object(res, "_requirement_for", return_value=synth):
+            rows = res.candidates("agent:sisyphus")
+        glm = [r for r in rows if r["model"] == "glm-5"]
+        assert len(glm) == 1
+        assert glm[0]["warn"] == ["variant"]
 
     def test_invalid_variant_warn_flag(self, resolver):
         """A row where variant is not in the family's variants list gets warn=['variant'].
@@ -380,6 +387,66 @@ class TestWarnFlags:
         opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
         assert len(opus_rows) >= 1
         assert "variant" not in opus_rows[0]["warn"]
+
+
+# ---------------------------------------------------------------------------
+# Same-line (fuzzy) substitution — same detect_family, version-agnostic
+# ---------------------------------------------------------------------------
+
+class TestSameLineSubstitute:
+
+    def test_substitute_when_exact_absent(self, sugg):
+        """Chain wants glm-5; only glm-5.1 connected → glm-5.1 offered as a same-line sub."""
+        cat = _make_catalog(["zhipuai/glm-5.1"])
+        res = Resolver.build(cat, sugg)
+        rows = res.candidates("agent:sisyphus")
+        glm = [r for r in rows if r["provider"] == "zhipuai"]
+        assert len(glm) == 1
+        assert glm[0]["model"] == "glm-5.1"
+        assert glm[0]["substitute_for"] == "glm-5"
+        assert glm[0]["source"] == "omo"
+
+    def test_exact_beats_substitute(self, sugg):
+        """When the exact glm-5 is connected, it wins over glm-5.1 (no substitute row)."""
+        cat = _make_catalog(["zhipuai/glm-5", "zhipuai/glm-5.1"])
+        res = Resolver.build(cat, sugg)
+        rows = res.candidates("agent:sisyphus")
+        models = [r["model"] for r in rows]
+        assert "glm-5" in models
+        g5 = next(r for r in rows if r["model"] == "glm-5")
+        assert g5["substitute_for"] is None
+        assert "glm-5.1" not in models  # not in chain + glm-5 exact → never offered
+
+    def test_substitute_picks_newest(self, sugg):
+        """Several same-line models → newest (highest version) wins: glm-5.1 over glm-4.6."""
+        cat = _make_catalog(["zhipuai/glm-4.6", "zhipuai/glm-5.1"])
+        res = Resolver.build(cat, sugg)
+        rows = res.candidates("agent:sisyphus")
+        glm = [r for r in rows if r["provider"] == "zhipuai"]
+        assert len(glm) == 1
+        assert glm[0]["model"] == "glm-5.1"
+        assert glm[0]["substitute_for"] == "glm-5"
+
+    def test_no_cross_family_substitute(self, sugg):
+        """A different family is NOT a substitute: with only deepseek connected, the glm-5
+        entry is hidden (not filled by deepseek), and nothing is dumped → empty list."""
+        cat = _make_catalog(["deepseek/deepseek-v4"])
+        res = Resolver.build(cat, sugg)
+        rows = res.candidates("agent:sisyphus")
+        assert rows == [], f"Expected empty pick list, got {[r['model'] for r in rows]}"
+
+    def test_substitute_dedicated_first(self, sugg):
+        """A substitute's provider is dedicated-first too: glm-5.1 via zhipuai, not opencode."""
+        cat = _make_catalog([
+            "opencode/glm-5.1", "zhipuai/glm-5.1",
+            "opencode/gpt-5", "opencode/claude-opus-4-8",  # make opencode a gateway
+        ])
+        res = Resolver.build(cat, sugg)
+        rows = res.candidates("agent:sisyphus")
+        glm = [r for r in rows if r["model"] == "glm-5.1"]
+        assert len(glm) == 1
+        assert glm[0]["provider"] == "zhipuai"
+        assert glm[0]["substitute_for"] == "glm-5"
 
 
 # ---------------------------------------------------------------------------

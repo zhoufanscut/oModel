@@ -6,11 +6,12 @@ FROZEN CONTRACT — owned by the Core-logic specialist. The candidate-row dict y
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .catalog import Catalog
-from .suggestions import Suggestions, vendor
+from .suggestions import Suggestions, normalize_model_id, vendor
 
 
 @dataclass
@@ -73,16 +74,19 @@ class Resolver:
         return cands[0]
 
     def candidates(self, target: str) -> list:
-        """One pick list of candidate-row dicts (CONTRACTS.md / DESIGN §candidates):
-          1. EVERY fallbackChain entry of `target` as a ★ row, in chain order, resolved
-             provider/model + variant. Variant precedence: entry 'variant' → requirement
-             top-level 'variant' → None (registry validates only, designates no default).
-          2. Then ✓ all connected-provider models, DEDUPED against ★ by resolved 'provider/model'.
-        Row tags: ['★'] omo · ['✓'] mine · ['★','✓'] both. warn ⊆ {'unavailable','variant'}.
-        Does NOT append the `+ add model…` row (app.py adds cand:add).
+        """One pick list of candidate-row dicts — a single filtered pass over `target`'s
+        fallbackChain (CONTRACTS.md / DESIGN §candidates). For each entry, in chain order:
+          1. EXACT — a connected provider serves the entry's model verbatim → that model,
+             provider via resolve_prefix (dedicated-first); substitute_for=None.
+          2. SAME-LINE — else the newest connected model of the SAME detect_family
+             (version-agnostic: glm-5 → glm-5.1), provider dedicated-first;
+             substitute_for=<the omo model id>. A same-line model that is itself an
+             exactly-available chain entry is NOT used here (its own entry shows it exact).
+          3. else SKIP — neither exact nor same-line connected (truly unavailable: hidden).
+        Rows are deduped by resolved 'provider/model' (higher-priority entry wins).
+        Every row is source 'omo'; warn ⊆ {'variant'}. Does NOT append `+ add model…`.
         `target` is a §Data-contracts id: 'agent:<n>' | 'agent:<n>.ultrawork' |
         'agent:<n>.compaction' | 'cat:<n>'."""
-        # Resolve the requirement dict for this target.
         requirement = self._requirement_for(target)
         if requirement is None:
             return []
@@ -90,10 +94,15 @@ class Resolver:
         req_top_variant = requirement.get("variant")  # top-level variant (presently always empty)
         fallback_chain = requirement.get("fallbackChain", [])
 
-        # Phase 1: ★ rows from the fallbackChain.
-        star_rows: list = []
-        # Track resolved 'provider/model' keys to detect ★✓ overlaps.
-        star_keys: set = set()
+        # Models that appear EXACTLY in this chain AND are connected: never used as a
+        # same-line substitute — each is represented by its own (exact) entry instead.
+        exact_chain_models = {
+            e["model"] for e in fallback_chain
+            if e.get("model") and self.catalog.providers_for(e["model"])
+        }
+
+        rows: list = []
+        seen_keys: set = set()  # resolved 'provider/model' — dedup within the chain
 
         for entry in fallback_chain:
             model_id = entry.get("model", "")
@@ -109,69 +118,71 @@ class Resolver:
             else:
                 variant = None
 
-            provider = self.resolve_prefix(model_id, "omo", entry=entry)
+            # 1. Exact → 2. same-line substitute → 3. skip.
+            if self.catalog.providers_for(model_id):
+                resolved_model = model_id
+                provider = self.resolve_prefix(model_id, "omo", entry=entry)
+                substitute_for = None
+            else:
+                resolved_model = self._same_line_match(model_id, exclude=exact_chain_models)
+                if resolved_model is None:
+                    continue
+                provider = self.resolve_prefix(resolved_model, "omo", entry=None)
+                substitute_for = model_id
 
-            # Build warn list.
-            warn = []
-            if not self.catalog.providers_for(model_id):
-                warn.append("unavailable")
-                # For unavailable omo rows, fall back to entry['providers'][0] if provider is None.
-                if provider is None:
-                    eps = entry.get("providers", [])
-                    if eps:
-                        provider = eps[0]
+            key = f"{provider}/{resolved_model}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
 
+            # warn: variant only (unavailable entries are skipped, never shown).
+            warn: list = []
             if variant is not None:
-                fam = self.suggestions.detect_family(model_id)
+                fam = self.suggestions.detect_family(resolved_model)
                 if fam is not None and variant not in fam.variants:
                     warn.append("variant")
 
-            key = f"{provider}/{model_id}" if provider else f"/{model_id}"
-            star_keys.add(key)
-
-            star_rows.append({
+            rows.append({
                 "source": "omo",
-                "model": model_id,
+                "model": resolved_model,
                 "provider": provider,
                 "variant": variant,
                 "entry": entry,
-                "tags": ["★"],
+                "substitute_for": substitute_for,
                 "warn": warn,
             })
 
-        # Phase 2: ✓ rows from connected providers, deduped against ★.
-        mine_rows: list = []
+        return rows
+
+    def _same_line_match(self, model_id: str, exclude: "frozenset" = frozenset()) -> "Optional[str]":
+        """Newest connected model sharing `model_id`'s detect_family, else None.
+        'Newest' = highest version tuple (digit groups in the normalized id); ties resolve
+        to first-seen (catalog order). Returns None when the omo model has no family (never
+        substitute blindly across unknown ids) or no connected model shares its family.
+        `exclude` drops connected ids that are themselves exact chain entries."""
+        target_fam = self.suggestions.detect_family(model_id)
+        if target_fam is None:
+            return None
+        same: list = []
+        seen: set = set()
         for prov in self.catalog.connected:
-            for model_id in self.catalog.available.get(prov, []):
-                # Resolve 'mine' prefix (always the serving provider).
-                provider = prov
-                key = f"{provider}/{model_id}"
-                if key in star_keys:
-                    # Upgrade the existing ★ row to ★✓.
-                    for row in star_rows:
-                        if (
-                            row["provider"] == provider
-                            and row["model"] == model_id
-                        ):
-                            if "✓" not in row["tags"]:
-                                row["tags"] = ["★", "✓"]
-                            break
+            for m in self.catalog.available.get(prov, []):
+                if m in seen or m in exclude:
                     continue
+                fam = self.suggestions.detect_family(m)
+                if fam is not None and fam.family == target_fam.family:
+                    seen.add(m)
+                    same.append(m)
+        if not same:
+            return None
+        # max() returns the FIRST maximal element → first-seen tie-break (same is first-seen).
+        return max(same, key=self._version_key)
 
-                # New ✓-only row.
-                variant = None  # mine rows carry no variant by default
-                warn = []
-                mine_rows.append({
-                    "source": "mine",
-                    "model": model_id,
-                    "provider": provider,
-                    "variant": variant,
-                    "entry": None,
-                    "tags": ["✓"],
-                    "warn": warn,
-                })
-
-        return star_rows + mine_rows
+    @staticmethod
+    def _version_key(model_id: str) -> tuple:
+        """Digit groups of the normalized id as an int tuple, for 'newest' comparison:
+        'glm-5.1' → (5, 1) > 'glm-5' → (5,) > 'glm-4.6' → (4, 6)."""
+        return tuple(int(n) for n in re.findall(r"\d+", normalize_model_id(model_id)))
 
     # ------------------------------------------------------------------
     # Internal helpers
