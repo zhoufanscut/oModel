@@ -1,12 +1,12 @@
 #!/bin/sh
 # install.sh — curl|sh installer for omodel
-# Usage: curl -fsSL https://raw.githubusercontent.com/<you>/oModel/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh
 #
 # Detects OS/arch, downloads the matching release binary from GitHub, installs to
 # ~/.local/bin/omodel, and prints a PATH hint if needed.
 set -e
 
-REPO="<you>/oModel"
+REPO="zhoufanscut/oModel"
 BIN_DIR="${HOME}/.local/bin"
 BIN_NAME="omodel"
 

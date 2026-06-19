@@ -12,7 +12,7 @@ description = "A TUI to quickly set OMO (oh-my-openagent) models"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "<you>" }]
+authors = [{ name = "zhoufanscut" }]
 keywords = ["tui", "opencode", "oh-my-openagent", "omo", "ai", "models"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -38,9 +38,9 @@ dependencies = [
 omodel = "omodel.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/<you>/oModel"
-Repository = "https://github.com/<you>/oModel"
-Changelog = "https://github.com/<you>/oModel/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/zhoufanscut/oModel"
+Repository = "https://github.com/zhoufanscut/oModel"
+Changelog = "https://github.com/zhoufanscut/oModel/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/omodel"]

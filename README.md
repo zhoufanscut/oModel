@@ -34,7 +34,7 @@ variant, then saves a clean `oh-my-openagent.jsonc` (timestamped backups each sa
 ### Standalone binary (recommended)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<you>/oModel/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh
 ```
 
 Installs `omodel` to `~/.local/bin`. Supported platforms: `linux-x64`,
@@ -44,19 +44,19 @@ Installs `omodel` to `~/.local/bin`. Supported platforms: `linux-x64`,
 
 ```sh
 # pipx
-pipx install git+https://github.com/<you>/oModel
+pipx install git+https://github.com/zhoufanscut/oModel
 
 # uvx (run without installing)
-uvx --from git+https://github.com/<you>/oModel omodel
+uvx --from git+https://github.com/zhoufanscut/oModel omodel
 
 # uv tool install
-uv tool install git+https://github.com/<you>/oModel
+uv tool install git+https://github.com/zhoufanscut/oModel
 ```
 
 ### Maintainer / development
 
 ```sh
-git clone https://github.com/<you>/oModel
+git clone https://github.com/zhoufanscut/oModel
 cd oModel
 uv pip install -e .
 ```
