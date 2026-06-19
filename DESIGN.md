@@ -211,17 +211,8 @@ oModel/
   `providers` array (omo's per-model preference order) is **kept** for the gateway tie-break in
   `resolve_prefix`.
 - **`FAMILY_VENDOR` — hardcoded dict in `suggestions.py` (NOT from omo; omo has no such table).** The
-  complete 14-family → vendor map used by `vendors_served`:
-  ```python
-  FAMILY_VENDOR = {
-    "claude-opus": "anthropic", "claude-non-opus": "anthropic",
-    "openai-reasoning": "openai", "gpt-5": "openai", "gpt-legacy": "openai",
-    "gemini": "google", "grok": "xai",
-    "kimi-thinking": "moonshot", "kimi": "moonshot",
-    "glm": "zhipu", "minimax": "minimax", "deepseek": "deepseek",
-    "mistral": "mistral", "llama": "meta",
-  }
-  ```
+  complete 14-family → vendor map used by `vendors_served`. The authoritative table is the
+  `FAMILY_VENDOR` dict in `src/omodel/suggestions.py` — read it there; not duplicated here (it drifts).
   `vendor(family) = FAMILY_VENDOR.get(family)` → `None` for unknown/None. Models whose `detect_family`
   is `None` (opencode's `big-pickle`, `qwen3.x-plus`, `*-free`, `nemotron-*` — no omo family)
   contribute **no** vendor and are skipped in `vendors_served`; **do not invent a family for them**.
@@ -332,60 +323,15 @@ oModel/
   else `$XDG_DATA_HOME/omodel/omo-suggestions.json` (user override).
 - Missing omo src or bun → **non-fatal**: print current bundled `meta`, keep bundled data.
 
-### `tools/snapshot_omo.ts` — the extractor (bun, maintainer-time; embedded so it can't be guessed)
-Verified import paths (bun resolves omo's extensionless `.ts`); `pattern.source` serializes e.g.
-`claude(?:-\d+(?:-\d+)*)?-opus`. `refresh.py` runs `bun run <this file> <omo-src>` and writes stdout
-to the data file. Full source:
-```ts
-// Run: bun run src/omodel/tools/snapshot_omo.ts <omo-src> > src/omodel/data/omo-suggestions.json
-import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const omo = process.argv[2] ?? process.env.OMO_SRC ?? `${process.env.HOME}/source/oh-my-openagent`;
-const core = join(omo, "packages/model-core/src");
-
-const { HEURISTIC_MODEL_FAMILY_REGISTRY } = await import(join(core, "model-capability-heuristics"));
-const { AGENT_MODEL_REQUIREMENTS }        = await import(join(core, "agent-model-requirements"));
-const { CATEGORY_MODEL_REQUIREMENTS }     = await import(join(core, "category-model-requirements"));
-const { KNOWN_VARIANTS }                  = await import(join(core, "known-variants"));
-
-const reqOut = (r: any) => ({
-  fallbackChain: r.fallbackChain.map((e: any) => ({
-    providers: e.providers ?? [],
-    model: e.model,
-    ...(e.variant ? { variant: e.variant } : {}),
-  })),
-  ...(r.variant ? { variant: r.variant } : {}),
-  requiresProvider: r.requiresProvider ?? [],
-  requiresModel: r.requiresModel ?? "",
-  requiresAnyModel: r.requiresAnyModel ?? false,
-});
-const mapReqs = (o: Record<string, any>) =>
-  Object.fromEntries(Object.entries(o).map(([k, v]) => [k, reqOut(v)]));
-
-const families = HEURISTIC_MODEL_FAMILY_REGISTRY.map((d: any) => ({
-  family: d.family,
-  pattern: d.pattern ? d.pattern.source : null,   // RegExp → string (re.compile at load)
-  includes: d.includes ?? [],
-  variants: d.variants ?? [],
-  reasoningEfforts: d.reasoningEfforts ?? [],
-  reasoningEffortAliases: d.reasoningEffortAliases ?? {},
-  supportsThinking: d.supportsThinking ?? false,
-}));
-
-let omoVersion = "", omoCommit = "";
-try { omoVersion = JSON.parse(readFileSync(join(omo, "package.json"), "utf8")).version ?? ""; } catch {}
-try { omoCommit = execSync(`git -C "${omo}" rev-parse HEAD`, { encoding: "utf8" }).trim(); } catch {}
-
-console.log(JSON.stringify({
-  meta: { omoVersion, omoCommit, generatedAt: new Date().toISOString() },
-  agents: mapReqs(AGENT_MODEL_REQUIREMENTS),
-  categories: mapReqs(CATEGORY_MODEL_REQUIREMENTS),
-  families,
-  knownVariants: [...KNOWN_VARIANTS],   // Set|array → array
-}, null, 2));
-```
+### `tools/snapshot_omo.ts` — the extractor (bun, maintainer-time)
+Real source: `src/omodel/tools/snapshot_omo.ts` — read it there; not inlined here (it drifts). Design
+contract: at maintainer time it dynamically `import`s omo's `packages/model-core/src` modules
+(`model-capability-heuristics`, `agent-model-requirements`, `category-model-requirements`,
+`known-variants`) — **bun** resolves omo's extensionless `.ts`, node can't (see §Runtime requirements) —
+and prints JSON matching the §Data sources "what omo suggests" schema: each RegExp `pattern` →
+`.source` string (e.g. `claude(?:-\d+(?:-\d+)*)?-opus`), `Set` → array, plus a `meta` block
+(`omoVersion` from omo's `package.json`, `omoCommit` from `git rev-parse`, `generatedAt`). `refresh.py`
+runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 
 ### Textual two-pane contract (`app.py`)
 - **Header** `Static#providers`: one line `Providers: <id · id · …>` from `catalog.connected` in its
