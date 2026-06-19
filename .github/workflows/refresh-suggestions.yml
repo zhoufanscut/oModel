@@ -1,0 +1,70 @@
+name: Refresh omo suggestions
+
+on:
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      omo_ref:
+        description: "oh-my-openagent ref to check out (branch, tag, or SHA)"
+        required: false
+        default: "main"
+  # Or run on a schedule: weekly on Mondays
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  refresh:
+    name: "Regenerate omo-suggestions.json"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout oModel
+        uses: actions/checkout@v4
+
+      - name: Checkout oh-my-openagent
+        uses: actions/checkout@v4
+        with:
+          repository: code-yeongyu/oh-my-openagent
+          ref: ${{ github.event.inputs.omo_ref || 'main' }}
+          path: oh-my-openagent
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install omodel
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run snapshot extractor
+        run: |
+          omodel --refresh --omo-src "${{ github.workspace }}/oh-my-openagent"
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet src/omodel/data/omo-suggestions.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR if changed
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: "auto/refresh-suggestions"
+          title: "chore: refresh omo-suggestions.json"
+          body: |
+            Automated refresh of `src/omodel/data/omo-suggestions.json` from the latest
+            oh-my-openagent source (${{ github.event.inputs.omo_ref || 'main' }}).
+
+            Review the diff before merging.
+          commit-message: "chore: refresh omo-suggestions.json from omo"
+          add-paths: "src/omodel/data/omo-suggestions.json"

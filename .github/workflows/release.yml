@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: "Build ${{ matrix.os-name }}-${{ matrix.arch }}"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os-name: linux
+            arch: x64
+            asset-name: omodel-linux-x64
+          - runner: macos-latest
+            os-name: darwin
+            arch: arm64
+            asset-name: omodel-darwin-arm64
+          - runner: macos-13
+            os-name: darwin
+            arch: x64
+            asset-name: omodel-darwin-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build one-file binary
+        run: |
+          pyinstaller \
+            --onefile \
+            --name omodel \
+            --collect-data omodel \
+            src/omodel/__main__.py
+
+      - name: Smoke test binary
+        run: ./dist/omodel --version
+
+      - name: Create tarball
+        run: |
+          cd dist
+          tar czf ${{ matrix.asset-name }}.tar.gz omodel
+          mv omodel ${{ matrix.asset-name }}
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ matrix.asset-name }}
+            dist/${{ matrix.asset-name }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

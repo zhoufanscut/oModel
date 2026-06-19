@@ -1,0 +1,51 @@
+oModel — NOTICE
+===============
+
+oModel is copyright (c) 2026 <you> and is distributed under the MIT License
+(see LICENSE).
+
+-------------------------------------------------------------------------------
+BUNDLED DERIVED DATA — oh-my-openagent
+-------------------------------------------------------------------------------
+
+The file `src/omodel/data/omo-suggestions.json` (and the copy of it bundled
+inside release binaries) is DATA DERIVED FROM THE oh-my-openagent PROJECT:
+
+  Project:   oh-my-openagent (also known as "omo" / "oh-my-opencode")
+  Author:    code-yeongyu (Yeongyu Kim) and contributors
+  Source:    https://github.com/code-yeongyu/oh-my-openagent
+  License:   Sustainable Use License v1.0
+             (see https://github.com/code-yeongyu/oh-my-openagent/blob/main/LICENSE.md)
+
+The derived data (`omo-suggestions.json`) is generated at maintainer time from
+omo's TypeScript source files under `packages/model-core/src/` (specifically:
+`model-capability-heuristics`, `agent-model-requirements`,
+`category-model-requirements`, and `known-variants`) using the bundled extractor
+`src/omodel/tools/snapshot_omo.ts`.
+
+⚠ REDISTRIBUTION FLAG — PLEASE READ:
+The oh-my-openagent LICENSE.md is the "Sustainable Use License v1.0", which
+grants redistribution only for NON-COMMERCIAL purposes:
+
+  "You may distribute the software or provide it to others only if you do so
+  free of charge for non-commercial purposes."
+
+The derived `omo-suggestions.json` constitutes a portion of oh-my-openagent's
+software (it is extracted from its source). By redistributing oModel — whether
+as source, wheel, or binary — you are redistributing this derived data, and you
+are therefore bound by the Sustainable Use License constraints:
+
+  * Redistribution must be free of charge.
+  * Use must be non-commercial or for your own internal business purposes only.
+  * You must preserve this NOTICE and the licensing terms.
+
+If you intend to use oModel commercially, you must either obtain a separate
+commercial license from code-yeongyu/oh-my-openagent for the derived data, or
+remove `omo-suggestions.json` from your distribution and regenerate it yourself
+from a separately licensed copy of oh-my-openagent.
+
+oModel's own code (everything except the derived data file) is MIT-licensed and
+may be used without this restriction.
+
+-------------------------------------------------------------------------------
+END OF NOTICE

@@ -1,6 +1,6 @@
-# Baseline pyproject — the CLI+packaging specialist owns the FINAL version
-# (classifiers, pinned Textual at lock time, full [project.urls], hatch artifacts/sdist).
-# This baseline is intentionally minimal but installable so the QA gate can `pip install -e .`.
+# pyproject.toml — owned by the CLI+packaging specialist (final version).
+# Textual pin: installed textual==8.2.7, requires-python ">=3.9,<4.0".
+# Our floor stays at 3.9 — textual's constraint is satisfied.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -12,9 +12,25 @@ description = "A TUI to quickly set OMO (oh-my-openagent) models"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "oModel" }]
+authors = [{ name = "<you>" }]
+keywords = ["tui", "opencode", "oh-my-openagent", "omo", "ai", "models"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Utilities",
+]
 dependencies = [
-  "textual",
+  # Pin at lock time: textual 8.2.7 requires-python ">=3.9,<4.0" — matches our 3.9 floor.
+  "textual==8.2.7",
   "json5",
 ]
 
@@ -24,11 +40,21 @@ omodel = "omodel.cli:main"
 [project.urls]
 Homepage = "https://github.com/<you>/oModel"
 Repository = "https://github.com/<you>/oModel"
+Changelog = "https://github.com/<you>/oModel/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/omodel"]
+# Non-Python payload (data/*.json,*.jsonc + tools/*.ts) ships automatically because it lives
+# under the package tree; importlib.resources reads it (incl. when frozen by PyInstaller).
+# NB: do NOT add a force-include for data/tools — it duplicates those paths and fails the build
+# ("A second file is being added to the wheel archive at the same path").
 
-# Ensure non-Python payload ships in the wheel (importlib.resources reads it when frozen).
-[tool.hatch.build.targets.wheel.force-include]
-"src/omodel/data" = "omodel/data"
-"src/omodel/tools" = "omodel/tools"
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+  "CHANGELOG.md",
+  "pyproject.toml",
+]

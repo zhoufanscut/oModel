@@ -5,8 +5,12 @@ the contract (verified complete: its 14 keys == the 14 families in the bundled d
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
+from importlib.resources import files
+from typing import Optional
 
 # Hardcoded in oModel (omo has NO such table). 14-family → vendor map (DESIGN §suggestions.py).
 # Models whose detect_family is None contribute NO vendor — do not invent a family for them.
@@ -39,31 +43,86 @@ class Suggestions:
     families: list     # [Family, ...]  ORDERED — iteration order is significant for detect_family
     known_variants: list
 
-    def detect_family(self, model_id: str):
+    def detect_family(self, model_id: str) -> "Optional[Family]":
         """Faithful port of omo `detectHeuristicModelFamily` → Family | None.
         Run normalize_model_id() first, then ORDERED iteration of `families`; within each
         entry `pattern` is tested BEFORE `includes`; FIRST match wins. (Parity:
         openai-reasoning before gpt-5, kimi-thinking before kimi, claude-opus before
         claude-non-opus.)"""
-        raise NotImplementedError
+        normalized = normalize_model_id(model_id)
+        for fam in self.families:
+            # Test pattern BEFORE includes within each entry.
+            if fam.pattern is not None:
+                if fam.pattern.search(normalized):
+                    return fam
+            else:
+                for inc in fam.includes:
+                    if inc in normalized:
+                        return fam
+        return None
 
-    def vendor_for(self, model_id: str):
+    def vendor_for(self, model_id: str) -> "Optional[str]":
         """vendor(self.detect_family(model_id)) → str | None."""
-        raise NotImplementedError
+        return vendor(self.detect_family(model_id))
 
 
-def vendor(family):
+def vendor(family: "Optional[Family]") -> "Optional[str]":
     """FAMILY_VENDOR.get(family.family) for a Family, else None (handles family=None)."""
-    raise NotImplementedError
+    if family is None:
+        return None
+    return FAMILY_VENDOR.get(family.family)
 
 
 def normalize_model_id(s: str) -> str:
-    """re.sub(r'\\.(\\d+)', r'-\\1', s).lower()  →  'kimi-k2.7' → 'kimi-k2-7'."""
-    raise NotImplementedError
+    r"""re.sub(r'\.(\d+)', r'-\1', s).lower()  →  'kimi-k2.7' → 'kimi-k2-7'."""
+    return re.sub(r"\.(\d+)", r"-\1", s).lower()
 
 
 def load(path: str = None) -> Suggestions:
     """Load order: explicit `path` → $OMODEL_SUGGESTIONS → $XDG_DATA_HOME/omodel/omo-suggestions.json
     → bundled importlib.resources.files('omodel.data')/'omo-suggestions.json'.
     Each Family.pattern is re.compile()d from the JSON `pattern` string (or None) at load."""
-    raise NotImplementedError
+    data_str: "Optional[str]" = None
+
+    if path is not None:
+        with open(path, "r", encoding="utf-8") as f:
+            data_str = f.read()
+    else:
+        env_path = os.environ.get("OMODEL_SUGGESTIONS")
+        if env_path:
+            with open(env_path, "r", encoding="utf-8") as f:
+                data_str = f.read()
+        else:
+            xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+            xdg_path = os.path.join(xdg_data, "omodel", "omo-suggestions.json")
+            if os.path.isfile(xdg_path):
+                with open(xdg_path, "r", encoding="utf-8") as f:
+                    data_str = f.read()
+            else:
+                # Fall back to the bundled resource.
+                resource = files("omodel.data") / "omo-suggestions.json"
+                data_str = resource.read_text(encoding="utf-8")
+
+    raw = json.loads(data_str)
+
+    families = []
+    for fd in raw["families"]:
+        pat_src = fd.get("pattern")
+        compiled = re.compile(pat_src) if pat_src is not None else None
+        families.append(Family(
+            family=fd["family"],
+            pattern=compiled,
+            includes=fd.get("includes", []),
+            variants=fd.get("variants", []),
+            reasoning_efforts=fd.get("reasoningEfforts", []),
+            reasoning_effort_aliases=fd.get("reasoningEffortAliases", {}),
+            supports_thinking=fd.get("supportsThinking", False),
+        ))
+
+    return Suggestions(
+        meta=raw.get("meta", {}),
+        agents=raw.get("agents", {}),
+        categories=raw.get("categories", {}),
+        families=families,
+        known_variants=raw.get("knownVariants", []),
+    )

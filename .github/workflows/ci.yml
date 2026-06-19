@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  test:
+    name: "Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" || pip install -e .
+          pip install pytest
+
+      # Mock `opencode` so catalog.load() degrades gracefully (not on CI PATH)
+      - name: Create opencode mock
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\necho "mock opencode: not available"\nexit 1\n' > "$HOME/.local/bin/opencode"
+          chmod +x "$HOME/.local/bin/opencode"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Mock `bun` so refresh degrades gracefully (not on CI PATH)
+      - name: Create bun mock
+        run: |
+          printf '#!/bin/sh\necho "mock bun: not available"\nexit 1\n' > "$HOME/.local/bin/bun"
+          chmod +x "$HOME/.local/bin/bun"
+
+      - name: Lint (ruff, if configured)
+        run: |
+          if python -c "import ruff" 2>/dev/null || pip show ruff > /dev/null 2>&1; then
+            ruff check src/ tests/ || true
+          else
+            echo "ruff not installed — skipping lint"
+          fi
+
+      - name: Run tests
+        env:
+          # Ensure opencode is not found on PATH so catalog degrades cleanly
+          OPENCODE_BIN: "false"
+        run: pytest tests/ -v --tb=short
