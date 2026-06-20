@@ -4,23 +4,26 @@
 
 **what omo suggests + what you already have → pick one → save a clean config.**
 
-Per agent/category, oModel shows one merged list (★ models omo suggests, ✓ models you have
-via `opencode models`); you pick one and it fills in the correct `provider/` prefix and a valid
-variant, then saves a clean `oh-my-openagent.jsonc` (timestamped backups each save).
+Per agent/category, oModel shows omo's fallback chain filtered to the models you can actually
+run (via `opencode models`) — each as one row per serving provider, dedicated providers before
+gateways. You pick one and it fills in the correct `provider/` prefix and a valid variant, then
+saves a clean `oh-my-openagent.jsonc` (timestamped backups each save).
 
 ```
-┌ oModel ────────────────────────────────────────────────────┐
-│ AGENTS              │ sisyphus                             │
-│ > sisyphus     kimi │ model: moonshotai-cn/kimi-k2.7-code  │
-│     ↳ ultrawork opus│ variant: —     ctx 256k · $0.6/$2.5  │
-│   hephaestus   gpt  │                                      │
-│   oracle       gpt  │ ── candidates ──────────────────     │
-│   momus        gpt  │ ★ omo  opencode/claude-opus-4-7 (max)│
-│   ...               │ ★ omo  moonshotai-cn/kimi-k2.5       │
-│ CATEGORIES          │ ✓ mine opencode/claude-opus-4-8      │
-│   deep         gpt  │ ✓ mine deepseek/deepseek-v4-pro      │
-│   quick        mini │ + add model…                         │
-└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · r refresh · q quit ┘
+ Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai    (cached 3h ago · r)
+┌────────────────────┐┌────────────────────────────────────────────┐
+│ AGENTS             ││ sisyphus                                   │
+│ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
+│   ↳ ultrawork opus ││ variant: —    ctx 256k · $0.6/$2.5         │
+│   hephaestus  gpt  │└────────────────────────────────────────────┘
+│   oracle      gpt  │┌────────────────────────────────────────────┐
+│   momus       gpt  ││  opencode/claude-opus-4-7 (max)            │
+│   ...              ││  openai/gpt-5.5 (medium)                   │
+│ CATEGORIES         ││  opencode/gpt-5.5 (medium)                 │
+│   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
+│   quick       mini ││ + add model…                               │
+└────────────────────┘└────────────────────────────────────────────┘
+ ↑↓ move · ←→ panes · enter set · v variant · x clear · a edit/sub · u undo · s save · q quit
 ```
 
 ## Requirements
@@ -83,13 +86,13 @@ live re-fetch and rebuild the cache.
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` | Navigate agents/categories or candidates |
-| `Enter` | Set the highlighted candidate as the current model |
+| `↑` `↓` (`j` `k`) | Navigate agents/categories or candidates |
+| `←` `→` (`h` `l`) | Switch panes (targets ↔ candidates) |
+| `Enter` | Set the highlighted candidate (or open `+ add model…`) |
 | `v` | Pick a variant for the current candidate |
-| `p` | Cycle the provider prefix across available providers |
-| `e` | Add a custom model (modal) |
+| `a` | Add a custom model (candidates / category row), or an `ultrawork` / `compaction` sub-target (agent row) |
 | `x` | Clear the current agent/category model |
-| `a` | Add an `ultrawork` / `compaction` sub-target |
+| `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
 | `s` | Save (diff + confirm modal) |
 | `r` | Refresh models (live `opencode models --refresh` + rebuild cache, off-thread) |
 | `q` | Quit (confirm if unsaved changes) |
@@ -103,8 +106,9 @@ live re-fetch and rebuild the cache.
 2. **Available models** — fetched live from `opencode models`; groups into connected
    providers. The TUI degrades to suggestions-only if `opencode` is absent.
 
-3. **Prefix resolution** — dedicated providers (serving one vendor's models) win over
-   gateways (e.g. `opencode` which serves many vendors). Press `p` to cycle the prefix.
+3. **Prefix resolution** — each model is shown as one row per serving provider, with dedicated
+   providers (serving one vendor) before gateways (e.g. `opencode`, which serves many vendors).
+   Pick the row whose `provider/` prefix you want — there's no separate prefix step.
 
 4. **Save** — shows a unified diff before writing. Each save creates a verbatim
    timestamped backup; the very first save also pins `original.jsonc` (never pruned).
