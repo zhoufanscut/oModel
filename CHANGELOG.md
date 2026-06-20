@@ -3,6 +3,19 @@
 All notable changes to oModel are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- In-session **undo/redo** of every edit, for mis-press recovery: `u` undoes the last
+  operation (set / clear / variant / add-model / add sub-target), `ctrl+r` redoes it — a
+  snapshot stack (`history.py`) the app records on every config mutation. Each undo/redo
+  notifies what changed; the hint bar shows `u undo` / `⌃r redo` only when available.
+
+### Changed
+- Dirtiness is now computed (`serialize(cfg)` vs the last-saved text) instead of a flag, so
+  undoing back to the saved state quits without a prompt, and an empty ultrawork/compaction
+  sub-object is undoable but never marks the file dirty.
+
 ## [0.1.0] — 2026-06-19
 
 ### Added

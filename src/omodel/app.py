@@ -32,10 +32,18 @@ KEYS: ↑↓ (or vim j/k) move within the focused pane · ←/→ (or vim h/l) f
 targets/candidates (gated to the base screen via check_action) · enter set (dispatch by row:
 cand:add → add-model modal, else set
 model + default variant) · v variant · x clear · a pane-contextual (candidates + targets category
-rows → add/edit-model modal; targets agent rows → add sub-target chooser) · s save
+rows → add/edit-model modal; targets agent rows → add sub-target chooser) · u undo / ctrl+r redo
+(in-session undo of EVERY edit — set/clear/variant/add-model/add-sub — for mis-press recovery;
+snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
 CatalogUnavailable) · q quit (confirm if dirty). The pane keys are shown in Static#hints (and
-per-modal hint lines); r is advertised in the Static#providers header instead, not the hint bar.
+per-modal hint lines); undo/redo appear there only when available; r is advertised in the
+Static#providers header instead, not the hint bar.
+
+Every cfg mutation routes through `_record` (snapshots into `_history`) and dirtiness is computed
+by `_is_dirty` (serialize(cfg) vs `_saved_text`, the last-saved/loaded text) rather than a flag —
+so undo back to the saved state reads as clean, and an empty sub-object (which serializes away) is
+undoable but not dirty. `_restore_state` reloads a snapshot and re-renders both panes.
 Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
 verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if available, else
 '⚠ unknown — add a provider/' and enter is BLOCKED until qualified.
@@ -61,6 +69,7 @@ from . import catalog as catalog_mod
 from . import config_io
 from . import suggestions as suggestions_mod
 from .catalog import Catalog, CatalogUnavailable
+from .history import History
 from .resolve import Resolver
 from .suggestions import Suggestions
 
@@ -488,6 +497,8 @@ class OModelApp(App):
         Binding("v", "variant", "variant"),
         Binding("x", "clear", "clear"),
         Binding("a", "edit_or_sub", "edit/sub"),
+        Binding("u", "undo", "undo"),
+        Binding("ctrl+r", "redo", "redo"),
         Binding("s", "save", "save"),
         Binding("r", "refresh", "refresh"),
         Binding("q", "quit_confirm", "quit"),
@@ -509,11 +520,24 @@ class OModelApp(App):
         self.cfg = cfg
         self.config_path = config_path
         self.catalog_error = catalog_error
-        # In-memory edit state.
-        self.dirty = False
-        # Cache of the candidate-row dicts currently rendered, keyed by target id. Each cache
-        # entry may include staged "+ custom" rows from the add-model modal.
+        # In-session undo/redo (mis-press recovery). `_history` holds cfg snapshots; every
+        # config mutation routes through `_record` (and `_stage_row`), which pushes one, so any
+        # operation can be reverted with `u` / re-applied with `ctrl+r` (see history.py).
+        # `_saved_text` is the serialization last written to (or loaded from) disk: dirtiness is
+        # computed against it (`_is_dirty`), NOT a bool flag — so undoing back to the saved
+        # state reads as clean, and a structural-but-unserialized change (an empty
+        # ultrawork/compaction sub-object) is undoable yet never marks the file dirty.
+        self._history = History(cfg)
+        self._saved_text = config_io.serialize(cfg)
+        # Cache of the candidate-row dicts currently rendered, keyed by target id; rebuilt from
+        # the resolver (+ merged _custom_rows) on a cache miss. Dropped by a refresh AND a
+        # state restore (undo/redo), since the `●` current-pick depends on cfg.
         self._rows: dict = {}
+        # Durable per-target store of models typed in the add-model modal (off-chain picks),
+        # keyed by target id. Merged into _build_rows so a typed model stays a pickable row.
+        # Deliberately survives undo/redo (unlike _rows) so redoing an add-model brings its row
+        # back; only a refresh clears it (its stored availability ⚠ would be stale).
+        self._custom_rows: dict = {}
         # The target id currently shown in the right pane.
         self._current_target: Optional[str] = None
         # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
@@ -592,11 +616,14 @@ class OModelApp(App):
         agent = (self.cfg.get("agents") or {}).get(name) or {}
         return [k for k in _SUBKINDS if isinstance(agent.get(k), dict)]
 
-    def _populate_targets(self) -> None:
+    def _populate_targets(self, select: Optional[str] = None) -> None:
         targets = self.query_one("#targets", OptionList)
-        # Preserve highlight across rebuilds (e.g. after `a` adds a sub-target).
-        prior = None
-        if targets.highlighted is not None:
+        # Preserve highlight across rebuilds (e.g. after `a` adds a sub-target). `select`, when
+        # given, overrides — restore the cursor straight to that option id (used by undo/redo so
+        # the pane lands on the final target without first highlighting a fallback row, which
+        # would queue a stale OptionHighlighted for the wrong target).
+        prior = select
+        if prior is None and targets.highlighted is not None:
             try:
                 opt = targets.get_option_at_index(targets.highlighted)
                 prior = opt.id
@@ -706,6 +733,15 @@ class OModelApp(App):
                 rows = list(self.resolver.candidates(target))
             except CatalogUnavailable:
                 rows = []
+        # Re-merge session-added custom rows (typed in the add-model modal) the chain doesn't
+        # already cover, so a typed model stays pickable across undo/redo — _custom_rows is the
+        # durable store; this cache and the resolver list are rebuilt around it.
+        existing = {f"{r['provider']}/{r['model']}" for r in rows}
+        for cr in self._custom_rows.get(target, []):
+            key = f"{cr['provider']}/{cr['model']}"
+            if key not in existing:
+                rows.append(cr)
+                existing.add(key)
         self._rows[target] = rows
         return rows
 
@@ -871,6 +907,16 @@ class OModelApp(App):
         if len(self.screen_stack) > 1:
             return
         hints = self.query_one("#hints", Static)
+        # Global tail (both panes): undo/redo are shown ONLY when there's something to
+        # undo/redo, keeping the one-line bar minimal until the keys actually do something
+        # (same philosophy as the pane-aware keys); then the always-present save/quit.
+        tail = []
+        if self._history.can_undo:
+            tail.append("u undo")
+        if self._history.can_redo:
+            tail.append("⌃r redo")
+        tail += ["s save", "q quit"]
+        tail_text = " · ".join(tail)
         cands = self.query_one("#candidates", OptionList)
         if self.focused is cands:
             # Right pane: the '+ add model…' row repurposes enter and drops v/x.
@@ -882,10 +928,10 @@ class OModelApp(App):
                 except Exception:
                     on_add = False
             if on_add:
-                text = "↑↓ move · ← targets · enter add · s save · q quit"
+                text = f"↑↓ move · ← targets · enter add · {tail_text}"
             else:
                 text = ("↑↓ move · ← targets · enter set · v variant · a edit · "
-                        "x clear · s save · q quit")
+                        f"x clear · {tail_text}")
         else:
             # Left pane (targets): `a` is `sub` on an agent row, `edit` on a category row
             # (categories have no sub-targets, so `a` opens the add/edit-model modal there).
@@ -896,7 +942,7 @@ class OModelApp(App):
                 a_hint = "a edit · "
             else:
                 a_hint = ""
-            text = f"↑↓ move · → candidates · {a_hint}s save · q quit"
+            text = f"↑↓ move · → candidates · {a_hint}{tail_text}"
         hints.update(text)
 
     # ----- events ----------------------------------------------------------------------
@@ -961,16 +1007,41 @@ class OModelApp(App):
         except ValueError:
             return None
 
-    def _stage_row(self, target: str, row: dict) -> None:
-        """Write the chosen candidate row into the cfg node and mark dirty."""
+    @staticmethod
+    def _target_label(target: str) -> str:
+        """Short human name for a target id, for undo/redo notifications:
+        'agent:sisyphus' → 'sisyphus', 'agent:sisyphus.ultrawork' → 'sisyphus.ultrawork',
+        'cat:deep' → 'deep'."""
+        for prefix in ("agent:", "cat:"):
+            if target.startswith(prefix):
+                return target[len(prefix):]
+        return target
+
+    def _is_dirty(self) -> bool:
+        """True iff the in-memory cfg would change the saved file — `serialize(cfg)` differs
+        from the text last written/loaded (`_saved_text`). Used by quit (`q`). NB: an empty
+        ultrawork/compaction sub-object serializes away, so adding one is undoable (it's in the
+        history) but does NOT count as dirty — there's nothing to save."""
+        return config_io.serialize(self.cfg) != self._saved_text
+
+    def _record(self, label: str) -> None:
+        """Snapshot the current cfg into the undo history under `label` (a no-op if nothing
+        actually changed) and refresh the hint bar so `u undo` appears. Call after ANY cfg
+        mutation — this single chokepoint is what makes every operation undoable."""
+        if self._history.push(self.cfg, label):
+            self._render_hints()
+
+    def _stage_row(self, target: str, row: dict, label: str) -> None:
+        """Write the chosen candidate row into the cfg node, re-render, and record an undo
+        snapshot under `label`."""
         node = self._ensure_node(target)
         node["model"] = f"{row['provider']}/{row['model']}"
         if row.get("variant"):
             node["variant"] = row["variant"]
         else:
             node.pop("variant", None)
-        self.dirty = True
         self._refresh_right(target)
+        self._record(label)
 
     def _set_candidate(self, idx: int) -> None:
         if self._current_target is None:
@@ -978,7 +1049,12 @@ class OModelApp(App):
         rows = self._build_rows(self._current_target)
         if not (0 <= idx < len(rows)):
             return
-        self._stage_row(self._current_target, rows[idx])
+        row = rows[idx]
+        self._stage_row(
+            self._current_target,
+            row,
+            f"set {self._target_label(self._current_target)} → {row['provider']}/{row['model']}",
+        )
 
     # ----- actions / keybindings -------------------------------------------------------
 
@@ -997,12 +1073,17 @@ class OModelApp(App):
         #targets list. (Defense-in-depth: Textual already truncates the binding chain at a
         modal, so these app bindings can't fire while one is up — and the add-model Input's own
         ←/→ cursor bindings take precedence regardless.) All other actions stay enabled."""
-        if action in ("focus_targets", "focus_candidates"):
+        if action in ("focus_targets", "focus_candidates", "undo", "redo"):
+            # Pane-crossing focus AND undo/redo are base-screen-only: a ModalScreen manages its
+            # own focus and keys (e.g. AddSubModal binds `u` to pick ultrawork), so the app's
+            # `u`/`ctrl+r` must not reach down through a modal. (Textual already truncates the
+            # binding chain at a modal; this is the explicit, matching guard.)
             return len(self.screen_stack) <= 1
         return True
 
     def action_clear(self) -> None:
-        """`x` — clear the current target's assignment (delete model/variant)."""
+        """`x` — clear the current target's assignment (delete model/variant). Undoable (`u`)
+        — a fat-fingered `x` is one keystroke from being reverted."""
         target = self._current_target
         if target is None:
             return
@@ -1010,8 +1091,8 @@ class OModelApp(App):
         if isinstance(node, dict) and ("model" in node or "variant" in node):
             node.pop("model", None)
             node.pop("variant", None)
-            self.dirty = True
         self._refresh_right(target)
+        self._record(f"clear {self._target_label(target)}")
 
     def action_variant(self) -> None:
         """`v` — push the family's valid variants for the highlighted candidate's model."""
@@ -1040,7 +1121,11 @@ class OModelApp(App):
             # variant rides along if the user later picks the row with Enter.
             model, _ = self._current_assignment(target)
             if model and model.split("/", 1)[-1] == row["model"]:
-                self._stage_row(target, row)
+                self._stage_row(
+                    target,
+                    row,
+                    f"set {self._target_label(target)} variant → {chosen or '(none)'}",
+                )
             else:
                 self._render_candidates(target)
 
@@ -1071,11 +1156,17 @@ class OModelApp(App):
         def _accept(row) -> None:
             if row is None:
                 return
-            # Insert the typed row as a selected "+ custom" candidate and stage it.
-            self._rows.setdefault(target, [])
-            self._rows[target].append(row)
+            # Persist the typed row in _custom_rows (durable across undo/redo) and invalidate the
+            # per-target row cache so _build_rows re-merges it as a selectable candidate, then
+            # stage it.
+            self._custom_rows.setdefault(target, []).append(row)
+            self._rows.pop(target, None)
             self._render_candidates(target)
-            self._stage_row(target, row)
+            self._stage_row(
+                target,
+                row,
+                f"add {self._target_label(target)} → {row['provider']}/{row['model']}",
+            )
 
         self.push_screen(
             AddModelModal(self.resolver, self.suggestions, require_gpt=self._gpt_only(target)),
@@ -1098,8 +1189,10 @@ class OModelApp(App):
         def _add(kind) -> None:
             if not kind or kind in present:
                 return
-            # Empty sub-object → shows as a sub-row but is NOT a real edit: serialize() drops
-            # empty ultrawork/compaction, and only staging a model into it sets dirty.
+            # Empty sub-object → shows as a sub-row but is NOT dirty: serialize() drops empty
+            # ultrawork/compaction, so there's nothing to save until a model is staged into it.
+            # It IS recorded in the undo history, though, so a mis-added sub-target can be
+            # removed with `u` (its row vanishes again).
             self._ensure_node(f"agent:{name}.{kind}")
             self._populate_targets()
             # Highlight the freshly added sub-target.
@@ -1108,8 +1201,57 @@ class OModelApp(App):
                 targets.highlighted = self._index_of_option(targets, f"agent:{name}.{kind}")
             except Exception:
                 pass
+            self._record(f"add {kind} sub-target to {name}")
 
         self.push_screen(AddSubModal(present), _add)
+
+    def action_undo(self) -> None:
+        """`u` — revert the last edit (mis-press recovery). Steps back through the in-session
+        history (set / clear / variant / add-model / add sub-target) and notifies what was
+        undone; at the bottom of the stack it just says so."""
+        result = self._history.undo()
+        if result is None:
+            self.notify("Nothing to undo.")
+            return
+        state, label = result
+        self._restore_state(state)
+        self.notify(f"Undo: {label}")
+
+    def action_redo(self) -> None:
+        """`ctrl+r` — re-apply the last undone edit (vim-style redo; distinct from `r` refresh)."""
+        result = self._history.redo()
+        if result is None:
+            self.notify("Nothing to redo.")
+            return
+        state, label = result
+        self._restore_state(state)
+        self.notify(f"Redo: {label}")
+
+    def _restore_state(self, state: dict) -> None:
+        """Swap self.cfg for a restored history snapshot and re-render everything that depends
+        on it: the LEFT pane (sub-targets appear/vanish with the cfg) and the RIGHT pane
+        (detail + the `●` current-pick marker). Mirrors the per-session cache handling a
+        refresh does, minus the catalog rebuild — the candidate rows' `●` follows cfg, so the
+        per-target row cache is dropped and rebuilt; `_cand_choice` (highlight memory) and
+        `_detail_cache` (keyed by model id) are unaffected and kept."""
+        self.cfg = state
+        self._rows.clear()  # resolver rows rebuild; _custom_rows persists so typed rows return
+        # Pick a target that still exists after the restore: a sub-target whose node is gone
+        # (an undone add-sub) falls back to its parent agent; top-level agent/category rows
+        # always exist (they come from suggestions, not cfg).
+        target = self._current_target
+        if target and "." in target and self._node_for(target) is None:
+            target = "agent:" + self._target_label(target).split(".", 1)[0]
+        # Repopulate the left pane straight to the final target (select=), so no intermediate
+        # fallback highlight queues a stale render for the wrong target.
+        self._populate_targets(select=target)
+        # Authoritative, synchronous render of the chosen target (don't rely on the queued
+        # OptionHighlighted event, which may not fire if the highlight index is unchanged).
+        self._current_target = target
+        if target is not None:
+            self._refresh_right(target)
+        else:
+            self._render_hints()
 
     def action_save(self) -> None:
         """`s` — diff + confirm modal (incl. first-save palette-loss warning) → config_io.save."""
@@ -1138,11 +1280,11 @@ class OModelApp(App):
             except Exception as exc:  # surface, don't crash the app
                 self.notify(f"Save failed: {exc}", severity="error")
                 return
-            if result.changed:
-                self.dirty = False
-                self.notify("Saved.")
-            else:
-                self.notify("Nothing to save.")
+            # Re-baseline dirtiness to what's now on disk (== serialize(cfg) either way). The
+            # undo history is intentionally preserved across a save, so you can still undo a
+            # just-saved edit (and re-save to persist the reverted state).
+            self._saved_text = config_io.serialize(self.cfg)
+            self.notify("Saved." if result.changed else "Nothing to save.")
 
         self.push_screen(ConfirmModal("Save changes?", body), _confirm)
 
@@ -1173,7 +1315,9 @@ class OModelApp(App):
         # Drop every per-session cache so the refreshed availability shows everywhere. Any
         # in-flight detail fetch finishes on its own and resets _detail_fetching; bumping the
         # generation makes it discard its (now stale) result rather than re-populating here.
+        # _custom_rows is dropped too: a typed model's stored availability ⚠ is now stale.
         self._rows.clear()
+        self._custom_rows.clear()
         self._detail_cache.clear()
         self._detail_generation += 1
         self._render_providers()
@@ -1182,8 +1326,9 @@ class OModelApp(App):
         self.notify(f"Refreshed — {len(new_catalog.connected)} providers.")
 
     def action_quit_confirm(self) -> None:
-        """`q` — quit; confirm if there are unsaved edits."""
-        if not self.dirty:
+        """`q` — quit; confirm if there are unsaved edits (`_is_dirty`: serialize(cfg) differs
+        from what's on disk — so undoing back to the saved state quits without a prompt)."""
+        if not self._is_dirty():
             self.exit()
             return
 

@@ -923,3 +923,286 @@ def test_pilot_vim_movement(pilot_config):
             assert inp.value == "hjkl", f"hjkl must be inserted as text: {inp.value!r}"
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 12: in-session undo / redo (mis-press recovery) — DESIGN §history.py
+# ---------------------------------------------------------------------------
+
+def test_pilot_undo_redo_set_model(pilot_config):
+    """`u` reverts a model pick to the prior assignment and `ctrl+r` re-applies it."""
+    cfg_path, _ = pilot_config
+
+    def _model(pilot):
+        return pilot.app.cfg["agents"]["sisyphus"].get("model")
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert _model(pilot) == "opencode/claude-opus-4-7"  # on-disk launch value
+
+            found = await _select_candidate(pilot, "zhipuai/glm-5")
+            assert found is not None, "zhipuai/glm-5 must be a candidate row"
+            assert _model(pilot) == "zhipuai/glm-5"
+
+            await pilot.press("u")  # undo the set (focus is on #candidates → bubbles to app)
+            await pilot.pause()
+            assert _model(pilot) == "opencode/claude-opus-4-7", "undo must restore the prior model"
+
+            await pilot.press("ctrl+r")  # redo
+            await pilot.pause()
+            assert _model(pilot) == "zhipuai/glm-5", "ctrl+r must re-apply the undone set"
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_clear(pilot_config):
+    """A fat-fingered `x` (clear) is one keystroke from recovery — `u` restores the model."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == "opencode/claude-opus-4-7"
+
+            await pilot.press("x")  # clear
+            await pilot.pause()
+            assert "model" not in pilot.app.cfg["agents"]["sisyphus"], "x must clear the model"
+
+            await pilot.press("u")  # undo the clear
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == "opencode/claude-opus-4-7", (
+                "undo must bring the cleared model back"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_add_sub_target(pilot_config):
+    """Adding a sub-target via `a` is undoable: the first `u` is the chooser's ultrawork
+    shortcut (modal binding); the second `u` is app-level undo, which removes the new sub-row."""
+    cfg_path, _ = pilot_config
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+            targets.highlighted = targets.get_option_index("agent:sisyphus")
+            targets.focus()
+            await pilot.pause()
+
+            await pilot.press("a")  # open the sub-target chooser modal
+            await pilot.pause()
+            await pilot.press("u")  # modal's `u` shortcut → add ultrawork
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" in _ids(targets), "add-sub must create the sub-row"
+
+            await pilot.press("u")  # app-level undo → remove the just-added sub-target
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" not in _ids(targets), (
+                "undo must remove the mis-added sub-target row"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_restores_clean_state(pilot_config):
+    """Dirtiness is computed (serialize vs on-disk), so undoing back to the launch state reads
+    as clean (quit won't prompt) and redoing re-dirties."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert pilot.app._is_dirty() is False
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert pilot.app._is_dirty() is True, "a pick must mark the config dirty"
+
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app._is_dirty() is False, "undo back to the on-disk state must be clean"
+
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert pilot.app._is_dirty() is True, "redo must re-dirty"
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_hint_appears_after_edit(pilot_config):
+    """`u undo` is absent from the hint bar until there's something to undo; `⌃r redo` shows
+    only after an undo opens a redo. (Keeps the one-line bar minimal — DESIGN §Layout.)"""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "u undo" not in txt, f"no edits yet → no undo hint: {txt!r}"
+
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "u undo" in txt, f"after an edit the undo hint must show: {txt!r}"
+
+            await pilot.press("u")
+            await pilot.pause()
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "⌃r redo" in txt, f"after an undo the redo hint must show: {txt!r}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_noop_when_empty(pilot_config):
+    """Pressing `u` with an empty history is a harmless no-op (notifies, never crashes)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            before = pilot.app.cfg["agents"]["sisyphus"].get("model")
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == before
+            assert pilot.app._is_dirty() is False
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_gated_under_modal(pilot_config):
+    """check_action disables app-level undo/redo while a modal is open — the modal owns its
+    keys (e.g. AddSubModal binds `u` to pick ultrawork), so app `u`/`ctrl+r` must not leak in."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert pilot.app.check_action("undo", None) is True  # base screen → enabled
+
+            await pilot.press("right")  # focus candidates
+            await pilot.pause()
+            await pilot.press("a")  # open the add-model modal
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "`a` must open a modal"
+            assert pilot.app.check_action("undo", None) is False
+            assert pilot.app.check_action("redo", None) is False
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_survives_save(pilot_config):
+    """The undo history is preserved across a save: after saving a pick, `u` still reverts it,
+    and the config goes dirty again (disk now differs from the reverted in-memory state, which
+    the user could re-save). Proves dirtiness is computed against disk, not cleared by undo."""
+    import json5
+
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _save_and_confirm(pilot)
+            assert pilot.app._is_dirty() is False, "a save must leave the config clean"
+
+            with open(cfg_path, encoding="utf-8") as f:
+                assert json5.load(f)["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+
+            await pilot.press("u")  # undo the just-saved edit
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+            assert pilot.app._is_dirty() is True, "undo after save must re-dirty (disk differs)"
+
+    asyncio.run(_run())
+
+
+def test_pilot_redo_keeps_custom_added_row(pilot_config):
+    """A model typed in the add-model modal is an off-chain row stored in _custom_rows, which
+    survives undo/redo: after add → undo → redo, the typed model is the assignment AND comes
+    back as a `●`-marked candidate row (not just a bare cfg value)."""
+    cfg_path, _ = pilot_config
+
+    def _labels(cands):
+        return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            cands.focus()
+            await pilot.pause()
+
+            await pilot.press("a")  # open the add-model modal
+            await pilot.pause()
+            inp = pilot.app.screen.query_one("#add-input", Input)
+            inp.value = "openrouter/zzz-custom"  # full provider/model → used verbatim
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "openrouter/zzz-custom"
+            labels = _labels(cands)
+            assert any("●" in s and "openrouter/zzz-custom" in s for s in labels), (
+                f"typed model must be a ●-marked row: {labels}"
+            )
+
+            await pilot.press("u")  # undo the add → assignment reverts
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+
+            await pilot.press("ctrl+r")  # redo → typed model + its row return
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "openrouter/zzz-custom"
+            labels = _labels(cands)
+            assert any("●" in s and "openrouter/zzz-custom" in s for s in labels), (
+                f"redo must restore the typed model's ●-marked row, not just cfg: {labels}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_sub_target_under_non_first_agent(pilot_config):
+    """Undoing an add-sub on a NON-first agent lands the cursor on its parent agent (the
+    vanished-sub → parent fallback), exercising the index path the sisyphus(index-0) test
+    can't. After undo the sub-row is gone and #targets highlights the parent."""
+    cfg_path, _ = pilot_config
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            second = list(pilot.app.suggestions.agents.keys())[1]  # not index 0
+            target = f"agent:{second}"
+            targets = pilot.app.query_one("#targets", OptionList)
+            targets.highlighted = targets.get_option_index(target)
+            targets.focus()
+            await pilot.pause()
+
+            await pilot.press("a")  # chooser
+            await pilot.pause()
+            await pilot.press("u")  # → add ultrawork
+            await pilot.pause()
+            assert f"{target}.ultrawork" in _ids(targets)
+
+            await pilot.press("u")  # app-level undo → remove the sub-target
+            await pilot.pause()
+            assert f"{target}.ultrawork" not in _ids(targets)
+            assert pilot.app._current_target == target, "undo must fall back to the parent agent"
+            hi = targets.highlighted
+            assert hi is not None and targets.get_option_at_index(hi).id == target, (
+                "the targets cursor must land on the parent agent"
+            )
+
+    asyncio.run(_run())
