@@ -9,6 +9,10 @@ jobs:
   build:
     name: "Build ${{ matrix.os-name }}-${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
+    # The repo's default workflow token is read-only; the release-publish step
+    # (softprops/action-gh-release) needs contents:write to create the Release + upload assets.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:

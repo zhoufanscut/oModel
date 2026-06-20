@@ -43,7 +43,7 @@ jobs:
 
       - name: Run snapshot extractor
         run: |
-          omodel --refresh --omo-src "${{ github.workspace }}/oh-my-openagent"
+          omodel --refresh-omo --omo-src "${{ github.workspace }}/oh-my-openagent"
 
       - name: Check for changes
         id: diff

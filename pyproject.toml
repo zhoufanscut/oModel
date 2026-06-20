@@ -43,7 +43,7 @@ omodel = "omodel.cli:main"
 [project.urls]
 Homepage = "https://github.com/zhoufanscut/oModel"
 Repository = "https://github.com/zhoufanscut/oModel"
-Changelog = "https://github.com/zhoufanscut/oModel/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/zhoufanscut/oModel/blob/master/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/omodel"]

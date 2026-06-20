@@ -34,7 +34,7 @@ variant, then saves a clean `oh-my-openagent.jsonc` (timestamped backups each sa
 ### Standalone binary (recommended)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/master/install.sh | sh
 ```
 
 Installs `omodel` to `~/.local/bin`. Supported platforms: `linux-x64`,
