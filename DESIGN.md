@@ -504,11 +504,12 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Primary — standalone binary + installer (GitHub Releases):** PyInstaller **one-file** build,
   `pyinstaller --onefile --name omodel --collect-data omodel src/omodel/__main__.py` (bundles
   `data/` + `tools/`; `importlib.resources` reads them from the frozen package). CI `release.yml`
-  builds on tag push (matrix: **linux-x64** `ubuntu-latest`, **macos-arm64** `macos-latest`,
-  **macos-x64** `macos-13`) and attaches `omodel-<os>-<arch>` (+ `.tar.gz`) to the Release.
-  `install.sh` detects OS/arch (`linux-x64`, `darwin-arm64`, `darwin-x64`), downloads the matching
+  builds on tag push (matrix: **linux-x64** `ubuntu-latest`, **darwin-arm64** `macos-latest`)
+  and attaches `omodel-<os>-<arch>` (+ `.tar.gz`) to the Release. (Intel-mac `macos-13` was
+  dropped — GitHub is retiring those runners and they queue for hours; Intel macs install via
+  pipx.) `install.sh` detects OS/arch (`linux-x64`, `darwin-arm64`), downloads the matching
   asset, installs `omodel` to `~/.local/bin`:
-  `curl -fsSL https://raw.githubusercontent.com/<you>/oModel/main/install.sh | sh`.
+  `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/master/install.sh | sh`.
 - **Secondary — pip/pipx/uvx straight from GitHub (no PyPI):**
   `pipx install git+https://github.com/<you>/oModel` ·
   `uvx --from git+https://github.com/<you>/oModel omodel` ·

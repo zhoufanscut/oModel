@@ -37,8 +37,9 @@ variant, then saves a clean `oh-my-openagent.jsonc` (timestamped backups each sa
 curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/master/install.sh | sh
 ```
 
-Installs `omodel` to `~/.local/bin`. Supported platforms: `linux-x64`,
-`darwin-arm64`, `darwin-x64`.
+Installs `omodel` to `~/.local/bin`. Supported platforms: `linux-x64` and
+`darwin-arm64` (Apple Silicon). Intel macs (`darwin-x64`) aren't pre-built —
+install via `pipx install git+https://github.com/zhoufanscut/oModel`.
 
 ### pipx / uvx (from GitHub, no PyPI)
 

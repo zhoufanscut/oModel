@@ -25,10 +25,8 @@ jobs:
             os-name: darwin
             arch: arm64
             asset-name: omodel-darwin-arm64
-          - runner: macos-13
-            os-name: darwin
-            arch: x64
-            asset-name: omodel-darwin-x64
+          # Intel-mac (macos-13) dropped: GitHub is retiring those runners and they queue for
+          # hours. Intel macs install via pipx (see install.sh / README).
 
     steps:
       - uses: actions/checkout@v7

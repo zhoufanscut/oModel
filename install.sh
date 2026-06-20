@@ -28,7 +28,14 @@ esac
 # ---------------------------------------------------------------------------
 ARCH="$(uname -m)"
 case "${ARCH}" in
-  x86_64|amd64) ARCH_TAG="x64" ;;
+  x86_64|amd64)
+    if [ "${PLATFORM}" = "darwin" ]; then
+      echo "error: Intel-mac (darwin-x64) binaries are not published; install via pipx:" >&2
+      echo "  pipx install git+https://github.com/${REPO}" >&2
+      exit 1
+    fi
+    ARCH_TAG="x64"
+    ;;
   arm64|aarch64)
     if [ "${PLATFORM}" = "linux" ]; then
       echo "error: Linux arm64 binaries are not yet published; install via pipx:" >&2

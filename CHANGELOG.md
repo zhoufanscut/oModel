@@ -29,7 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel --print` — print current resolved agent/category models, no UI.
 - `omodel --check` — dry-run CI-safe resolve for every target (exits 0; degrades if no opencode).
 - `omodel --version`.
-- `install.sh` — POSIX-sh curl|sh installer (linux-x64, darwin-arm64, darwin-x64).
+- `install.sh` — POSIX-sh curl|sh installer (linux-x64, darwin-arm64; Intel macs via pipx).
 - GitHub Actions: `ci.yml` (matrix 3.9–3.13), `release.yml` (PyInstaller one-file binaries
   on tag push), `refresh-suggestions.yml` (weekly omo snapshot → PR on change).
 - Bundled `omo-suggestions.json` from oh-my-openagent v4.11.1 @ b949c34:
