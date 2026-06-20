@@ -75,9 +75,12 @@ data/omo-suggestions.json ──────────────► suggesti
 - **`resolve.py`** — the core logic. `candidates(target)` is the heart: a single filtered pass over
   omo's `fallbackChain` keeping only models you can run — **exact** match, else newest **same-line
   substitute** of the same family (`glm-5`→`glm-5.1`), else **hidden**. No connected-model dump; the
-  list is chain-only plus a `+ add model…` row. `resolve_prefix()` is **dedicated-first**: a provider is
-  a *gateway* if it serves ≥2 vendors (`vendors_served`), and a dedicated provider beats a gateway for
-  the same model. This is data-driven — no hardcoded provider list.
+  list is chain-only plus a `+ add model…` row. Each resolved model is **expanded to one row per
+  serving provider, dedicated-first** (`_ordered_providers`): a provider is a *gateway* if it serves ≥2
+  vendors (`vendors_served`), and a single-vendor *dedicated* provider sorts before a gateway — so
+  `gpt-5.5` shows as `openai/gpt-5.5` then `opencode/gpt-5.5` and you pick either. Data-driven — no
+  hardcoded provider list. (`resolve_prefix()` keeps the single dedicated-first pick for the add-model
+  modal's bare-id auto-prefix.)
 - **`config_io.py`** — clean rewrite + backups. Save is **active-only** (`json.dumps`, no comments — the
   first save intentionally drops omo's commented palette). Each save snapshots the prior file verbatim to
   `<config_dir>/.backup/<ts>.jsonc`; the very first save pins `original.jsonc` (never pruned, never

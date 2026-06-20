@@ -18,7 +18,7 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             row matching the launch-time on-disk assignment is prefixed '● '.
 
 KEYS: ↑↓ move · enter set (dispatch by row: cand:add → add-model modal, else set model +
-default variant) · v variant · p prefix (cycle providers_for) · e add · x clear ·
+default variant) · v variant · e add · x clear ·
 a add sub-target · s save (diff+confirm) · r refresh (live re-fetch off-thread + rebuild
 cache; also retries after CatalogUnavailable) · q quit (confirm if dirty).
 Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
@@ -343,7 +343,6 @@ class OModelApp(App):
 
     BINDINGS = [
         Binding("v", "variant", "variant"),
-        Binding("p", "prefix", "prefix"),
         Binding("e", "add_model", "add"),
         Binding("x", "clear", "clear"),
         Binding("a", "add_sub", "sub"),
@@ -375,7 +374,7 @@ class OModelApp(App):
         # In-memory edit state.
         self.dirty = False
         # Cache of the candidate-row dicts currently rendered, keyed by target id. Each cache
-        # entry may include staged "+ custom" rows and per-row prefix overrides (from `p`).
+        # entry may include staged "+ custom" rows from the add-model modal.
         self._rows: dict = {}
         # The target id currently shown in the right pane.
         self._current_target: Optional[str] = None
@@ -557,7 +556,7 @@ class OModelApp(App):
     def _build_rows(self, target: str) -> list:
         """Candidate rows for `target`: resolver.candidates(target) when a resolver exists,
         else just the current assignment (degraded mode). Cached per target so staged edits
-        and prefix overrides survive re-highlight."""
+        survive re-highlight."""
         if target in self._rows:
             return self._rows[target]
         rows: list = []
@@ -779,39 +778,6 @@ class OModelApp(App):
                 self._render_candidates(target)
 
         self.push_screen(VariantModal(variants), _apply)
-
-    def action_prefix(self) -> None:
-        """`p` — cycle the highlighted candidate's prefix across providers_for(model)."""
-        target = self._current_target
-        if target is None or self.resolver is None:
-            return
-        idx = self._highlighted_candidate_index()
-        if idx is None:
-            return
-        rows = self._build_rows(target)
-        if not (0 <= idx < len(rows)):
-            return
-        row = rows[idx]
-        cands = self.catalog.providers_for(row["model"])
-        if not cands:
-            return
-        try:
-            pos = cands.index(row["provider"])
-        except ValueError:
-            pos = -1
-        row["provider"] = cands[(pos + 1) % len(cands)]
-        self._rows[target][idx] = row
-        # Re-render candidates so the new prefix shows; restage if this row is current.
-        self._render_candidates(target)
-        # Keep the highlight on the same row.
-        try:
-            self.query_one("#candidates", OptionList).highlighted = idx
-        except Exception:
-            pass
-        # If the cycled row matches what's staged, update the staged prefix too.
-        model, _ = self._current_assignment(target)
-        if model and model.split("/", 1)[-1] == row["model"]:
-            self._stage_row(target, row)
 
     def action_add_model(self) -> None:
         """`e` — open the add-model modal."""

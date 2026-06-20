@@ -247,16 +247,31 @@ class TestCandidatesShape:
             _assert_candidate_shape(row, i)
 
     def test_sisyphus_chain_filtered_to_available(self, resolver):
-        """Chain-only pick list: the fallbackChain entries you can run, in chain order.
-        STANDARD_MODELS serves every sisyphus entry exactly EXCEPT k2p5 (kimi-thinking —
-        no connected kimi-thinking model), which is hidden."""
+        """Chain-only pick list, in chain order, EXPANDED to one row per serving provider —
+        dedicated (single-vendor) before aggregator (gateway). STANDARD_MODELS serves every
+        sisyphus entry exactly; models served by both a dedicated provider and opencode show
+        twice (dedicated first). The k2p5 entry is hardcode-aliased to kimi-k2.5
+        (_OMO_MODEL_ALIASES) and dedups against the chain's own kimi-k2.5 rows."""
         rows = resolver.candidates("agent:sisyphus")
-        models = [r["model"] for r in rows]
         assert all(r["source"] == "omo" for r in rows)
-        assert "k2p5" not in models, "k2p5 has no same-line connected model → must be hidden"
-        assert models == [
-            "claude-opus-4-7", "kimi-k2.6", "kimi-k2.5", "gpt-5.5", "glm-5", "big-pickle",
-        ], f"Unexpected pick list: {models}"
+        assert "k2p5" not in [r["model"] for r in rows], "k2p5 is aliased to kimi-k2.5"
+        keys = [f"{r['provider']}/{r['model']}" for r in rows]
+        assert keys == [
+            "opencode/claude-opus-4-7",
+            "moonshotai-cn/kimi-k2.6", "opencode/kimi-k2.6",
+            "moonshotai-cn/kimi-k2.5", "opencode/kimi-k2.5",
+            "openai/gpt-5.5", "opencode/gpt-5.5",
+            "zhipuai/glm-5", "opencode/glm-5",
+            "opencode/big-pickle",
+        ], f"Unexpected pick list: {keys}"
+
+    def test_all_providers_shown_dedicated_first(self, resolver):
+        """Headline behavior: a model served by a dedicated provider AND an aggregator shows
+        one row EACH, dedicated (single-vendor) first. gpt-5.5 → openai/gpt-5.5 then
+        opencode/gpt-5.5 — you can pick either."""
+        rows = resolver.candidates("agent:sisyphus")
+        gpt = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "gpt-5.5"]
+        assert gpt == ["openai/gpt-5.5", "opencode/gpt-5.5"]
 
     def test_all_rows_use_omo_source(self, resolver):
         """Every candidate row comes from the chain → source='omo' (no 'mine' dump)."""
@@ -265,11 +280,11 @@ class TestCandidatesShape:
             assert row["source"] == "omo", f"row has source={row['source']!r}"
 
     def test_dedicated_first_provider(self, resolver):
-        """glm-5 served by opencode(gateway)+zhipuai(dedicated) → zhipuai wins."""
+        """glm-5 served by zhipuai(dedicated)+opencode(gateway) → BOTH rows show, dedicated
+        first: zhipuai/glm-5 then opencode/glm-5."""
         rows = resolver.candidates("agent:sisyphus")
-        glm = [r for r in rows if r["model"] == "glm-5"]
-        assert len(glm) == 1
-        assert glm[0]["provider"] == "zhipuai"
+        glm = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "glm-5"]
+        assert glm == ["zhipuai/glm-5", "opencode/glm-5"]
 
     def test_exact_rows_have_no_substitute_for(self, resolver):
         """STANDARD serves these exactly → substitute_for is None on every row."""
@@ -435,8 +450,34 @@ class TestSameLineSubstitute:
         rows = res.candidates("agent:sisyphus")
         assert rows == [], f"Expected empty pick list, got {[r['model'] for r in rows]}"
 
+    def test_newest_substitute_not_demoted_by_own_chain_entry(self, sugg):
+        """Reported bug: an unavailable newer entry must resolve to the NEWEST same-line model
+        you have — not an older one — even when that newest model is itself a later chain entry.
+
+        Synthetic glm chain mirrors the real minimax case (chain wants m3, you have m2.7 + m2.5):
+        chain = [glm-5 (unavailable), glm-4.6 (available, its own entry)], and you also have the
+        OLDER non-chain glm-4.5. glm-5 must defer to glm-4.6's exact row (the newest you have),
+        and the strictly-older glm-4.5 must NOT be surfaced as glm-5's substitute."""
+        from omodel.resolve import Resolver as R
+        cat = _make_catalog(["zhipuai/glm-4.5", "zhipuai/glm-4.6"])
+        res = R.build(cat, sugg)
+        synthetic_req = {
+            "fallbackChain": [
+                {"providers": ["zhipuai"], "model": "glm-5"},     # newer, unavailable
+                {"providers": ["zhipuai"], "model": "glm-4.6"},   # older, available (own entry)
+            ]
+        }
+        with patch.object(res, "_requirement_for", return_value=synthetic_req):
+            rows = res.candidates("agent:sisyphus")
+        models = [r["model"] for r in rows]
+        # glm-4.6 shows as its own EXACT row (newest you have); glm-4.5 hidden; no demoted sub.
+        assert models == ["glm-4.6"], f"Expected only the exact glm-4.6, got {models}"
+        assert rows[0]["substitute_for"] is None
+        assert "glm-4.5" not in models  # strictly-older non-chain model never surfaced
+
     def test_substitute_dedicated_first(self, sugg):
-        """A substitute's provider is dedicated-first too: glm-5.1 via zhipuai, not opencode."""
+        """A substitute expands across providers too, dedicated-first: glm-5.1 (filling glm-5)
+        shows zhipuai/glm-5.1 then opencode/glm-5.1, both substitute_for='glm-5'."""
         cat = _make_catalog([
             "opencode/glm-5.1", "zhipuai/glm-5.1",
             "opencode/gpt-5", "opencode/claude-opus-4-8",  # make opencode a gateway
@@ -444,9 +485,50 @@ class TestSameLineSubstitute:
         res = Resolver.build(cat, sugg)
         rows = res.candidates("agent:sisyphus")
         glm = [r for r in rows if r["model"] == "glm-5.1"]
-        assert len(glm) == 1
-        assert glm[0]["provider"] == "zhipuai"
-        assert glm[0]["substitute_for"] == "glm-5"
+        assert [f"{r['provider']}/{r['model']}" for r in glm] == [
+            "zhipuai/glm-5.1", "opencode/glm-5.1",
+        ]
+        assert all(r["substitute_for"] == "glm-5" for r in glm)
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded omo-id alias: k2p5 ≡ kimi-k2.5
+# ---------------------------------------------------------------------------
+
+class TestK2p5Alias:
+    """omo's `k2p5` is hardcode-aliased to kimi-k2.5 (_OMO_MODEL_ALIASES): a provider's dot-free
+    spelling of k2.5, NOT the kimi-thinking model omo's heuristic would otherwise route it to."""
+
+    @staticmethod
+    def _k2p5_only(sugg, available):
+        """A Resolver + a synthetic single-entry chain whose only model is `k2p5`."""
+        res = Resolver.build(_make_catalog(available), sugg)
+        req = {"fallbackChain": [{"providers": ["moonshotai-cn"], "model": "k2p5"}]}
+        return res, req
+
+    def test_k2p5_exact_matches_kimi_k2_5(self, sugg):
+        """With kimi-k2.5 connected, k2p5 resolves to the EXACT kimi-k2.5 (substitute_for=None)."""
+        res, req = self._k2p5_only(sugg, ["moonshotai-cn/kimi-k2.5"])
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:sisyphus")
+        assert [r["model"] for r in rows] == ["kimi-k2.5"]
+        assert rows[0]["substitute_for"] is None
+        assert rows[0]["provider"] == "moonshotai-cn"
+
+    def test_thinking_model_does_not_fill_k2p5(self, sugg):
+        """A kimi-THINKING model must NOT fill the k2p5 (=kimi-k2.5, plain-kimi) slot."""
+        res, req = self._k2p5_only(sugg, ["moonshotai-cn/kimi-k2-thinking"])
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:sisyphus")
+        assert rows == [], f"kimi-k2-thinking must not fill k2p5, got {[r['model'] for r in rows]}"
+
+    def test_k2p5_falls_to_newest_kimi_when_no_k2_5(self, sugg):
+        """No kimi-k2.5 but a newer same-line kimi (kimi-k2.6) → k2p5 substitutes to it."""
+        res, req = self._k2p5_only(sugg, ["moonshotai-cn/kimi-k2.6"])
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:sisyphus")
+        assert [r["model"] for r in rows] == ["kimi-k2.6"]
+        assert rows[0]["substitute_for"] == "kimi-k2.5"
 
 
 # ---------------------------------------------------------------------------

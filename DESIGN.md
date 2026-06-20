@@ -42,12 +42,12 @@ prefix and a valid variant, and saves a clean config.
 |---|----------|--------|
 | 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
 | 2 | Save format | **Clean active-only** `.jsonc`; **timestamped backup each save** (`.backup/<ts>.jsonc`); non-model sections preserved. |
-| 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden). Dedicated-provider-first; `p` cycles. `enter` to pick; a `+ add model…` row (`e`) types anything off-chain. Auto prefix + suggested variant. |
+| 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`e`) types anything off-chain. Suggested variant. |
 | 4 | Layout | **Two-pane master-detail**. |
 | 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
 | 6 | Agent coverage | **omo-specific only** (11 with requirements). |
 | 7 | Categories | **omo's known set only** (8 with requirements). |
-| 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. A dedicated provider serving the model wins; among gateways, tie-break by the suggestion's own `providers` order, then first-seen. `p` cycles the prefix (override); the shown prefix is saved. |
+| 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. The pick list shows **every** serving provider, **dedicated before gateway** (first-seen within each tier — `_ordered_providers`), so you choose the prefix by picking the row. (`resolve_prefix` still auto-prefixes a bare id typed in the add-model modal: `dedicated[0]`, else a gateway via `providers` order then first-seen.) |
 | 9 | Suggestion data | **Bundled in the wheel** (`importlib.resources`); user-override dir supported. |
 | 10 | Availability source | **Live `opencode models` CLI** — not omo's cache, **not `auth list`** (see §Data sources). |
 | 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
@@ -127,11 +127,11 @@ omodel --version
 │   hephaestus   gpt  │                                      │
 │   oracle       gpt  │ ── candidates ──────────────────     │
 │   momus        gpt  │  opencode/claude-opus-4-7 (max)      │
-│   ...               │  moonshotai-cn/kimi-k2.5             │
-│ CATEGORIES          │  openai/gpt-5.5 (medium)             │
+│   ...               │  openai/gpt-5.5 (medium)             │
+│ CATEGORIES          │  opencode/gpt-5.5 (medium)           │
 │   deep         gpt  │● zhipuai/glm-5.1  (≈ omo glm-5)      │
 │   quick        mini │ + add model…                         │
-└ ↑↓ move · enter set · v variant · p prefix · e add · x clear · a sub · s save · r refresh · q quit ┘
+└ ↑↓ move · enter set · v variant · e add · x clear · a sub · s save · r refresh · q quit ┘
 ```
 
 ## Repo layout (src-layout, PyPI-ready)
@@ -181,8 +181,8 @@ oModel/
     "source":   "omo" | "add",
     "model":    "glm-5.1",                   # RESOLVED bare id actually used (the substitute,
                                              #   for a same-line stand-in), no prefix
-    "provider": "zhipuai",                   # resolved prefix (resolve_prefix), dedicated-first;
-                                             #   non-empty str (no-provider rows are dropped)
+    "provider": "zhipuai",                   # one serving provider; candidates() emits one
+                                             #   ROW PER provider, dedicated-first (non-empty str)
     "variant":  "max" | None,                # per precedence; None = unset
     "entry":    {...} | None,                # the omo fallbackChain entry; None for 'add'
     "substitute_for": None | "glm-5",        # None = exact; else the omo id this same-line row fills
@@ -257,21 +257,35 @@ oModel/
   the first **that is in `cands`**, else `cands[0]`. NB: `entry.providers` are omo-world IDs
   (`anthropic`, `github-copilot`, `vercel`, `zai-coding-plan`, …) that rarely intersect the user's
   `connected` set, so the `cands[0]` first-seen fallback is the common path; **both branches range over
-  `providers_for` (availability IDs), never raw omo IDs**. The UI `p` key cycles the prefix across all
-  of `cands`, overriding the auto-pick (saved prefix = shown). Verified: `gpt-5.5`→`openai/…`,
+  `providers_for` (availability IDs), never raw omo IDs**. `candidates()` no longer calls this — it
+  lists *every* serving provider (`_ordered_providers`); `resolve_prefix` now only auto-prefixes a bare
+  id typed in the add-model modal. Verified: `gpt-5.5`→`openai/…`,
   `claude-opus-4-7`→`opencode/…` (only gateway has it), `kimi-k2.5`→`moonshotai-cn/…`,
   `glm-5`→`zhipuai/…`. (`kimi-k2.5/2.6` and `glm-5/5.1` exist under both opencode and a dedicated
-  provider — dedicated wins; add a second gateway like `openrouter` and dedicated still wins, with `p`
-  reaching openrouter.)
+  provider — dedicated heads the list; add a second gateway like `openrouter` and it appears as just
+  another row after the dedicated one.)
+- **`_ordered_providers(model_id)` → list:** every connected provider serving the model, **dedicated
+  (single-vendor) before aggregator/gateway**, first-seen within each tier (`[]` if none).
+  `candidates()` emits one row per provider in this order — `glm-5` → `zhipuai/glm-5` then
+  `opencode/glm-5`; `gpt-5.5` → `openai/gpt-5.5` then `opencode/gpt-5.5` — so the prefix is chosen by
+  picking the row (no `p`-cycling).
 - **`candidates(target)`:** one pick list — a single filtered pass over the `fallbackChain`, in
   chain (priority) order. For each entry: **(1) exact** — a connected provider serves the entry's
-  model verbatim → that model, prefix dedicated-first (`substitute_for=None`); **(2) same-line** —
+  model verbatim → that model (`substitute_for=None`); **(2) same-line** —
   else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
-  `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen), prefix dedicated-first
-  (`substitute_for=<omo id>`); a same-line id that is itself an exactly-available chain entry is
-  skipped here (its own entry shows it exact); **(3) else hidden** (neither exact nor same-line
-  connected — a model you can't run isn't offered). Rows are **deduped by resolved `provider/model`**
-  (higher-priority entry wins). **Variant precedence:** entry `variant` → requirement top-level
+  `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen)
+  (`substitute_for=<omo id>`); if that newest same-line model is itself an exactly-available chain
+  entry, this entry is **skipped** (deferred to that model's own exact row) — never demoted to an
+  *older* same-line model (so an unavailable `minimax-m3` resolves to the newest `minimax-m2.7` you
+  have, not an older `minimax-m2.5`); **(3) else hidden** (neither exact nor same-line
+  connected — a model you can't run isn't offered). Each entry id first passes through a hardcoded
+  **omo-id alias** (`_OMO_MODEL_ALIASES`, oModel-only — omo has no such table): `k2p5` (a provider's
+  dot-free spelling of kimi-k2.5) is treated as **exactly `kimi-k2.5`**, overriding omo's heuristic
+  that would file the `p<digit>` suffix under the kimi-*thinking* family and pull in a kimi-k2-thinking
+  model. The alias acts only here in `candidates()`; `detect_family`/`normalize_model_id` stay a
+  faithful port. Each resolved model **expands to one row per serving provider** (dedicated-first,
+  `_ordered_providers`); rows are then **deduped by resolved `provider/model`** (higher-priority
+  entry/provider wins). **Variant precedence:** entry `variant` → requirement top-level
   `variant` → **none** (the family registry only *validates* variants — designates no default — so an
   unspecified variant stays unset; set one via `v`). (Top-level requirement `variant` is presently
   **always empty** in omo, so exercise that tier with a *synthetic* fixture, not a real ID.) Last row
@@ -378,9 +392,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
-  `v` → push `OptionList` of the family's valid variants + `(none)`; `p` → cycle the highlighted
-  candidate's prefix across `providers_for(model)` (dedicated + every gateway incl. openrouter),
-  re-rendering the row and staging the shown `provider/`; `e` (or `enter` on `cand:add`) →
+  `v` → push `OptionList` of the family's valid variants + `(none)`; `e` (or `enter` on `cand:add`) →
   the add-model modal (below); `x` → clear; `a` → add sub-target; `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
   `q` → quit (confirm if dirty). Pilot tests drive these via the stable IDs.
@@ -423,13 +435,14 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
    `install.sh` places it on PATH.
 2. **Availability + prefix (unit, mocked `opencode models`):** `vendors_served` classifies
    `opencode`/`openrouter`→gateway and `openai`/`zhipuai`/`moonshotai-cn`/`deepseek`→dedicated.
-   `providers_for("gpt-5.5") == ["opencode","openai"]` → dedicated-first → `openai/gpt-5.5`;
+   `providers_for("gpt-5.5") == ["opencode","openai"]` → list shows `openai/gpt-5.5` **then** `opencode/gpt-5.5` (dedicated-first);
    `claude-opus-4-7` → `["opencode"]` → `opencode/claude-opus-4-7`; `kimi-k2.5` →
    `moonshotai-cn/kimi-k2.5`; `glm-5` → `zhipuai/glm-5`. A chain entry with no connected provider and
    no same-line relative is **omitted** from `candidates()`; with only `glm-5.1` connected, the `glm-5`
    entry resolves to a `zhipuai/glm-5.1` substitute row (`substitute_for="glm-5"`). `glm + max` renders
-   ⚠ variant but accepts. With `openrouter` also connected, a both-gateways-only model resolves via
-   `entry.providers`-then-first-seen, and `p` cycles the prefix to `openrouter/…`.
+   ⚠ variant but accepts. With `openrouter` also connected, a both-gateways-only model lists *both*
+   gateway rows in first-seen order; `resolve_prefix` (add-modal single pick) still tie-breaks via
+   `entry.providers`-then-first-seen.
 3. **Verbose parsing (unit):** feed a captured multi-record `--verbose` blob → N records with
    `limit.context`/`cost`/`capabilities` extracted; confirm variant logic does NOT read it.
 4. **detect_family parity:** `kimi-k2.5`→`kimi` (no `max`), `k2p5`→`kimi-thinking`, `claude-opus-4-7`

@@ -52,9 +52,9 @@ connected model — off-chain picks go through the add-model modal.)
   "source":   "omo" | "add",
   "model":    "glm-5.1",              # RESOLVED bare model id actually used (the substitute,
                                       #   when this is a same-line stand-in), no prefix
-  "provider": "zhipuai",              # resolved prefix (resolve_prefix), dedicated-first; a
-                                      #   non-empty str (rows with no connected provider are
-                                      #   dropped from candidates(), never shown)
+  "provider": "zhipuai",              # one serving provider; candidates() emits one row PER
+                                      #   serving provider, dedicated-first (a non-empty str —
+                                      #   rows with no connected provider are dropped, never shown)
   "variant":  "max" | None,           # per precedence; None = unset
   "entry":    {...} | None,           # the omo fallbackChain entry; None for an 'add' row
   "substitute_for": None | "glm-5",   # None = exact id; else the omo id this same-line row fills
