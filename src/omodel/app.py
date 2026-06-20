@@ -15,7 +15,7 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             background worker (cached per model) and appears when ready —
                             highlighting renders the rest of the pane instantly.
   * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
-                            row matching the launch-time on-disk assignment is prefixed '● '.
+                            row matching the current assignment (follows your pick) is '● '.
   * Static#hints           — pane-aware key hint bar (bottom row). Content switches on focus
                             + highlighted row (see _render_hints); modals carry their own
                             one-line hint instead.
@@ -38,7 +38,6 @@ verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if avail
 from __future__ import annotations
 
 import asyncio
-import copy
 from typing import Optional
 
 from textual import events, on, work
@@ -409,10 +408,6 @@ class OModelApp(App):
         self.cfg = cfg
         self.config_path = config_path
         self.catalog_error = catalog_error
-        # Snapshot of the on-disk config at launch (the oh-my-openagent.jsonc that becomes
-        # .backup/original.jsonc). Frozen for the session; used to mark (●) the candidate row
-        # that matches what your config currently has — staging edits self.cfg but not this.
-        self._saved_cfg = copy.deepcopy(cfg)
         # In-memory edit state.
         self.dirty = False
         # Cache of the candidate-row dicts currently rendered, keyed by target id. Each cache
@@ -536,12 +531,10 @@ class OModelApp(App):
 
     # ----- target → cfg node helpers ---------------------------------------------------
 
-    def _node_for(self, target: str, cfg: "Optional[dict]" = None):
-        """Return the dict node holding {model, variant} for `target` in `cfg`
-        (default self.cfg), or None if its parent agent/category isn't present. Does NOT
-        create nodes. Pass self._saved_cfg to read the launch-time on-disk assignment."""
-        if cfg is None:
-            cfg = self.cfg
+    def _node_for(self, target: str):
+        """Return the dict node holding {model, variant} for `target` in self.cfg, or None if
+        its parent agent/category isn't present. Does NOT create nodes."""
+        cfg = self.cfg
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
             if "." in rest:
@@ -580,15 +573,6 @@ class OModelApp(App):
         if not isinstance(node, dict):
             return "", None
         return node.get("model", "") or "", node.get("variant")
-
-    def _saved_model(self, target: str) -> str:
-        """The 'provider/model' string `target` had on disk at launch (self._saved_cfg), or
-        '' if unset. Fixed for the session — used to ● the candidate row matching your
-        current oh-my-openagent.jsonc."""
-        node = self._node_for(target, self._saved_cfg)
-        if not isinstance(node, dict):
-            return ""
-        return node.get("model", "") or ""
 
     @staticmethod
     def _gpt_only(target: str) -> bool:
@@ -717,10 +701,11 @@ class OModelApp(App):
         cands = self.query_one("#candidates", OptionList)
         cands.clear_options()
         rows = self._build_rows(target)
-        # Mark (●) the row matching what oh-my-openagent.jsonc has on disk for this target.
-        saved = self._saved_model(target)
+        # Mark (●) the row matching the current assignment for this target: at launch that's
+        # what oh-my-openagent.jsonc has on disk, and it follows your pick as you stage edits.
+        current, _ = self._current_assignment(target)
         for i, row in enumerate(rows):
-            matched = bool(saved) and f"{row['provider']}/{row['model']}" == saved
+            matched = bool(current) and f"{row['provider']}/{row['model']}" == current
             label = ("● " if matched else "  ") + _row_label(row)
             cands.add_option(Option(label, id=f"cand:{i}"))
         cands.add_option(Option("+ add model…", id="cand:add"))

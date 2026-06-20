@@ -116,7 +116,9 @@ def main(argv: list = None) -> int:
     if args.check:
         return _cmd_check(args.config)
 
-    # Default: launch the TUI (import lazily so --version/--check/--refresh never import app)
+    # Default: launch the TUI (import lazily so --version/--check/--refresh never import app).
+    # Pin the color depth BEFORE importing app — Textual reads $TEXTUAL_COLOR_SYSTEM at import.
+    _default_color_system()
     from omodel.app import run_app
     run_app(config_path=args.config)
     return 0
@@ -125,6 +127,18 @@ def main(argv: list = None) -> int:
 # ---------------------------------------------------------------------------
 # Sub-command implementations
 # ---------------------------------------------------------------------------
+
+def _default_color_system() -> None:
+    """Pin the TUI to a 256-color palette by default so it looks the same across terminals.
+
+    Textual/Rich auto-detect color depth from $COLORTERM / $TERM: a terminal that doesn't set
+    $COLORTERM and reports a bare `TERM=xterm` is detected as only **16 colors**, so omodel's
+    colors collapse to that terminal's 8/16 ANSI slots — looking very different from a
+    `TERM=xterm-256color` (256-color) session. Default to 256 everywhere for a consistent look;
+    honour an explicit choice the user already made (e.g. `TEXTUAL_COLOR_SYSTEM=truecolor` for
+    24-bit, or `=auto` to restore Textual's own detection)."""
+    import os
+    os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "256")
 
 def _cmd_restore(config_override: "str | None") -> int:
     """List newest 10 backups + pinned original, prompt user, restore."""

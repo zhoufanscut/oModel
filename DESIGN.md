@@ -142,6 +142,12 @@ terminal). `Static#providers` / `Static#hints` are full-width bars (not cards), 
 `Static#detail` is display-only — it shows the frame but never the focus highlight (Statics
 never receive focus; only `#targets` and `#candidates` do).
 
+**Color depth:** the CLI pins `TEXTUAL_COLOR_SYSTEM=256` (in `cli._default_color_system`, set
+before `app` imports Textual) so the palette is consistent across terminals — a terminal with no
+`$COLORTERM` and a bare `TERM=xterm` is otherwise auto-detected as only 16 colors and the UI
+collapses to its ANSI slots, looking nothing like a `xterm-256color` session. Overridable:
+`TEXTUAL_COLOR_SYSTEM=truecolor` for 24-bit, `=auto` to restore Textual's own detection.
+
 The bottom hint bar (`Static#hints`) is **pane-aware** — it shows only the keys that act on the
 focused pane + highlighted row, so it stays one line (left pane drops `enter set`/`v`/`x`; the
 `+ add model…` row shows `enter add`; a category row drops `a sub`). See §Textual contract.
@@ -304,9 +310,9 @@ oModel/
   is `+ add model…` (`cand:add`) for off-chain picks; `enter` on any non-`add` row stages it. Flag:
   `⚠ variant` (variant ∉ family `variants` from the **bundled registry only**). (Unavailable entries
   are hidden, not flagged — decision #5.) **Current pick (`●`):** the row whose resolved
-  `provider/model` equals what `oh-my-openagent.jsonc` has on disk for this target — snapshotted at
-  launch (the file that becomes `.backup/original.jsonc`), so it stays put as you stage edits — is
-  prefixed `● `; all other rows get a 2-space prefix. If the on-disk model isn't in the (chain-only)
+  `provider/model` equals the target's current assignment in `self.cfg` — at launch that's what
+  `oh-my-openagent.jsonc` has on disk, and it follows your selection as you stage edits — is
+  prefixed `● `; all other rows get a 2-space prefix. If the current model isn't in the (chain-only)
   list (an off-chain hand-pick), nothing is marked.
 - **GPT-only agents (Hephaestus):** omo's `no-hephaestus-non-gpt` hook makes Hephaestus
   GPT-exclusive (`isGptModel` = model name after the last `/`, lowercased, contains "gpt"; a non-GPT
@@ -397,7 +403,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `a` adds an `ultrawork`/`compaction` sub-target (verified: omo schema permits both on all 11 agents).
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
-  row matching the launch-time on-disk assignment is prefixed `● ` (others `  `). The `catalog.detail`
+  row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
+  `● ` (others `  `). The `catalog.detail`
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.

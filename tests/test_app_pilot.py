@@ -426,6 +426,52 @@ def test_pilot_saved_model_marked(pilot_config):
 
 
 # ---------------------------------------------------------------------------
+# Pilot test 6b: the ● marker follows the current selection, not the on-disk one
+# ---------------------------------------------------------------------------
+
+def test_pilot_marker_follows_selection(pilot_config):
+    """The ● tracks the *current* assignment, not the launch-time on-disk model: after picking
+    a different candidate the ● moves to it and leaves the originally-marked row."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+
+            def _marked():
+                out = []
+                for i in range(cands.option_count):
+                    opt = cands.get_option_at_index(i)
+                    oid = opt.id or ""
+                    if oid == "cand:add" or oid.startswith("hdr:"):
+                        continue
+                    if "●" in str(opt.prompt):
+                        out.append(str(opt.prompt))
+                return out
+
+            # At launch the ● sits on the on-disk model (opencode/claude-opus-4-7).
+            before = _marked()
+            assert len(before) == 1 and "claude-opus-4-7" in before[0], (
+                f"expected ● on the on-disk model at launch, got {before!r}"
+            )
+
+            # Pick a different in-list candidate; the ● must move to it.
+            found = await _select_candidate(pilot, "zhipuai/glm-5")
+            assert found is not None, "zhipuai/glm-5 must be a candidate row"
+            after = _marked()
+            assert len(after) == 1 and "zhipuai/glm-5" in after[0], (
+                f"● must move to the selected model, got {after!r}"
+            )
+            assert "claude-opus-4-7" not in after[0], (
+                "● must leave the old on-disk row once another model is picked"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Pilot test 7: Hephaestus is GPT-only — no add-model row + a tip
 # ---------------------------------------------------------------------------
 
