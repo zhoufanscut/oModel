@@ -554,6 +554,155 @@ def test_pilot_marker_follows_selection(pilot_config):
 
 
 # ---------------------------------------------------------------------------
+# Pilot test 6c: the highlighted candidate is remembered per target + across refresh
+# ---------------------------------------------------------------------------
+
+def test_pilot_candidate_highlight_remembered_per_target(pilot_config):
+    """Each target remembers its own highlighted candidate: navigate one target's list, switch
+    to another target and back, and the cursor returns to where you left it (kept per target by
+    provider/model identity, restored on re-render)."""
+    cfg_path, _ = pilot_config
+
+    def _idx_with(cands, fragment):
+        for i in range(cands.option_count):
+            if fragment in str(cands.get_option_at_index(i).prompt):
+                return i
+        return None
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            # Target A (sisyphus): put the cursor on zhipuai/glm-5 (without picking it).
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            a_idx = _idx_with(cands, "zhipuai/glm-5")
+            assert a_idx is not None, "zhipuai/glm-5 must be a sisyphus candidate row"
+            cands.focus()
+            cands.highlighted = a_idx
+            await pilot.pause()
+
+            # Switch to another target (re-renders the pane → cursor would normally reset to None).
+            await _select_target(pilot, "agent:hephaestus")
+            await pilot.pause()
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert cands.highlighted is None, (
+                "a target never navigated must start with no candidate cursor"
+            )
+
+            # Back to A: the cursor is restored to zhipuai/glm-5.
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert cands.highlighted is not None, "the remembered cursor must be restored"
+            assert "zhipuai/glm-5" in str(cands.get_option_at_index(cands.highlighted).prompt), (
+                "the cursor must return to the candidate this target last had highlighted"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_candidate_highlight_survives_refresh(pilot_config, monkeypatch):
+    """`r` (refresh) must NOT clear the candidate cursor: the highlighted row is restored by
+    provider/model identity after the chain re-resolves against refreshed availability."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        # `r` runs catalog.refresh() off-thread; the empty subprocess stub would make it raise
+        # CatalogUnavailable (zero lines parsed), so hand the worker a fresh equivalent catalog
+        # to exercise the post-refresh re-render path.
+        from omodel import app as app_mod
+
+        fresh = Catalog(
+            available={
+                "opencode": ["claude-opus-4-7", "kimi-k2.5", "glm-5", "gpt-5.5"],
+                "deepseek": ["deepseek-v4-pro"],
+                "moonshotai-cn": ["kimi-k2.5"],
+                "zhipuai": ["glm-5"],
+                "openai": ["gpt-5.5"],
+            },
+            connected=["opencode", "deepseek", "moonshotai-cn", "zhipuai", "openai"],
+        )
+        monkeypatch.setattr(app_mod.catalog_mod, "refresh", lambda *a, **k: fresh)
+
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            target_idx = None
+            for i in range(cands.option_count):
+                if "zhipuai/glm-5" in str(cands.get_option_at_index(i).prompt):
+                    target_idx = i
+                    break
+            assert target_idx is not None
+            cands.focus()
+            cands.highlighted = target_idx
+            await pilot.pause()
+
+            # Refresh and wait for the off-thread worker to finish + re-render.
+            await pilot.press("r")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert cands.highlighted is not None, "refresh must not clear the candidate cursor"
+            assert "zhipuai/glm-5" in str(cands.get_option_at_index(cands.highlighted).prompt), (
+                "the cursor must return to the same model after refresh"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_candidate_highlight_ignores_stale_event(pilot_config):
+    """A stale/queued OptionHighlighted — one whose option_index no longer matches the live
+    cursor (e.g. a fast #targets key-repeat re-rendered the pane for another target before the
+    event drained) — must NOT stamp the current target's memory. This guards _candidate_highlighted
+    against the cross-target mis-record; the index mismatch is the exact condition it keys on."""
+    import types as _types
+
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+
+            live_idx = next(
+                i for i in range(cands.option_count)
+                if "zhipuai/glm-5" in str(cands.get_option_at_index(i).prompt)
+            )
+            cands.highlighted = live_idx
+            await pilot.pause()
+            recorded = dict(pilot.app._cand_choice)
+            assert recorded.get("agent:sisyphus", "").endswith("glm-5"), "precondition: live row recorded"
+
+            # Stale event for a DIFFERENT index than the live cursor → ignored (memory unchanged).
+            other_idx = next(
+                i for i in range(cands.option_count)
+                if i != live_idx and (cands.get_option_at_index(i).id or "") != "cand:add"
+            )
+            stale = _types.SimpleNamespace(
+                option_index=other_idx,
+                option_id=cands.get_option_at_index(other_idx).id,
+            )
+            pilot.app._candidate_highlighted(stale)
+            assert pilot.app._cand_choice == recorded, (
+                "a stale OptionHighlighted (index != live cursor) must not overwrite memory"
+            )
+
+            # A live-matching event (index == cursor) still records normally.
+            fresh = _types.SimpleNamespace(
+                option_index=live_idx,
+                option_id=cands.get_option_at_index(live_idx).id,
+            )
+            pilot.app._candidate_highlighted(fresh)
+            assert "zhipuai/glm-5" in pilot.app._cand_choice.get("agent:sisyphus", ""), (
+                "a live-matching highlight must be recorded"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Pilot test 7: Hephaestus is GPT-only — no add-model row + a tip
 # ---------------------------------------------------------------------------
 

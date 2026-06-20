@@ -406,7 +406,11 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
   row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
-  `● ` (others `  `). The `catalog.detail`
+  `● ` (others `  `). The **highlighted (cursor) row is remembered per target** — keyed by the row's
+  `provider/model` identity, not its index — and restored on every re-render, so the cursor returns
+  to your last position when you revisit a target **and after `r` refresh** (a refresh re-resolves
+  the chain against new availability and reorders rows; identity-keying survives that, an index
+  wouldn't). It's the one per-session cache a refresh deliberately does **not** clear. The `catalog.detail`
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.

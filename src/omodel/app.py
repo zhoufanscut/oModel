@@ -16,6 +16,9 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             highlighting renders the rest of the pane instantly.
   * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
                             row matching the current assignment (follows your pick) is '● '.
+                            The highlighted (cursor) row is remembered per target by model
+                            identity and restored on re-render, so it survives a target switch
+                            and `r` refresh (see _cand_choice / _restore_cand_highlight).
   * Static#hints           — pane-aware key hint bar (bottom row). Content switches on focus
                             + highlighted row (see _render_hints); modals carry their own
                             one-line hint instead.
@@ -513,6 +516,13 @@ class OModelApp(App):
         self._rows: dict = {}
         # The target id currently shown in the right pane.
         self._current_target: Optional[str] = None
+        # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
+        # provider/model identity (or the sentinel 'cand:add'). Restored on every candidate
+        # re-render (_restore_cand_highlight) so the cursor returns to your last pick when you
+        # revisit a target or after `r`. Keyed by identity (not row index) so it still resolves
+        # once the chain re-resolves against refreshed availability. Deliberately NOT cleared by
+        # _refresh_catalog (unlike _rows / _detail_cache), which is what makes it survive refresh.
+        self._cand_choice: dict = {}
         # Detail-pane enrichment (catalog.detail()) is a ~3s, ~320 MB `opencode … --verbose`
         # subprocess. It runs in a background worker and is cached by bare model id, so
         # highlighting never blocks the UI thread. Crucially only ONE fetch runs at a time
@@ -807,6 +817,46 @@ class OModelApp(App):
             label = ("● " if matched else "  ") + _row_label(row)
             cands.add_option(Option(label, id=f"cand:{i}"))
         cands.add_option(Option("+ add model…", id="cand:add"))
+        # clear_options() reset the cursor to None; put it back where this target last had it.
+        self._restore_cand_highlight(target, rows)
+
+    @staticmethod
+    def _cand_identity(rows: list, option_id: Optional[str]):
+        """Stable identity for a candidate option — index-independent so it still resolves after
+        a refresh re-orders/adds/drops chain rows. The '+ add model…' row → the sentinel
+        'cand:add'; a model row 'cand:<i>' → its 'provider/model'. None if it maps to neither."""
+        if option_id == "cand:add":
+            return "cand:add"
+        if not option_id or not option_id.startswith("cand:"):
+            return None
+        try:
+            i = int(option_id[len("cand:"):])
+        except ValueError:
+            return None
+        if 0 <= i < len(rows):
+            row = rows[i]
+            return f"{row['provider']}/{row['model']}"
+        return None
+
+    def _restore_cand_highlight(self, target: str, rows: list) -> None:
+        """Re-highlight the candidate `target` last had under the cursor (kept in _cand_choice),
+        matched by identity. No remembered choice, or it's gone from the list now (e.g. the model
+        dropped off the chain after a refresh) → leave the pane un-highlighted, as on a fresh
+        target. Row index == option index by construction, so set `highlighted` directly."""
+        ident = self._cand_choice.get(target)
+        if ident is None:
+            return
+        cands = self.query_one("#candidates", OptionList)
+        if ident == "cand:add":
+            try:
+                cands.highlighted = self._index_of_option(cands, "cand:add")
+            except Exception:
+                pass
+            return
+        for i, row in enumerate(rows):
+            if f"{row['provider']}/{row['model']}" == ident:
+                cands.highlighted = i
+                return
 
     def _refresh_right(self, target: str) -> None:
         self._current_target = target
@@ -861,7 +911,23 @@ class OModelApp(App):
     @on(OptionList.OptionHighlighted, "#candidates")
     def _candidate_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         """Right-pane ↑↓ doesn't change focus, but moving onto/off the '+ add model…' row
-        changes which keys apply (enter set vs enter add, v/x relevance) — refresh hints."""
+        changes which keys apply (enter set vs enter add, v/x relevance) — refresh hints.
+        Also remember this target's highlighted candidate so it survives a re-render / refresh
+        (see _restore_cand_highlight)."""
+        cands = self.query_one("#candidates", OptionList)
+        target = self._current_target
+        # Record only the *settled* highlight of the *current* render. OptionHighlighted is
+        # queued (posted by watch_highlighted), so a stale one can arrive after a newer move —
+        # or after a fast target switch re-rendered the pane for a different target (key-repeat
+        # can queue two #targets moves before either is handled, advancing _current_target while
+        # this event still describes the prior render). Both show as option_index != the live
+        # highlighted; skipping them keeps one target's row from being stamped onto another's
+        # memory. A bare re-render leaves the cursor at None (no event), so this never no-ops a
+        # genuine move.
+        if target is not None and event.option_index == cands.highlighted:
+            ident = self._cand_identity(self._build_rows(target), event.option_id)
+            if ident is not None:
+                self._cand_choice[target] = ident
         self._render_hints()
 
     @on(OptionList.OptionSelected, "#candidates")
