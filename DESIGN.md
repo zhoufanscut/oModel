@@ -492,9 +492,15 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 
 ## Packaging & distribution (GitHub-only, no PyPI)
 
-- `pyproject.toml` (hatchling, src-layout); force-include `data/*.json`, `data/*.jsonc`, `tools/*.ts`.
-  `requires-python = ">=3.9"`; deps `textual` (pinned), `json5`. Entry point
-  `[project.scripts] omodel = "omodel.cli:main"`.
+- `pyproject.toml` (hatchling, src-layout): `[tool.hatch.build.targets.wheel] packages =
+  ["src/omodel"]`. The non-Python payload (`data/*.json`,`*.jsonc` + `tools/*.ts`) ships
+  **automatically** because it lives under the package tree — do **NOT** add a `force-include`
+  (it duplicates the path and fails the wheel build). `data/` and `tools/` each carry an
+  `__init__.py` so they are **regular** packages: `importlib.resources.files("omodel.data" /
+  "omodel.tools")` only resolves on a regular package under the **3.9** floor (namespace-package
+  `files()` support landed in 3.10) — without it, every bundled-data read raises `TypeError:
+  … not NoneType` on 3.9. `requires-python = ">=3.9"`; deps `textual` (pinned), `json5`. Entry
+  point `[project.scripts] omodel = "omodel.cli:main"`.
 - **Primary — standalone binary + installer (GitHub Releases):** PyInstaller **one-file** build,
   `pyinstaller --onefile --name omodel --collect-data omodel src/omodel/__main__.py` (bundles
   `data/` + `tools/`; `importlib.resources` reads them from the frozen package). CI `release.yml`
