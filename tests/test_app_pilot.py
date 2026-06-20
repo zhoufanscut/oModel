@@ -361,12 +361,14 @@ def test_pilot_sub_target_inherits_parent_chain(pilot_config):
             parent_ids = _real_candidate_ids(pilot)
             assert len(parent_ids) > 0, "parent sisyphus must have candidates"
 
-            # Highlight sisyphus, then 'a' adds the ultrawork sub-target and highlights it.
+            # Highlight sisyphus, then 'a' opens the chooser and 'u' adds + highlights ultrawork.
             targets = pilot.app.query_one("#targets", OptionList)
             targets.highlighted = targets.get_option_index("agent:sisyphus")
             targets.focus()
             await pilot.pause()
             await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("u")  # chooser → ultrawork
             await pilot.pause()
 
             uw_present = any(
@@ -386,6 +388,61 @@ def test_pilot_sub_target_inherits_parent_chain(pilot_config):
                 f"sub-target must inherit the parent's pick list; "
                 f"parent={parent_ids} sub={sub_ids}"
             )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 5b: `a` opens a chooser; the picked kind (not a fixed cycle) is added
+# ---------------------------------------------------------------------------
+
+def test_pilot_add_sub_chooser(pilot_config):
+    """`a` opens the sub-target chooser instead of blindly adding: `c` adds compaction first
+    (proving the choice is honored), a second `a`+`u` adds ultrawork, and once both exist `a`
+    is a no-op that opens no modal."""
+    cfg_path, _ = pilot_config
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+
+            def _highlight_agent():
+                targets.highlighted = targets.get_option_index("agent:sisyphus")
+
+            _highlight_agent()
+            targets.focus()
+            await pilot.pause()
+
+            # First `a` → chooser → `c`: compaction is added, ultrawork is NOT (not a cycle).
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "`a` on an agent must open the chooser modal"
+            await pilot.press("c")
+            await pilot.pause()
+            assert "agent:sisyphus.compaction" in _ids(targets)
+            assert "agent:sisyphus.ultrawork" not in _ids(targets)
+
+            # Second `a` → chooser → `u`: ultrawork joins it.
+            _highlight_agent()
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("u")
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" in _ids(targets)
+
+            # Both present → `a` opens nothing (bell) and adds no row.
+            _highlight_agent()
+            await pilot.pause()
+            before = _ids(targets)
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "both kinds present → no chooser"
+            assert _ids(targets) == before
 
     asyncio.run(_run())
 

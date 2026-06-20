@@ -27,13 +27,16 @@ a literal — `$border-blurred` renders near-black on a dark terminal background
 
 KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
 screen via check_action) · enter set (dispatch by row: cand:add → add-model modal, else set
-model + default variant) · v variant · e add · x clear · a add sub-target · s save
+model + default variant) · v variant · e add · x clear · a add sub-target (chooser) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
 CatalogUnavailable) · q quit (confirm if dirty). The live keys are always shown in
 Static#hints (and per-modal hint lines).
 Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
 verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if available, else
 '⚠ unknown — add a provider/' and enter is BLOCKED until qualified.
+Add-sub modal (`a` on an agent): a 2-row OptionList (`#sub-list`, IDs 'sub:ultrawork' /
+'sub:compaction') naming each kind + what it's for; a kind already on the agent is disabled
+('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Both present → `a` just bells.
 """
 from __future__ import annotations
 
@@ -334,6 +337,81 @@ class ConfirmModal(ModalScreen):
 
     def action_decline(self) -> None:
         self.dismiss(False)
+
+
+class AddSubModal(ModalScreen):
+    """`a` — pick which sub-target to add to an agent: `ultrawork` or `compaction`.  Each row
+    names the kind and one line on what omo uses it for; a kind already on the agent is shown
+    disabled (`✓ added`).  Dismisses with the chosen kind ('ultrawork'|'compaction') — via the
+    `u`/`c` shortcut or enter on the row — or None on cancel."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("u", "pick('ultrawork')", "ultrawork", show=False),
+        Binding("c", "pick('compaction')", "compaction", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    AddSubModal {
+        align: center middle;
+    }
+    AddSubModal > Vertical {
+        width: 64;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    AddSubModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    # One line on what each sub-model is for (display only). Mirrors omo: ultrawork swaps the
+    # model on a keyworded message; compaction is the model used to summarize the session.
+    _BLURB = {
+        "ultrawork": "model swapped in when you type 'ultrawork' / 'ulw'",
+        "compaction": "model used for automatic context summaries",
+    }
+
+    def __init__(self, present) -> None:
+        super().__init__()
+        self._present = set(present)
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Add sub-target:")
+            yield OptionList(id="sub-list")
+            yield Static(
+                "↑↓ move · u/c or enter add · esc cancel",
+                id="sub-hints",
+                classes="modal-hints",
+            )
+
+    def on_mount(self) -> None:
+        ol = self.query_one("#sub-list", OptionList)
+        for kind in _SUBKINDS:
+            added = kind in self._present
+            tag = "   ✓ added" if added else ""
+            label = f"{kind[0]}  {kind:<10} — {self._BLURB[kind]}{tag}"
+            ol.add_option(Option(label, id=f"sub:{kind}", disabled=added))
+        ol.focus()
+
+    def action_pick(self, kind: str) -> None:
+        # Shortcut path (`u`/`c`): ignore a kind already present (its row is disabled anyway).
+        if kind in _SUBKINDS and kind not in self._present:
+            self.dismiss(kind)
+
+    @on(OptionList.OptionSelected, "#sub-list")
+    def _on_selected(self, event: OptionList.OptionSelected) -> None:
+        oid = event.option_id or ""
+        if oid.startswith("sub:"):
+            self.dismiss(oid[len("sub:"):])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class OModelApp(App):
@@ -902,28 +980,33 @@ class OModelApp(App):
         )
 
     def action_add_sub(self) -> None:
-        """`a` — add an ultrawork/compaction sub-target to the highlighted agent."""
+        """`a` — choose an ultrawork/compaction sub-target to add to the highlighted agent.
+        Opens AddSubModal (names both kinds + what each does); the picked kind becomes an empty
+        sub-row. Bell when the row isn't an agent or both kinds already exist (nothing to add)."""
         target = self._current_target
         if target is None or not target.startswith("agent:"):
             return
-        rest = target[len("agent:"):]
-        name = rest.split(".", 1)[0]
+        name = target[len("agent:"):].split(".", 1)[0]
         present = set(self._agent_subtargets(name))
-        to_add = next((k for k in _SUBKINDS if k not in present), None)
-        if to_add is None:
-            self.bell()
+        if all(k in present for k in _SUBKINDS):
+            self.bell()  # both already added — nothing to choose
             return
-        # Create an empty sub-object so it shows as a sub-row. Do NOT mark dirty: an empty
-        # ultrawork/compaction is not a real edit — serialize() drops empty sub-objects, and
-        # only staging a model into it (which sets dirty) counts as a change.
-        self._ensure_node(f"agent:{name}.{to_add}")
-        self._populate_targets()
-        # Highlight the freshly added sub-target.
-        targets = self.query_one("#targets", OptionList)
-        try:
-            targets.highlighted = self._index_of_option(targets, f"agent:{name}.{to_add}")
-        except Exception:
-            pass
+
+        def _add(kind) -> None:
+            if not kind or kind in present:
+                return
+            # Empty sub-object → shows as a sub-row but is NOT a real edit: serialize() drops
+            # empty ultrawork/compaction, and only staging a model into it sets dirty.
+            self._ensure_node(f"agent:{name}.{kind}")
+            self._populate_targets()
+            # Highlight the freshly added sub-target.
+            targets = self.query_one("#targets", OptionList)
+            try:
+                targets.highlighted = self._index_of_option(targets, f"agent:{name}.{kind}")
+            except Exception:
+                pass
+
+        self.push_screen(AddSubModal(present), _add)
 
     def action_save(self) -> None:
         """`s` — diff + confirm modal (incl. first-save palette-loss warning) → config_io.save."""

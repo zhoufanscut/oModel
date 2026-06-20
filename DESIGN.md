@@ -400,7 +400,9 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Left** `OptionList#targets`: AGENTS then CATEGORIES; option IDs `agent:<name>`,
   `agent:<name>.ultrawork` / `.compaction` (indented sub-rows, shown when present in config or added
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`;
-  `a` adds an `ultrawork`/`compaction` sub-target (verified: omo schema permits both on all 11 agents).
+  `a` opens a **chooser modal** (below) to add an `ultrawork`/`compaction` sub-target — both are
+  valid on every agent (verified: omo schema permits both on all 11 agents), so the chooser names
+  each kind + what it's for rather than blindly cycling.
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
   row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
@@ -418,7 +420,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
   `v` → push `OptionList` of the family's valid variants + `(none)`; `e` (or `enter` on `cand:add`) →
-  the add-model modal (below); `x` → clear; `a` → add sub-target; `s` → diff+confirm save; `r` → refresh
+  the add-model modal (below); `x` → clear; `a` → open the add-sub chooser (below); `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
   `q` → quit (confirm if dirty); `←`/`→` → focus the targets / candidates pane (gated to the base
   screen via `check_action`, so it never grabs focus from under a modal; the add-model `Input` keeps
@@ -429,6 +431,13 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   else `⚠ unknown — add a provider/` and `enter` is **blocked** until qualified. Accept → inserts a
   selected `+ custom` row (default variant via `detect_family`); `⚠ unavailable` is allowed
   (warn-but-allow, decision #5). Not a separate mode — the result is just another pickable row.
+- **Add-sub chooser (`a` on an agent):** a 2-row `OptionList` (`#sub-list`, IDs `sub:ultrawork` /
+  `sub:compaction`), each row naming the kind + a one-line description of what omo uses it for
+  (ultrawork = model swapped in on an `ultrawork`/`ulw` message; compaction = model for auto
+  summaries). A kind already on the agent is **disabled** (`✓ added`); `u`/`c` shortcut or `enter`
+  picks one (→ empty sub-row, not dirty until a model is staged), `esc` cancels. Both kinds present
+  → `a` just bells (the chooser would have nothing to offer). Replaces the old blind add-next cycle
+  so the choice — and what each kind means — is explicit for newcomers.
 
 ## Packaging & distribution (GitHub-only, no PyPI)
 
