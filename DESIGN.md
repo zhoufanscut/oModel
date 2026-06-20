@@ -131,8 +131,12 @@ omodel --version
 │ CATEGORIES          │  opencode/gpt-5.5 (medium)           │
 │   deep         gpt  │● zhipuai/glm-5.1  (≈ omo glm-5)      │
 │   quick        mini │ + add model…                         │
-└ ↑↓ move · enter set · v variant · e add · x clear · a sub · s save · r refresh · q quit ┘
+└ ↑↓ move · ←→ panes · enter set · v variant · e add · x clear · a sub · s save · r · q ────┘
 ```
+
+The bottom hint bar (`Static#hints`) is **pane-aware** — it shows only the keys that act on the
+focused pane + highlighted row, so it stays one line (left pane drops `enter set`/`v`/`x`; the
+`+ add model…` row shows `enter add`; a category row drops `a sub`). See §Textual contract.
 
 ## Repo layout (src-layout, PyPI-ready)
 
@@ -389,13 +393,21 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.
+- **Hint bar** `Static#hints` (bottom row): **pane-aware** key hints — only the keys that do
+  something for the focused pane + highlighted row, so it stays one line. Left/targets:
+  `↑↓ move · → candidates · [a sub ·] s save · r refresh · q quit` (`a sub` only on an agent row).
+  Right/candidates: `↑↓ move · ← targets · enter set · v variant · e add · x clear · s save · r · q`,
+  or `… · enter add · …` on the `+ add model…` row. Re-rendered on focus (`on_descendant_focus`)
+  and highlight changes. Modals carry their own one-line hint (`Static.modal-hints`) instead.
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
   `v` → push `OptionList` of the family's valid variants + `(none)`; `e` (or `enter` on `cand:add`) →
   the add-model modal (below); `x` → clear; `a` → add sub-target; `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
-  `q` → quit (confirm if dirty). Pilot tests drive these via the stable IDs.
+  `q` → quit (confirm if dirty); `←`/`→` → focus the targets / candidates pane (gated to the base
+  screen via `check_action`, so it never grabs focus from under a modal; the add-model `Input` keeps
+  its cursor arrows). Pilot tests drive these via the stable IDs.
 - **Add-model modal (`e` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
   of what saves. A full `provider/model` → used **verbatim** (split on the *first* `/`, so
   `openrouter/anthropic/…` works); a bare id → auto-prefixed via `resolve_prefix` **if available**,

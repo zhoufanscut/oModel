@@ -16,11 +16,16 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             highlighting renders the rest of the pane instantly.
   * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
                             row matching the launch-time on-disk assignment is prefixed '● '.
+  * Static#hints           — pane-aware key hint bar (bottom row). Content switches on focus
+                            + highlighted row (see _render_hints); modals carry their own
+                            one-line hint instead.
 
-KEYS: ↑↓ move · enter set (dispatch by row: cand:add → add-model modal, else set model +
-default variant) · v variant · e add · x clear ·
-a add sub-target · s save (diff+confirm) · r refresh (live re-fetch off-thread + rebuild
-cache; also retries after CatalogUnavailable) · q quit (confirm if dirty).
+KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
+screen via check_action) · enter set (dispatch by row: cand:add → add-model modal, else set
+model + default variant) · v variant · e add · x clear · a add sub-target · s save
+(diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
+CatalogUnavailable) · q quit (confirm if dirty). The live keys are always shown in
+Static#hints (and per-modal hint lines).
 Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
 verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if available, else
 '⚠ unknown — add a provider/' and enter is BLOCKED until qualified.
@@ -31,7 +36,7 @@ import asyncio
 import copy
 from typing import Optional
 
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -109,6 +114,10 @@ class AddModelModal(ModalScreen):
         margin-top: 1;
         color: $text-muted;
     }
+    AddModelModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+    }
     """
 
     def __init__(
@@ -127,6 +136,7 @@ class AddModelModal(ModalScreen):
             yield Label("Add model — type provider/model (or a bare id):")
             yield Input(placeholder="provider/model", id="add-input")
             yield Static("", id="add-preview")
+            yield Static("enter add · esc cancel", id="add-hints", classes="modal-hints")
 
     def on_mount(self) -> None:
         self.query_one("#add-input", Input).focus()
@@ -211,6 +221,10 @@ class VariantModal(ModalScreen):
         background: $surface;
         padding: 1 2;
     }
+    VariantModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+    }
     """
 
     def __init__(self, variants: list) -> None:
@@ -222,6 +236,11 @@ class VariantModal(ModalScreen):
             yield Label("Variant:")
             ol = OptionList(id="variant-list")
             yield ol
+            yield Static(
+                "↑↓ move · enter choose · esc cancel",
+                id="variant-hints",
+                classes="modal-hints",
+            )
 
     def on_mount(self) -> None:
         ol = self.query_one("#variant-list", OptionList)
@@ -277,6 +296,11 @@ class ConfirmModal(ModalScreen):
     ConfirmModal Button {
         margin: 0 1;
     }
+    ConfirmModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+        text-align: center;
+    }
     """
 
     def __init__(self, title: str, body: str) -> None:
@@ -291,6 +315,7 @@ class ConfirmModal(ModalScreen):
             with Horizontal(id="confirm-buttons"):
                 yield Button("Yes", variant="primary", id="confirm-yes")
                 yield Button("No", id="confirm-no")
+            yield Static("y yes · n no · esc cancel", id="confirm-hints", classes="modal-hints")
 
     @on(Button.Pressed, "#confirm-yes")
     def _yes(self) -> None:
@@ -339,9 +364,17 @@ class OModelApp(App):
     #candidates {
         height: 1fr;
     }
+    #hints {
+        height: 1;
+        background: $panel;
+        color: $text-muted;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
+        Binding("left", "focus_targets", "targets", show=False),
+        Binding("right", "focus_candidates", "candidates", show=False),
         Binding("v", "variant", "variant"),
         Binding("e", "add_model", "add"),
         Binding("x", "clear", "clear"),
@@ -400,10 +433,17 @@ class OModelApp(App):
             with Vertical(id="right"):
                 yield Static("", id="detail")
                 yield OptionList(id="candidates")
+        yield Static("", id="hints")
 
     def on_mount(self) -> None:
         self._render_providers()
         self._populate_targets()
+        self._render_hints()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """Re-render the hint bar whenever focus crosses panes (Tab / ←→ / click) so it
+        reflects the now-focused pane."""
+        self._render_hints()
 
     # ----- header ----------------------------------------------------------------------
 
@@ -672,6 +712,36 @@ class OModelApp(App):
         self._current_target = target
         self._render_detail(target)
         self._render_candidates(target)
+        self._render_hints()
+
+    def _render_hints(self) -> None:
+        """Update Static#hints to the keys valid for the focused pane + highlighted row
+        (DESIGN §Layout — pane-aware so the bar stays one line and only advertises keys that
+        do something right now). Modals carry their own hint line, so skip while one is up."""
+        if len(self.screen_stack) > 1:
+            return
+        hints = self.query_one("#hints", Static)
+        cands = self.query_one("#candidates", OptionList)
+        if self.focused is cands:
+            # Right pane: the '+ add model…' row repurposes enter and drops v/x.
+            hi = cands.highlighted
+            on_add = False
+            if hi is not None:
+                try:
+                    on_add = cands.get_option_at_index(hi).id == "cand:add"
+                except Exception:
+                    on_add = False
+            if on_add:
+                text = "↑↓ move · ← targets · enter add · s save · r refresh · q quit"
+            else:
+                text = ("↑↓ move · ← targets · enter set · v variant · e add · "
+                        "x clear · s save · r · q")
+        else:
+            # Left pane (targets): `a sub` only applies to an agent row, not a category.
+            tgt = self._current_target or ""
+            sub = "a sub · " if tgt.startswith("agent:") else ""
+            text = f"↑↓ move · → candidates · {sub}s save · r refresh · q quit"
+        hints.update(text)
 
     # ----- events ----------------------------------------------------------------------
 
@@ -681,6 +751,12 @@ class OModelApp(App):
         if not oid or oid.startswith("hdr:"):
             return
         self._refresh_right(oid)
+
+    @on(OptionList.OptionHighlighted, "#candidates")
+    def _candidate_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Right-pane ↑↓ doesn't change focus, but moving onto/off the '+ add model…' row
+        changes which keys apply (enter set vs enter add, v/x relevance) — refresh hints."""
+        self._render_hints()
 
     @on(OptionList.OptionSelected, "#candidates")
     def _candidate_selected(self, event: OptionList.OptionSelected) -> None:
@@ -733,6 +809,24 @@ class OModelApp(App):
         self._stage_row(self._current_target, rows[idx])
 
     # ----- actions / keybindings -------------------------------------------------------
+
+    def action_focus_targets(self) -> None:
+        """`←` — focus the targets (left) pane."""
+        self.query_one("#targets", OptionList).focus()
+
+    def action_focus_candidates(self) -> None:
+        """`→` — focus the candidates (right) pane."""
+        self.query_one("#candidates", OptionList).focus()
+
+    def check_action(self, action: str, parameters) -> bool:
+        """Gate the pane-crossing arrows to the base screen: a ModalScreen manages its own
+        focus, and `←` inside e.g. the variant modal must not reach down to the (hidden)
+        #targets list. (Defense-in-depth: Textual already truncates the binding chain at a
+        modal, so these app bindings can't fire while one is up — and the add-model Input's own
+        ←/→ cursor bindings take precedence regardless.) All other actions stay enabled."""
+        if action in ("focus_targets", "focus_candidates"):
+            return len(self.screen_stack) <= 1
+        return True
 
     def action_clear(self) -> None:
         """`x` — clear the current target's assignment (delete model/variant)."""

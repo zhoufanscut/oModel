@@ -26,7 +26,7 @@ import time
 import types
 
 import pytest
-from textual.widgets import OptionList, Static
+from textual.widgets import Input, OptionList, Static
 
 from omodel.app import OModelApp
 from omodel.catalog import Catalog
@@ -477,3 +477,100 @@ def test_addmodal_gpt_only_gating():
     ungated = AddModelModal(resolver, suggestions, require_gpt=False)
     row, _preview, ok = ungated._build_row("zhipuai/glm-5")
     assert ok and row is not None, "non-GPT model accepted when not GPT-gated"
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 9: pane-aware hint bar + ←/→ pane crossing
+# ---------------------------------------------------------------------------
+
+def test_pilot_hint_bar_pane_aware(pilot_config):
+    """Static#hints shows only the keys valid for the focused pane + highlighted row, and
+    ←/→ move focus between the targets and candidates panes."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            # Left pane, an AGENT highlighted → 'a sub' + '→ candidates', no candidate-only keys.
+            await _select_target(pilot, "agent:sisyphus")
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "→ candidates" in txt, f"left-pane hints must point right: {txt!r}"
+            assert "a sub" in txt, f"agent row must advertise 'a sub': {txt!r}"
+            assert "enter set" not in txt, f"candidate-only key shown on left pane: {txt!r}"
+
+            # → crosses to the candidates pane.
+            await pilot.press("right")
+            await pilot.pause()
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert pilot.app.focused is cands, "→ must move focus to the candidates pane"
+
+            # ↓ highlights a real candidate row → real-row hints. Asserting *after* a real row
+            # is highlighted (not via the highlighted-is-None fallback) proves the real branch.
+            await pilot.press("down")
+            await pilot.pause()
+            assert cands.highlighted is not None
+            assert cands.get_option_at_index(cands.highlighted).id != "cand:add"
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "← targets" in txt, f"right-pane hints must point left: {txt!r}"
+            assert "enter set" in txt and "v variant" in txt, f"real-row keys missing: {txt!r}"
+
+            # The '+ add model…' row repurposes enter and drops the model-only keys — this
+            # exercises _candidate_highlighted + the cand:add branch of _render_hints.
+            cands.highlighted = cands.option_count - 1
+            await pilot.pause()
+            assert cands.get_option_at_index(cands.highlighted).id == "cand:add"
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "enter add" in txt, f"add-model row must show 'enter add': {txt!r}"
+            assert "v variant" not in txt and "x clear" not in txt, (
+                f"add-model row must drop candidate-only keys: {txt!r}"
+            )
+
+            # ← crosses back to targets.
+            await pilot.press("left")
+            await pilot.pause()
+            assert pilot.app.focused is pilot.app.query_one("#targets", OptionList), (
+                "← must move focus back to the targets pane"
+            )
+
+            # A CATEGORY row drops 'a sub' (it has no sub-targets).
+            cat_name = next(iter(pilot.app.suggestions.categories.keys()))
+            await _select_target(pilot, f"cat:{cat_name}")
+            txt = str(pilot.app.query_one("#hints", Static).content)
+            assert "→ candidates" in txt, f"category hints must still point right: {txt!r}"
+            assert "a sub" not in txt, f"category row must not advertise 'a sub': {txt!r}"
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 10: ←/→ guardrail — the add-model Input keeps its cursor arrows
+# ---------------------------------------------------------------------------
+
+def test_pilot_addmodal_arrows_keep_input_cursor(pilot_config):
+    """Inside the add-model modal, ← must move the Input cursor (not steal focus to the
+    hidden #targets list), and the modal shows its own hint line."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await pilot.press("e")  # open the add-model modal
+            await pilot.pause()
+            # The active modal is its own screen — query it, not the base screen.
+            inp = pilot.app.screen.query_one("#add-input", Input)
+            assert pilot.app.focused is inp, "add-model modal must focus its Input"
+
+            inp.value = "openai/gpt-5"
+            inp.cursor_position = len(inp.value)
+            await pilot.pause()
+            await pilot.press("left")
+            await pilot.pause()
+
+            assert pilot.app.focused is inp, "← must not steal focus from the add-model Input"
+            assert inp.cursor_position == len("openai/gpt-5") - 1, "← must move the Input cursor"
+
+            modal_hint = str(pilot.app.screen.query_one("#add-hints", Static).content)
+            assert "esc cancel" in modal_hint, f"add modal must show its own hint: {modal_hint!r}"
+
+    asyncio.run(_run())
