@@ -429,7 +429,12 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
   `q` → quit (confirm if dirty); `←`/`→` → focus the targets / candidates pane (gated to the base
   screen via `check_action`, so it never grabs focus from under a modal; the add-model `Input` keeps
-  its cursor arrows). Pilot tests drive these via the stable IDs.
+  its cursor arrows). **Vim aliases:** `h`/`l` mirror `←`/`→` (the *same* gated focus actions);
+  `j`/`k` mirror `↓`/`↑` within whatever list is focused — bound on the `VimOptionList` every list
+  uses (so they also work in the variant / add-sub modals), while a focused `Input` still takes
+  `h`/`j`/`k`/`l` as literal text (printable keys reach a widget before its bindings). The vim keys
+  are intentionally **absent from the hint bar** (it must stay one line). Pilot tests drive these via
+  the stable IDs.
 - **Add-model modal (`a` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
   of what saves. A full `provider/model` → used **verbatim** (split on the *first* `/`, so
   `openrouter/anthropic/…` works); a bare id → auto-prefixed via `resolve_prefix` **if available**,

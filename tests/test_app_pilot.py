@@ -707,3 +707,70 @@ def test_pilot_addmodal_arrows_keep_input_cursor(pilot_config):
             assert "esc cancel" in modal_hint, f"add modal must show its own hint: {modal_hint!r}"
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 11: hjkl vim movement (aliases ↑↓←→) + add-model Input guardrail
+# ---------------------------------------------------------------------------
+
+def test_pilot_vim_movement(pilot_config):
+    """`j`/`k` move the highlight within the focused list (like ↓/↑) and `l`/`h` cross to the
+    candidates / targets pane (like →/←). Inside the add-model modal, h/j/k/l are typed into
+    the Input as literal text — they must NOT move the highlight or steal pane focus."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            targets = pilot.app.query_one("#targets", OptionList)
+            cands = pilot.app.query_one("#candidates", OptionList)
+            targets.focus()
+            await pilot.pause()
+
+            # j/k move within the focused (targets) pane, like ↓/↑ (skips disabled headers).
+            start = targets.highlighted
+            await pilot.press("j")
+            await pilot.pause()
+            assert targets.highlighted is not None and targets.highlighted > start, (
+                "j must move the targets highlight down"
+            )
+            await pilot.press("k")
+            await pilot.pause()
+            assert targets.highlighted == start, "k must move the targets highlight back up"
+
+            # l crosses to candidates (like →); h crosses back (like ←).
+            await pilot.press("l")
+            await pilot.pause()
+            assert pilot.app.focused is cands, "l must focus the candidates pane"
+            await pilot.press("h")
+            await pilot.pause()
+            assert pilot.app.focused is targets, "h must focus the targets pane"
+
+            # j/k also move within the candidates pane.
+            cands.focus()
+            await pilot.pause()
+            before = cands.highlighted
+            await pilot.press("j")
+            await pilot.pause()
+            assert cands.highlighted is not None
+            if before is not None:
+                assert cands.highlighted > before, "j must move the candidates highlight down"
+
+            # Guardrail: inside the add-model modal h/j/k/l are literal text — the focused
+            # Input eats printable keys before any binding, so focus stays put and they insert.
+            cands.focus()
+            await pilot.pause()
+            await pilot.press("a")  # open the add-model modal from #candidates
+            await pilot.pause()
+            inp = pilot.app.screen.query_one("#add-input", Input)
+            assert pilot.app.focused is inp, "add-model modal must focus its Input"
+            for ch in ("h", "j", "k", "l"):
+                await pilot.press(ch)
+            await pilot.pause()
+            assert pilot.app.focused is inp, (
+                "hjkl must type into the modal Input, not move focus / highlight"
+            )
+            assert inp.value == "hjkl", f"hjkl must be inserted as text: {inp.value!r}"
+
+    asyncio.run(_run())

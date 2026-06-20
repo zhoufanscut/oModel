@@ -25,8 +25,9 @@ to `$primary`, while blurred panes and the never-focused `#detail` use a muted g
 a literal — `$border-blurred` renders near-black on a dark terminal background).
 `#providers`/`#hints`/`#detail` don't focus.
 
-KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
-screen via check_action) · enter set (dispatch by row: cand:add → add-model modal, else set
+KEYS: ↑↓ (or vim j/k) move within the focused pane · ←/→ (or vim h/l) focus
+targets/candidates (gated to the base screen via check_action) · enter set (dispatch by row:
+cand:add → add-model modal, else set
 model + default variant) · v variant · x clear · a pane-contextual (candidates + targets category
 rows → add/edit-model modal; targets agent rows → add sub-target chooser) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
@@ -91,6 +92,23 @@ def _row_label(row: dict) -> str:
     sub = row.get("substitute_for")
     subtext = f"  (≈ omo {sub})" if sub else ""
     return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
+
+
+class VimOptionList(OptionList):
+    """OptionList with vim `j`/`k` aliased to cursor down/up (alongside the inherited ↑↓).
+
+    Every list in the app uses this (targets, candidates, and the modal pickers) so j/k move
+    the highlight anywhere a list is focused, including inside a modal. Textual merges BINDINGS
+    across the MRO, so the parent's ↑↓ / enter / home / end still apply. `h`/`l` are NOT here:
+    they cross panes via App-level focus_targets/focus_candidates actions (gated to the base
+    screen) — a list inside a modal must not grab the hidden base-screen panes. Printable keys
+    only reach these bindings when this list is focused; a focused Input eats j/k as text first
+    (so the add-model modal's id field is unaffected)."""
+
+    BINDINGS = [
+        Binding("j", "cursor_down", "down", show=False),
+        Binding("k", "cursor_up", "up", show=False),
+    ]
 
 
 class AddModelModal(ModalScreen):
@@ -242,7 +260,7 @@ class VariantModal(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Variant:")
-            ol = OptionList(id="variant-list")
+            ol = VimOptionList(id="variant-list")
             yield ol
             yield Static(
                 "↑↓ move · enter choose · esc cancel",
@@ -384,7 +402,7 @@ class AddSubModal(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Add sub-target:")
-            yield OptionList(id="sub-list")
+            yield VimOptionList(id="sub-list")
             yield Static(
                 "↑↓ move · u/c or enter add · esc cancel",
                 id="sub-hints",
@@ -462,6 +480,8 @@ class OModelApp(App):
     BINDINGS = [
         Binding("left", "focus_targets", "targets", show=False),
         Binding("right", "focus_candidates", "candidates", show=False),
+        Binding("h", "focus_targets", "targets", show=False),
+        Binding("l", "focus_candidates", "candidates", show=False),
         Binding("v", "variant", "variant"),
         Binding("x", "clear", "clear"),
         Binding("a", "edit_or_sub", "edit/sub"),
@@ -511,10 +531,10 @@ class OModelApp(App):
     def compose(self) -> ComposeResult:
         yield Static("", id="providers")
         with Horizontal(id="main"):
-            yield OptionList(id="targets")
+            yield VimOptionList(id="targets")
             with Vertical(id="right"):
                 yield Static("", id="detail")
-                yield OptionList(id="candidates")
+                yield VimOptionList(id="candidates")
         yield Static("", id="hints")
 
     def on_mount(self) -> None:
@@ -897,16 +917,17 @@ class OModelApp(App):
     # ----- actions / keybindings -------------------------------------------------------
 
     def action_focus_targets(self) -> None:
-        """`←` — focus the targets (left) pane."""
+        """`←` / `h` — focus the targets (left) pane."""
         self.query_one("#targets", OptionList).focus()
 
     def action_focus_candidates(self) -> None:
-        """`→` — focus the candidates (right) pane."""
+        """`→` / `l` — focus the candidates (right) pane."""
         self.query_one("#candidates", OptionList).focus()
 
     def check_action(self, action: str, parameters) -> bool:
-        """Gate the pane-crossing arrows to the base screen: a ModalScreen manages its own
-        focus, and `←` inside e.g. the variant modal must not reach down to the (hidden)
+        """Gate the pane-crossing keys (`←`/`→` and their vim aliases `h`/`l`, all bound to
+        these two actions) to the base screen: a ModalScreen manages its own focus, and `←`
+        inside e.g. the variant modal must not reach down to the (hidden)
         #targets list. (Defense-in-depth: Textual already truncates the binding chain at a
         modal, so these app bindings can't fire while one is up — and the add-model Input's own
         ←/→ cursor bindings take precedence regardless.) All other actions stay enabled."""
