@@ -136,8 +136,9 @@ omodel --version
  ↑↓ move · ←→ panes · enter set · v variant · e add · x clear · a sub · s save · r · q
 ```
 
-Each region is a bordered card; the **focused** pane's border brightens to `$accent`, blurred
-panes use `$primary`. `Static#providers` / `Static#hints` are full-width bars (not cards), and
+Each region is a bordered card; the **focused** pane's border brightens to `$primary`, blurred
+panes use a muted gray (`#808080`, a literal — `$border-blurred` renders near-black on a dark
+terminal). `Static#providers` / `Static#hints` are full-width bars (not cards), and
 `Static#detail` is display-only — it shows the frame but never the focus highlight (Statics
 never receive focus; only `#targets` and `#candidates` do).
 

@@ -21,7 +21,8 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             one-line hint instead.
 
 Each pane is a bordered card; the focused pane (`#targets`/`#candidates`) brightens its border
-to `$accent`, while blurred panes and the never-focused `#detail` use `$primary`.
+to `$primary`, while blurred panes and the never-focused `#detail` use a muted gray (`#808080`,
+a literal — `$border-blurred` renders near-black on a dark terminal background).
 `#providers`/`#hints`/`#detail` don't focus.
 
 KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
@@ -354,7 +355,7 @@ class OModelApp(App):
     }
     #targets {
         width: 32;
-        border: solid $primary;
+        border: solid #808080;
     }
     #right {
         width: 1fr;
@@ -363,14 +364,14 @@ class OModelApp(App):
         height: auto;
         min-height: 4;
         padding: 0 1;
-        border: solid $primary;
+        border: solid #808080;
     }
     #candidates {
         height: 1fr;
-        border: solid $primary;
+        border: solid #808080;
     }
     #targets:focus, #candidates:focus {
-        border: solid $accent;
+        border: solid $primary;
     }
     #hints {
         height: 1;
@@ -619,17 +620,25 @@ class OModelApp(App):
     def _render_detail(self, target: str) -> None:
         detail = self.query_one("#detail", Static)
         model, variant = self._current_assignment(target)
-        lines = [f"[b]{target}[/b]"]
+        # Header mirrors the `label: value` spacing below it — give `agent:`/`cat:` the same
+        # space after the colon as `model: `/`variant: ` so the values line up.
+        lines = [f"[b]{target.replace(':', ': ', 1)}[/b]"]
         if model:
             lines.append(f"model: {model}")
             lines.append("variant: " + (variant if variant else "—"))
             # Detail line from catalog (display only); bare model id is after the first '/'.
-            # Cache hit → render now; miss → schedule a background fetch and render without it
-            # (the line pops in when the worker finishes — never blocks highlighting).
+            # Always reserve this row so switching targets refreshes its text in place rather
+            # than adding/removing a line (which makes the pane jump). Cache hit → render the
+            # line now; miss → a dim placeholder holds the slot while the ~3s background fetch
+            # runs, and the worker's re-render swaps in the real content (or blank if none).
             bare = model.split("/", 1)[1] if "/" in model else model
             info = self._detail_info(target, bare)
             if info:
                 lines.append(self._detail_line(info))
+            elif bare in self._detail_cache:
+                lines.append("")  # fetch done, no detail available — keep the slot blank
+            else:
+                lines.append("[dim]…[/dim]")  # fetch pending — keep the slot, fill on arrival
         else:
             lines.append("model: — (unset)")
             lines.append("variant: —")
