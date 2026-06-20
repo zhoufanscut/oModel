@@ -65,6 +65,9 @@ cd oModel
 uv pip install -e .
 ```
 
+Regenerate the bundled suggestion data with `omodel --refresh-omo` (needs `bun` and an omo
+checkout; point it with `--omo-src PATH` or `$OMO_SRC`). See [DESIGN.md](DESIGN.md) for details.
+
 ## Usage
 
 ```
@@ -94,45 +97,23 @@ live re-fetch and rebuild the cache.
 | `x` | Clear the current agent/category model |
 | `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
 | `s` | Save (diff + confirm modal) |
-| `r` | Refresh models (live `opencode models --refresh` + rebuild cache, off-thread) |
+| `r` | Refresh the model list (force a live `opencode models --refresh`) |
 | `q` | Quit (confirm if unsaved changes) |
 
 ## How it works
 
-1. **Suggestion data** — oModel bundles a snapshot of the omo model requirements
-   (11 agents, 8 categories, 14 families) generated from oh-my-openagent at build time.
-   Update it with `omodel --refresh-omo`.
+1. **What omo suggests** — oModel bundles a snapshot of omo's model requirements, so it needs
+   neither an omo checkout nor a network call at runtime.
+2. **What you have** — read live from `opencode models`. The TUI degrades to suggestions-only
+   if `opencode` is absent.
+3. **Pick** — each suggested model you can run is shown as one row per serving provider
+   (dedicated providers before gateways). Pick a row and oModel applies the `provider/` prefix
+   and a valid variant for you.
+4. **Save** — shows a diff before writing a clean `oh-my-openagent.jsonc`, snapshotting the
+   prior file to a timestamped backup (`omodel --restore` to roll back).
 
-2. **Available models** — fetched live from `opencode models`; groups into connected
-   providers. The TUI degrades to suggestions-only if `opencode` is absent.
-
-3. **Prefix resolution** — each model is shown as one row per serving provider, with dedicated
-   providers (serving one vendor) before gateways (e.g. `opencode`, which serves many vendors).
-   Pick the row whose `provider/` prefix you want — there's no separate prefix step.
-
-4. **Save** — shows a unified diff before writing. Each save creates a verbatim
-   timestamped backup; the very first save also pins `original.jsonc` (never pruned).
-   `omodel --restore` lists the newest 10 backups + the pinned original.
-
-5. **Caching** — the two `opencode` calls (`models`, and `models <prov> --verbose` for the
-   detail pane) take ~3s each, so their output is cached for 24h under `~/.cache/omodel/`.
-   Warm launches and detail are instant; `r` / `omodel --refresh-models` force a live re-fetch.
-   The header shows how stale the list is (e.g. `cached 3h ago · r to refresh`).
-
-## Refresh suggestion data
-
-```sh
-# If omo is checked out at ~/source/oh-my-openagent (default):
-omodel --refresh-omo
-
-# Or point to another checkout:
-omodel --refresh-omo --omo-src /path/to/oh-my-openagent
-
-# Or via environment variable:
-OMO_SRC=/path/to/oh-my-openagent omodel --refresh-omo
-```
-
-Requires `bun`. Non-fatal if absent: prints current bundled meta and exits 0.
+See [DESIGN.md](DESIGN.md) for the full design — data sources, resolution rules, caching, and
+packaging.
 
 ## License
 
