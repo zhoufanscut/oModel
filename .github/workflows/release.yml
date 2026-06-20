@@ -27,10 +27,10 @@ jobs:
             asset-name: omodel-darwin-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -58,7 +58,7 @@ jobs:
           mv omodel ${{ matrix.asset-name }}
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/${{ matrix.asset-name }}
