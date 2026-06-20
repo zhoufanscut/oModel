@@ -20,6 +20,10 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             + highlighted row (see _render_hints); modals carry their own
                             one-line hint instead.
 
+Each pane is a bordered card; the focused pane (`#targets`/`#candidates`) brightens its border
+to `$accent`, while blurred panes and the never-focused `#detail` use `$primary`.
+`#providers`/`#hints`/`#detail` don't focus.
+
 KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
 screen via check_action) · enter set (dispatch by row: cand:add → add-model modal, else set
 model + default variant) · v variant · e add · x clear · a add sub-target · s save
@@ -350,7 +354,7 @@ class OModelApp(App):
     }
     #targets {
         width: 32;
-        border-right: solid $panel;
+        border: solid $primary;
     }
     #right {
         width: 1fr;
@@ -359,10 +363,14 @@ class OModelApp(App):
         height: auto;
         min-height: 4;
         padding: 0 1;
-        border-bottom: solid $panel;
+        border: solid $primary;
     }
     #candidates {
         height: 1fr;
+        border: solid $primary;
+    }
+    #targets:focus, #candidates:focus {
+        border: solid $accent;
     }
     #hints {
         height: 1;

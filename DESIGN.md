@@ -120,19 +120,26 @@ omodel --version
 ## Layout (approved)
 
 ```
-┌ oModel ────────────────────────────────────────────────────┐
-│ AGENTS              │ sisyphus                             │
-│ > sisyphus     kimi │ model: moonshotai-cn/kimi-k2.7-code  │
-│     ↳ ultrawork opus│ variant: —     ctx 256k · $0.6/$2.5  │
-│   hephaestus   gpt  │                                      │
-│   oracle       gpt  │ ── candidates ──────────────────     │
-│   momus        gpt  │  opencode/claude-opus-4-7 (max)      │
-│   ...               │  openai/gpt-5.5 (medium)             │
-│ CATEGORIES          │  opencode/gpt-5.5 (medium)           │
-│   deep         gpt  │● zhipuai/glm-5.1  (≈ omo glm-5)      │
-│   quick        mini │ + add model…                         │
-└ ↑↓ move · ←→ panes · enter set · v variant · e add · x clear · a sub · s save · r · q ────┘
+ Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai    (cached 3h ago · r)
+┌────────────────────┐┌────────────────────────────────────────────┐
+│ AGENTS             ││ sisyphus                                   │
+│ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
+│   ↳ ultrawork opus ││ variant: —    ctx 256k · $0.6/$2.5         │
+│   hephaestus  gpt  │└────────────────────────────────────────────┘
+│   oracle      gpt  │┌────────────────────────────────────────────┐
+│   momus       gpt  ││  opencode/claude-opus-4-7 (max)            │
+│   ...              ││  openai/gpt-5.5 (medium)                   │
+│ CATEGORIES         ││  opencode/gpt-5.5 (medium)                 │
+│   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
+│   quick       mini ││ + add model…                               │
+└────────────────────┘└────────────────────────────────────────────┘
+ ↑↓ move · ←→ panes · enter set · v variant · e add · x clear · a sub · s save · r · q
 ```
+
+Each region is a bordered card; the **focused** pane's border brightens to `$accent`, blurred
+panes use `$primary`. `Static#providers` / `Static#hints` are full-width bars (not cards), and
+`Static#detail` is display-only — it shows the frame but never the focus highlight (Statics
+never receive focus; only `#targets` and `#candidates` do).
 
 The bottom hint bar (`Static#hints`) is **pane-aware** — it shows only the keys that act on the
 focused pane + highlighted row, so it stays one line (left pane drops `enter set`/`v`/`x`; the
