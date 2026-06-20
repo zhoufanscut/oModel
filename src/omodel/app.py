@@ -27,10 +27,11 @@ a literal — `$border-blurred` renders near-black on a dark terminal background
 
 KEYS: ↑↓ move within the focused pane · ←/→ focus targets/candidates (gated to the base
 screen via check_action) · enter set (dispatch by row: cand:add → add-model modal, else set
-model + default variant) · v variant · e add · x clear · a add sub-target (chooser) · s save
+model + default variant) · v variant · x clear · a pane-contextual (candidates + targets category
+rows → add/edit-model modal; targets agent rows → add sub-target chooser) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
-CatalogUnavailable) · q quit (confirm if dirty). The live keys are always shown in
-Static#hints (and per-modal hint lines).
+CatalogUnavailable) · q quit (confirm if dirty). The pane keys are shown in Static#hints (and
+per-modal hint lines); r is advertised in the Static#providers header instead, not the hint bar.
 Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
 verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if available, else
 '⚠ unknown — add a provider/' and enter is BLOCKED until qualified.
@@ -462,9 +463,8 @@ class OModelApp(App):
         Binding("left", "focus_targets", "targets", show=False),
         Binding("right", "focus_candidates", "candidates", show=False),
         Binding("v", "variant", "variant"),
-        Binding("e", "add_model", "add"),
         Binding("x", "clear", "clear"),
-        Binding("a", "add_sub", "sub"),
+        Binding("a", "edit_or_sub", "edit/sub"),
         Binding("s", "save", "save"),
         Binding("r", "refresh", "refresh"),
         Binding("q", "quit_confirm", "quit"),
@@ -812,15 +812,21 @@ class OModelApp(App):
                 except Exception:
                     on_add = False
             if on_add:
-                text = "↑↓ move · ← targets · enter add · s save · r refresh · q quit"
+                text = "↑↓ move · ← targets · enter add · s save · q quit"
             else:
-                text = ("↑↓ move · ← targets · enter set · v variant · e add · "
-                        "x clear · s save · r · q")
+                text = ("↑↓ move · ← targets · enter set · v variant · a edit · "
+                        "x clear · s save · q quit")
         else:
-            # Left pane (targets): `a sub` only applies to an agent row, not a category.
+            # Left pane (targets): `a` is `sub` on an agent row, `edit` on a category row
+            # (categories have no sub-targets, so `a` opens the add/edit-model modal there).
             tgt = self._current_target or ""
-            sub = "a sub · " if tgt.startswith("agent:") else ""
-            text = f"↑↓ move · → candidates · {sub}s save · r refresh · q quit"
+            if tgt.startswith("agent:"):
+                a_hint = "a sub · "
+            elif tgt.startswith("cat:"):
+                a_hint = "a edit · "
+            else:
+                a_hint = ""
+            text = f"↑↓ move · → candidates · {a_hint}s save · q quit"
         hints.update(text)
 
     # ----- events ----------------------------------------------------------------------
@@ -953,9 +959,19 @@ class OModelApp(App):
 
         self.push_screen(VariantModal(variants), _apply)
 
-    def action_add_model(self) -> None:
-        """`e` — open the add-model modal."""
-        self._open_add_modal()
+    def action_edit_or_sub(self) -> None:
+        """`a` — pane-contextual, one key (see _render_hints / DESIGN §Textual contract). Only a
+        #targets *agent* row does "sub" (add an ultrawork/compaction sub-target); everywhere else
+        — #candidates, or a #targets *category* row (categories have no sub-targets) — `a` opens
+        the add/edit-model modal ("edit")."""
+        on_targets_agent = (
+            self.focused is self.query_one("#targets", OptionList)
+            and (self._current_target or "").startswith("agent:")
+        )
+        if on_targets_agent:
+            self._add_sub()
+        else:
+            self._open_add_modal()
 
     def _open_add_modal(self) -> None:
         if self.resolver is None:
@@ -979,10 +995,10 @@ class OModelApp(App):
             _accept,
         )
 
-    def action_add_sub(self) -> None:
-        """`a` — choose an ultrawork/compaction sub-target to add to the highlighted agent.
-        Opens AddSubModal (names both kinds + what each does); the picked kind becomes an empty
-        sub-row. Bell when the row isn't an agent or both kinds already exist (nothing to add)."""
+    def _add_sub(self) -> None:
+        """`a` in #targets — choose an ultrawork/compaction sub-target to add to the highlighted
+        agent. Opens AddSubModal (names both kinds + what each does); the picked kind becomes an
+        empty sub-row. Bell when the row isn't an agent or both kinds already exist (nothing to add)."""
         target = self._current_target
         if target is None or not target.startswith("agent:"):
             return

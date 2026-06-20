@@ -448,6 +448,31 @@ def test_pilot_add_sub_chooser(pilot_config):
 
 
 # ---------------------------------------------------------------------------
+# Pilot test 5c: `a` on a #targets *category* row opens the model modal, not the chooser
+# ---------------------------------------------------------------------------
+
+def test_pilot_category_a_opens_add_modal(pilot_config):
+    """A category has no sub-targets, so `a` on a #targets category row opens the add/edit-model
+    modal (the same modal `a` opens in #candidates) — never the agent-only sub-target chooser."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            cat_name = next(iter(pilot.app.suggestions.categories.keys()))
+            await _select_target(pilot, f"cat:{cat_name}")
+            pilot.app.query_one("#targets", OptionList).focus()  # category row, left pane
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "`a` on a category must open a modal"
+            # It's the add-model modal (its #add-input Input), not the sub-target chooser.
+            assert pilot.app.screen.query_one("#add-input", Input)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Pilot test 6: the on-disk (oh-my-openagent.jsonc) pick is marked ● in the list
 # ---------------------------------------------------------------------------
 
@@ -635,12 +660,13 @@ def test_pilot_hint_bar_pane_aware(pilot_config):
                 "← must move focus back to the targets pane"
             )
 
-            # A CATEGORY row drops 'a sub' (it has no sub-targets).
+            # A CATEGORY row swaps 'a sub' for 'a edit' — no sub-targets, so `a` opens the model modal.
             cat_name = next(iter(pilot.app.suggestions.categories.keys()))
             await _select_target(pilot, f"cat:{cat_name}")
             txt = str(pilot.app.query_one("#hints", Static).content)
             assert "→ candidates" in txt, f"category hints must still point right: {txt!r}"
             assert "a sub" not in txt, f"category row must not advertise 'a sub': {txt!r}"
+            assert "a edit" in txt, f"category row must advertise 'a edit': {txt!r}"
 
     asyncio.run(_run())
 
@@ -658,7 +684,11 @@ def test_pilot_addmodal_arrows_keep_input_cursor(pilot_config):
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
-            await pilot.press("e")  # open the add-model modal
+            # `a` is pane-contextual: it opens the add/edit-model modal only from #candidates
+            # (from #targets it would open the sub-target chooser instead).
+            pilot.app.query_one("#candidates", OptionList).focus()
+            await pilot.pause()
+            await pilot.press("a")  # open the add-model modal
             await pilot.pause()
             # The active modal is its own screen — query it, not the base screen.
             inp = pilot.app.screen.query_one("#add-input", Input)

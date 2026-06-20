@@ -42,7 +42,7 @@ prefix and a valid variant, and saves a clean config.
 |---|----------|--------|
 | 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
 | 2 | Save format | **Clean active-only** `.jsonc`; **timestamped backup each save** (`.backup/<ts>.jsonc`); non-model sections preserved. |
-| 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`e`) types anything off-chain. Suggested variant. |
+| 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`a`) types anything off-chain. Suggested variant. |
 | 4 | Layout | **Two-pane master-detail**. |
 | 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
 | 6 | Agent coverage | **omo-specific only** (11 with requirements). |
@@ -133,7 +133,7 @@ omodel --version
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- ↑↓ move · ←→ panes · enter set · v variant · e add · x clear · a sub · s save · r · q
+ ↑↓ move · ←→ panes · enter set · v variant · x clear · a edit/sub · s save · q quit
 ```
 
 Each region is a bordered card; the **focused** pane's border brightens to `$primary`, blurred
@@ -412,20 +412,25 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   of the pane renders instantly so highlighting is never blocked.
 - **Hint bar** `Static#hints` (bottom row): **pane-aware** key hints — only the keys that do
   something for the focused pane + highlighted row, so it stays one line. Left/targets:
-  `↑↓ move · → candidates · [a sub ·] s save · r refresh · q quit` (`a sub` only on an agent row).
-  Right/candidates: `↑↓ move · ← targets · enter set · v variant · e add · x clear · s save · r · q`,
+  `↑↓ move · → candidates · [a sub ·|a edit ·] s save · q quit` (`a sub` on an agent row, `a edit`
+  on a category row — categories have no sub-targets, so `a` opens the model modal there).
+  Right/candidates: `↑↓ move · ← targets · enter set · v variant · a edit · x clear · s save · q quit`,
   or `… · enter add · …` on the `+ add model…` row. Re-rendered on focus (`on_descendant_focus`)
   and highlight changes. Modals carry their own one-line hint (`Static.modal-hints`) instead.
+  (`r` is intentionally absent from the hint bar — refresh is advertised in the `#providers`
+  header instead — while `q quit` keeps its label since quit is surfaced nowhere else.)
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
-  `v` → push `OptionList` of the family's valid variants + `(none)`; `e` (or `enter` on `cand:add`) →
-  the add-model modal (below); `x` → clear; `a` → open the add-sub chooser (below); `s` → diff+confirm save; `r` → refresh
+  `v` → push `OptionList` of the family's valid variants + `(none)`; `a` → pane-contextual: opens the
+  add/edit-model modal (below) from #candidates **and** from a #targets *category* row (`enter` on
+  `cand:add` also opens it), or the add-sub chooser (below) from a #targets *agent* row; `x` → clear;
+  `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
   `q` → quit (confirm if dirty); `←`/`→` → focus the targets / candidates pane (gated to the base
   screen via `check_action`, so it never grabs focus from under a modal; the add-model `Input` keeps
   its cursor arrows). Pilot tests drive these via the stable IDs.
-- **Add-model modal (`e` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
+- **Add-model modal (`a` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
   of what saves. A full `provider/model` → used **verbatim** (split on the *first* `/`, so
   `openrouter/anthropic/…` works); a bare id → auto-prefixed via `resolve_prefix` **if available**,
   else `⚠ unknown — add a provider/` and `enter` is **blocked** until qualified. Accept → inserts a
