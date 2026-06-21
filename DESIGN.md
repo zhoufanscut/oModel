@@ -509,7 +509,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   dropped — GitHub is retiring those runners and they queue for hours; Intel macs install via
   pipx.) `install.sh` detects OS/arch (`linux-x64`, `darwin-arm64`), downloads the matching
   asset, installs `omodel` to `~/.local/bin`:
-  `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/master/install.sh | sh`.
+  `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh`.
 - **Secondary — pip/pipx/uvx straight from GitHub (no PyPI):**
   `pipx install git+https://github.com/<you>/oModel` ·
   `uvx --from git+https://github.com/<you>/oModel omodel` ·
