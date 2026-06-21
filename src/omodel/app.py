@@ -446,7 +446,7 @@ class AddSubModal(ModalScreen):
 
 
 class OModelApp(App):
-    """Two-pane master-detail TUI to set OMO models.  See module docstring for the stable
+    """Two-pane list-detail TUI to set OMO models.  See module docstring for the stable
     widget/option IDs the pilot tests depend on."""
 
     TITLE = "oModel"
