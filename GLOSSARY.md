@@ -32,7 +32,7 @@ line when a new one does.
 - **exact vs same-line substitute** — *exact* = a connected provider serves the model, allowing a
   trailing date stamp / sub-version tag (see *noise suffix*); *substitute* = no exact, so the
   **newest** connected model of the same family (`glm-5` → `glm-5.1`) — but never across a Claude
-  *size* (haiku ≠ sonnet). → resolve.py `candidates`
+  *line* (haiku ≠ sonnet ≠ fable ≠ mythos). → resolve.py `candidates`
 - **noise suffix vs real modifier** — a trailing id token an available id carries that the bare omo
   id lacks. *Noise* (stripped when matching) = a date/build stamp (`…-20251001`) or an unknown
   sub-version tag (`…-jibao`). *Real modifier* (kept; a distinct model) = a token omo itself uses

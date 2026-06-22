@@ -300,8 +300,8 @@ oModel/
   stripped, and a short trailing digit stays a version (`glm-5.1` ≠ `glm-5`); **(2) same-line** —
   else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
   `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen) — except within the coarse
-  `claude-non-opus` family (haiku **and** sonnet) the substitute must also share the **size** token,
-  so a haiku slot is never filled by a sonnet —
+  `claude-non-opus` family (haiku, sonnet, fable, mythos, …) the substitute must also share the
+  **product-line** token, so a haiku slot is never filled by a sonnet (nor a fable by a mythos) —
   (`substitute_for=<omo id>`); if that newest same-line model is itself an exactly-available chain
   entry, this entry is **skipped** (deferred to that model's own exact row) — never demoted to an
   *older* same-line model (so an unavailable `minimax-m3` resolves to the newest `minimax-m2.7` you

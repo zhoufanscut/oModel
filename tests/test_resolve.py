@@ -736,9 +736,20 @@ class TestNoiseTolerantMatch:
         assert glm and glm[0]["substitute_for"] == "glm-5"
 
 
-class TestClaudeSizeGuard:
-    """omo lumps haiku + sonnet into one detect_family (claude-non-opus). A same-line substitute
-    must still respect SIZE: a haiku slot is never filled by a sonnet (and vice versa)."""
+class TestClaudeLineGuard:
+    """omo lumps every non-opus Claude — haiku, sonnet, and newer lines like fable/mythos — into
+    one detect_family (claude-non-opus). A same-line substitute must still respect the product
+    LINE: a haiku slot is never filled by a sonnet, nor a fable by a mythos. The line is derived
+    (first non-numeric token after `claude`), so new lines are handled with no code change."""
+
+    def test_line_extraction_covers_new_models(self, sugg):
+        from omodel.resolve import _claude_line
+        assert _claude_line("claude-fable-5") == "fable"
+        assert _claude_line("claude-mythos-5") == "mythos"
+        assert _claude_line("claude-haiku-4-5") == "haiku"
+        assert _claude_line("claude-3-5-sonnet-20241022") == "sonnet"  # legacy id order
+        assert _claude_line("claude-fable-5-20260301") == "fable"      # provider date stamp
+        assert _claude_line("claude-2") is None                        # no line token
 
     def test_sonnet_does_not_fill_haiku(self, sugg):
         res = Resolver.build(_make_catalog(["p/claude-sonnet-4-6"]), sugg)
@@ -748,12 +759,30 @@ class TestClaudeSizeGuard:
         res = Resolver.build(_make_catalog(["p/claude-haiku-4-5"]), sugg)
         assert res._same_line_match("claude-sonnet-4-6") is None
 
-    def test_same_size_different_version_substitutes(self, sugg):
-        """A different-version, SAME-size claude IS a valid same-line substitute."""
+    def test_sonnet_does_not_fill_fable(self, sugg):
+        """Reported case: a fable slot (omo's most-capable pick) must not be filled by a sonnet
+        just because both are claude-non-opus and the sonnet sorts newest by version."""
+        res = Resolver.build(_make_catalog(["p/claude-sonnet-4-6"]), sugg)
+        assert res._same_line_match("claude-fable-5") is None
+
+    def test_mythos_does_not_fill_fable(self, sugg):
+        """fable and mythos are distinct lines (mythos is Project-Glasswing-only) → no cross-fill."""
+        res = Resolver.build(_make_catalog(["p/claude-mythos-5"]), sugg)
+        assert res._same_line_match("claude-fable-5") is None
+
+    def test_same_line_different_version_substitutes(self, sugg):
+        """A different-version, SAME-line claude IS a valid same-line substitute (haiku & fable)."""
         res = Resolver.build(_make_catalog(["p/claude-haiku-4-3"]), sugg)
         assert res._same_line_match("claude-haiku-4-5") == "claude-haiku-4-3"
+        res2 = Resolver.build(_make_catalog(["p/claude-fable-4"]), sugg)
+        assert res2._same_line_match("claude-fable-5") == "claude-fable-4"
+
+    def test_fable_date_stamp_is_exact_match(self, sugg):
+        """A provider may date-stamp the new models too; that still resolves as an exact match."""
+        res = Resolver.build(_make_catalog(["acme/claude-fable-5-20260301"]), sugg)
+        assert res._resolve_available("claude-fable-5") == "claude-fable-5-20260301"
 
     def test_opus_unaffected_by_guard(self, sugg):
-        """claude-opus is its own family (not claude-non-opus) → no size guard, normal newest."""
+        """claude-opus is its own family (not claude-non-opus) → no line guard, normal newest."""
         res = Resolver.build(_make_catalog(["p/claude-opus-4-6", "p/claude-opus-4-8"]), sugg)
         assert res._same_line_match("claude-opus-4-7") == "claude-opus-4-8"

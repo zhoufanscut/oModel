@@ -34,20 +34,25 @@ _STAMP_MIN_DIGITS = 6
 # 4-digit version-like token isn't mistaken for a year (no real model version is a 4-digit year).
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 
-# omo lumps EVERY non-opus Claude (haiku AND sonnet, any version) into one detect_family,
-# `claude-non-opus`. That family is fine for omo's variant/thinking config but too coarse to be
-# a substitution "line": a haiku slot must never be filled by a sonnet. _same_line_match adds a
-# SIZE guard for this family only — a hardcoded Claude carve-out (like _OMO_MODEL_ALIASES; omo
-# has no such notion). Every other family maps 1:1 to a product line, so they are unaffected.
-_CLAUDE_SIZES = ("opus", "sonnet", "haiku")
+# omo lumps EVERY non-opus Claude into one detect_family, `claude-non-opus`: its sibling
+# `claude-opus` family keys on the literal "-opus" substring and is tested first, so haiku,
+# sonnet, AND newer lines (fable, mythos, …) all fall through to here. That family is fine for
+# omo's variant/thinking config but too coarse to be a substitution
+# "line": a haiku slot must never be filled by a sonnet, nor a fable by a mythos. _same_line_match
+# adds a LINE guard for this family only — a Claude carve-out (like _OMO_MODEL_ALIASES; omo has no
+# such notion). Every other family maps 1:1 to a product line, so they are unaffected.
 
 
-def _claude_size(model_id: str) -> "Optional[str]":
-    """The Claude size token (`opus`/`sonnet`/`haiku`) present in `model_id`, else None."""
-    norm = normalize_model_id(model_id)
-    for size in _CLAUDE_SIZES:
-        if size in norm:
-            return size
+def _claude_line(model_id: str) -> "Optional[str]":
+    """The Claude product-line token in `model_id` — the FIRST non-numeric token after `claude`
+    (haiku/sonnet/opus/fable/mythos/…), else None. Data-free, so any future Claude line is
+    distinguished automatically. Handles both id orders: claude-sonnet-4-6 and claude-3-5-sonnet."""
+    after_claude = False
+    for tok in normalize_model_id(model_id).split("-"):
+        if tok == "claude":
+            after_claude = True
+        elif after_claude and tok and not tok.isdigit():
+            return tok
     return None
 
 
@@ -310,12 +315,14 @@ class Resolver:
         substitute blindly across unknown ids) or no connected model shares its family.
         Returns the TRUE newest including chain entries — `candidates()` decides whether that
         match (when it is itself an exact chain entry) means 'defer to its own exact row'.
-        Claude carve-out: within `claude-non-opus` (which lumps haiku AND sonnet) a substitute
-        must also share the SIZE token, so a haiku entry is never filled by a sonnet."""
+        Claude carve-out: within `claude-non-opus` (which lumps haiku, sonnet, fable, mythos, …)
+        a substitute must also share the product-LINE token, so a haiku entry is never filled by
+        a sonnet, nor a fable by a mythos."""
         target_fam = self.suggestions.detect_family(model_id)
         if target_fam is None:
             return None
-        target_size = _claude_size(model_id) if target_fam.family == "claude-non-opus" else None
+        guard_line = target_fam.family == "claude-non-opus"
+        target_line = _claude_line(model_id) if guard_line else None
         same: list = []
         seen: set = set()
         for prov in self.catalog.connected:
@@ -324,8 +331,8 @@ class Resolver:
                     continue
                 fam = self.suggestions.detect_family(m)
                 if fam is not None and fam.family == target_fam.family:
-                    if target_size is not None and _claude_size(m) != target_size:
-                        continue  # haiku != sonnet: same coarse family, different product line
+                    if guard_line and _claude_line(m) != target_line:
+                        continue  # different Claude line (haiku/sonnet/fable/…): not same-line
                     seen.add(m)
                     same.append(m)
         if not same:
