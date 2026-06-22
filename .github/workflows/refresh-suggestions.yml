@@ -59,11 +59,22 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet src/omodel/data/omo-suggestions.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          # Ignore meta-only churn: meta.generatedAt is a fresh timestamp and
+          # meta.omoCommit tracks omo's dev HEAD, so the file ALWAYS differs run
+          # to run even when no suggestion data changed. Compare the committed
+          # file against the regenerated one with the meta block stripped, so a
+          # PR opens only when real agent/category/family data actually changes.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, subprocess, sys
+          path = "src/omodel/data/omo-suggestions.json"
+          old = json.loads(subprocess.check_output(["git", "show", "HEAD:" + path]))
+          new = json.loads(open(path).read())
+          old.pop("meta", None)
+          new.pop("meta", None)
+          changed = old != new
+          print("changed=" + ("true" if changed else "false"))
+          print("data changed" if changed else "only meta changed; skipping PR", file=sys.stderr)
+          PY
 
       - name: Open PR if changed
         if: steps.diff.outputs.changed == 'true'
