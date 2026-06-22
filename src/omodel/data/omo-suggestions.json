@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.11.1",
-    "omoCommit": "b949c3478684261bdda861bf921acba03856e19c",
-    "generatedAt": "2026-06-19T11:13:20.157Z"
+    "omoVersion": "4.12.1",
+    "omoCommit": "48c58e63465ca214b0dcc7f2ef92016f052e9a44",
+    "generatedAt": "2026-06-22T08:31:41.334Z"
   },
   "agents": {
     "sisyphus": {
