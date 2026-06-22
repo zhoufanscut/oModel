@@ -16,6 +16,11 @@ jobs:
   refresh:
     name: "Regenerate omo-suggestions.json"
     runs-on: ubuntu-latest
+    # create-pull-request must push the branch (contents) and open the PR
+    # (pull-requests); the repo's default token is read-only, so grant here.
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout oModel
