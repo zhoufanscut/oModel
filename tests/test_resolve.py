@@ -606,3 +606,154 @@ class TestCategoryTargets:
         """Sub-target agent:sisyphus.ultrawork currently returns [] (no separate chain)."""
         rows = resolver.candidates("agent:sisyphus.ultrawork")
         assert isinstance(rows, list)
+
+
+# ---------------------------------------------------------------------------
+# Noise-tolerant exact match — date stamps, sub-version tags, `.`/`-` spelling
+# ---------------------------------------------------------------------------
+
+# A realistic multi-vendor gateway catalog (one provider mirroring many vendors' lines) that
+# exercises every id-noise shape: compact date stamps (claude-…-20251001), HYPHENATED dates
+# (gpt-…-2026-04-24), sub-version tags (…-jibao, …-yd, …-codex, …-200k, …-turbo), mixed case
+# (MiniMax-M3) and `.`/`-` spelling. Provider name is a generic placeholder.
+GATEWAY = "acme"
+GATEWAY_MODELS = [GATEWAY + "/" + m for m in [
+    "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-opus-4-6",
+    "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6", "claude-sonnet-4-8-jibao",
+    "deepseek-v3.1-latest", "deepseek-v3.2-latest", "deepseek-v4-flash", "deepseek-v4-pro",
+    "gemini-3.1-flash-lite-preview", "gemini-3.1-pro", "gemini-3.5-flash",
+    "glm-5", "glm-5-turbo", "glm-5.1", "glm-5.2", "glm-5v-turbo",
+    "gpt-5.2-2025-12-11", "gpt-5.2-codex-2026-01-14", "gpt-5.3-codex-2026-02-24",
+    "gpt-5.4-2026-03-05", "gpt-5.4-pro-2026-03-05", "gpt-5.5-200k", "gpt-5.5-2026-04-24",
+    "kimi-k2.6", "kimi-k2.6-inhouse-yd", "kimi-k2.6-yd", "kimi-k2.7-code",
+    "MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M3",
+    "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
+]]
+
+
+class TestNoiseTolerantMatch:
+    """An available id may carry provider noise the bare omo id lacks: a date stamp
+    (claude-haiku-4-5-20251001), a hyphenated date (gpt-5.5-2026-04-24) or a sub-version tag
+    (claude-sonnet-4-8-jibao), in either `.`/`-` spelling and any case. Such an id fills the omo
+    entry EXACTLY (it IS that model; substitute_for is None). But a real modifier token
+    (mini/fast/flash/…) or a version bump is NOT noise."""
+
+    def test_reported_bug_librarian_haiku_not_filled_by_sonnet(self, sugg):
+        """Reported regression: librarian's claude-haiku-4-5 entry rendered the newest non-opus
+        claude (claude-sonnet-4-8-jibao) as '≈ omo claude-haiku-4-5'. The haiku entry must
+        instead match the date-stamped haiku EXACTLY, and no sonnet may appear (the chain has
+        no sonnet entry — the bug surfaced one as a same-line stand-in for the haiku slot)."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        rows = res.candidates("agent:librarian")
+        haiku = [r for r in rows if r["model"] == "claude-haiku-4-5-20251001"]
+        assert len(haiku) == 1 and haiku[0]["substitute_for"] is None
+        assert all("sonnet" not in r["model"] for r in rows)
+        assert all(r["substitute_for"] != "claude-haiku-4-5" for r in rows)
+
+    def test_quick_category_also_fixed(self, sugg):
+        """categories:quick wants claude-haiku-4-5 too → same noise-tolerant exact match."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        rows = res.candidates("cat:quick")
+        haiku = [r for r in rows if r["model"] == "claude-haiku-4-5-20251001"]
+        assert len(haiku) == 1 and haiku[0]["substitute_for"] is None
+        assert all("sonnet" not in r["model"] for r in rows)
+
+    def test_sonnet_entry_resolves_to_sonnet_not_haiku(self, sugg):
+        """The mirror image: atlas wants claude-sonnet-4-6 → resolves to the exact sonnet, never
+        a haiku (the size guard cuts both ways)."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        rows = res.candidates("agent:atlas")
+        sonnet = [r for r in rows if r["model"] == "claude-sonnet-4-6"]
+        assert len(sonnet) == 1 and sonnet[0]["substitute_for"] is None
+        assert all("haiku" not in r["model"] for r in rows)
+
+    def test_compact_date_stamp_resolves_to_available_id(self, sugg):
+        """The resolved model is the AVAILABLE id (what saves to config), not the bare omo id."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        assert res._matches_omo_id("claude-haiku-4-5-20251001", "claude-haiku-4-5")
+        assert res._resolve_available("claude-haiku-4-5") == "claude-haiku-4-5-20251001"
+
+    def test_hyphenated_date_stamp_is_exact(self, sugg):
+        """YYYY-MM-DD splits into 4-/2-/2-digit tokens; the year opens the date so the whole tail
+        is noise. sisyphus' gpt-5.5 entry is served EXACTLY by the dated build, not a substitute."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        assert res._matches_omo_id("gpt-5.5-2026-04-24", "gpt-5.5")
+        assert res._matches_omo_id("gpt-5.2-2025-12-11", "gpt-5.2")
+        gpt = [r for r in res.candidates("agent:sisyphus") if r["model"].startswith("gpt-5.5")]
+        assert gpt and gpt[0]["substitute_for"] is None
+
+    def test_subversion_tag_is_exact(self, sugg):
+        """A chain wanting claude-sonnet-4-8 is filled by ...-4-8-jibao — exact, no substitute."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        req = {"fallbackChain": [{"providers": [GATEWAY], "model": "claude-sonnet-4-8"}]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:sisyphus")
+        assert [r["model"] for r in rows] == ["claude-sonnet-4-8-jibao"]
+        assert rows[0]["substitute_for"] is None
+
+    def test_case_insensitive_exact_returns_available_spelling(self, sugg):
+        """chain minimax-m3 is served by available 'MiniMax-M3' → that exact casing is returned."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        assert res._resolve_available("minimax-m3") == "MiniMax-M3"
+
+    def test_dot_dash_spelling_matches(self, sugg):
+        res = Resolver.build(_make_catalog([]), sugg)
+        assert res._matches_omo_id("claude-haiku-4.5", "claude-haiku-4-5")
+
+    def test_real_modifier_token_not_stripped(self, sugg):
+        """mini is a product tier and fast a mode — both are tokens omo names, so they are
+        protected: gpt-5.4-mini-fast must NOT fill a gpt-5.4-mini entry, nor glm-5-flash glm-5,
+        nor the vision split glm-5v-turbo the bare glm-5."""
+        res = Resolver.build(_make_catalog(["p/gpt-5.4-mini-fast", "p/glm-5-flash"]), sugg)
+        assert not res._matches_omo_id("gpt-5.4-mini-fast", "gpt-5.4-mini")
+        assert not res._matches_omo_id("glm-5-flash", "glm-5")
+        assert not res._matches_omo_id("glm-5v-turbo", "glm-5")
+        assert res._resolve_available("gpt-5.4-mini") is None
+        assert res._resolve_available("glm-5") is None
+
+    def test_exact_spelling_wins_over_noise_variants(self, sugg):
+        """glm-5 entry: the exact glm-5 beats glm-5-turbo (turbo=noise) and glm-5.1/5.2 (a
+        version is not noise), so the clean id is chosen."""
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        assert res._resolve_available("glm-5") == "glm-5"
+
+    def test_protected_set_contains_real_modifiers_not_noise(self, sugg):
+        """real_tokens is derived from omo's own chain ids: real modifiers are in; provider
+        sub-tags (jibao/yd/codex/latest/turbo) are not."""
+        res = Resolver.build(_make_catalog([]), sugg)
+        for tok in ("mini", "fast", "nano", "flash", "pro", "plus", "highspeed", "haiku", "sonnet"):
+            assert tok in res.real_tokens, tok
+        for noise in ("jibao", "yd", "codex", "latest", "turbo", "inhouse"):
+            assert noise not in res.real_tokens, noise
+
+    def test_version_bump_is_not_a_stamp(self, sugg):
+        """A short trailing digit is a version, not a date stamp: glm-5.1 != glm-5, so it stays
+        a same-line SUBSTITUTE rather than collapsing into an exact glm-5 match."""
+        res = Resolver.build(_make_catalog(["p/glm-5.1"]), sugg)
+        assert not res._matches_omo_id("glm-5.1", "glm-5")
+        glm = [r for r in res.candidates("agent:sisyphus") if r["model"] == "glm-5.1"]
+        assert glm and glm[0]["substitute_for"] == "glm-5"
+
+
+class TestClaudeSizeGuard:
+    """omo lumps haiku + sonnet into one detect_family (claude-non-opus). A same-line substitute
+    must still respect SIZE: a haiku slot is never filled by a sonnet (and vice versa)."""
+
+    def test_sonnet_does_not_fill_haiku(self, sugg):
+        res = Resolver.build(_make_catalog(["p/claude-sonnet-4-6"]), sugg)
+        assert res._same_line_match("claude-haiku-4-5") is None
+
+    def test_haiku_does_not_fill_sonnet(self, sugg):
+        res = Resolver.build(_make_catalog(["p/claude-haiku-4-5"]), sugg)
+        assert res._same_line_match("claude-sonnet-4-6") is None
+
+    def test_same_size_different_version_substitutes(self, sugg):
+        """A different-version, SAME-size claude IS a valid same-line substitute."""
+        res = Resolver.build(_make_catalog(["p/claude-haiku-4-3"]), sugg)
+        assert res._same_line_match("claude-haiku-4-5") == "claude-haiku-4-3"
+
+    def test_opus_unaffected_by_guard(self, sugg):
+        """claude-opus is its own family (not claude-non-opus) → no size guard, normal newest."""
+        res = Resolver.build(_make_catalog(["p/claude-opus-4-6", "p/claude-opus-4-8"]), sugg)
+        assert res._same_line_match("claude-opus-4-7") == "claude-opus-4-8"

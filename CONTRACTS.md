@@ -82,7 +82,8 @@ The stub files ARE the signatures; implement their bodies. Summary:
   Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
   Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
   `normalize_model_id(s)->str`; `load(path=None)->Suggestions`.
-- `resolve.py`: `@dataclass Resolver(catalog, suggestions, gateways)` with classmethod
+- `resolve.py`: `@dataclass Resolver(catalog, suggestions, gateways, real_tokens)` (`gateways` +
+  `real_tokens` are computed in `build()`) with classmethod
   `build(catalog, suggestions)`, `.vendors_served(p)->int`, `.resolve_prefix(model_id, source,
   entry=None)->str|None`, `.candidates(target)->list[dict]`.
 - `config_io.py`: `config_path(cli_override=None)->str`; `load_config(path=None)->(cfg, path)`;

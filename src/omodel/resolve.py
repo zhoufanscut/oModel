@@ -22,12 +22,41 @@ from .suggestions import Suggestions, normalize_model_id, vendor
 # normalize_model_id() stay a faithful port of omo.
 _OMO_MODEL_ALIASES = {"k2p5": "kimi-k2.5"}
 
+# A trailing pure-digit token of >= this many digits is a compact date/build STAMP (provider
+# noise, e.g. claude-haiku-4-5-20251001), not a version number (real versions are 1-2 digits) —
+# so it is stripped when matching an available id to an omo chain id. The floor keeps `glm-5.1`
+# from matching the bare `glm-5`: the `1` remainder is too short to be a stamp, so it stays a
+# genuine version bump (a DIFFERENT model) and falls through to same-line substitution instead.
+_STAMP_MIN_DIGITS = 6
+
+# A 4-digit year opens a HYPHENATED date stamp (gpt-5.5-2026-04-24 → tokens 2026/04/24): the year
+# plus its trailing 1-2 digit month/day tokens are all noise. Bounded to 19xx/20xx so a stray
+# 4-digit version-like token isn't mistaken for a year (no real model version is a 4-digit year).
+_YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+
+# omo lumps EVERY non-opus Claude (haiku AND sonnet, any version) into one detect_family,
+# `claude-non-opus`. That family is fine for omo's variant/thinking config but too coarse to be
+# a substitution "line": a haiku slot must never be filled by a sonnet. _same_line_match adds a
+# SIZE guard for this family only — a hardcoded Claude carve-out (like _OMO_MODEL_ALIASES; omo
+# has no such notion). Every other family maps 1:1 to a product line, so they are unaffected.
+_CLAUDE_SIZES = ("opus", "sonnet", "haiku")
+
+
+def _claude_size(model_id: str) -> "Optional[str]":
+    """The Claude size token (`opus`/`sonnet`/`haiku`) present in `model_id`, else None."""
+    norm = normalize_model_id(model_id)
+    for size in _CLAUDE_SIZES:
+        if size in norm:
+            return size
+    return None
+
 
 @dataclass
 class Resolver:
     catalog: Catalog
     suggestions: Suggestions
     gateways: set = field(default_factory=set)  # {p in connected : vendors_served(p) >= 2}; set in build()
+    real_tokens: set = field(default_factory=set)  # non-digit tokens omo uses in chain ids; set in build()
 
     @classmethod
     def build(cls, catalog: Catalog, suggestions: Suggestions) -> "Resolver":
@@ -37,6 +66,7 @@ class Resolver:
         resolver.gateways = {
             p for p in catalog.connected if resolver.vendors_served(p) >= 2
         }
+        resolver.real_tokens = resolver._compute_real_tokens()
         return resolver
 
     def vendors_served(self, provider: str) -> int:
@@ -49,6 +79,88 @@ class Resolver:
             if v is not None:
                 vendors.add(v)
         return len(vendors)
+
+    def _compute_real_tokens(self) -> set:
+        """The set of non-digit id tokens omo itself uses across EVERY chain entry (mini, fast,
+        nano, flash, pro, plus, haiku, sonnet, glm, …). A trailing token in this set is a real
+        model modifier — never stripped as noise, so gpt-5.4-mini-fast stays distinct from
+        gpt-5.4-mini and glm-5-flash from glm-5. A trailing token NOT in it (a provider's
+        `jibao`) is treated as a sub-version tag and stripped for matching. Data-driven: tracks
+        the bundled omo snapshot, so there is no hand-maintained suffix list to drift."""
+        toks: set = set()
+        reqs = list(self.suggestions.agents.values()) + list(self.suggestions.categories.values())
+        for req in reqs:
+            for entry in req.get("fallbackChain", []):
+                mid = entry.get("model") or ""
+                for tok in normalize_model_id(mid).split("-"):
+                    if tok and not tok.isdigit():
+                        toks.add(tok)
+        return toks
+
+    def _is_noise_suffix(self, remainder: str) -> bool:
+        """True iff `remainder` (the normalized tokens trailing an omo id) is ALL provider
+        noise: every token is a date/build stamp (a compact >= _STAMP_MIN_DIGITS-digit run, or a
+        hyphenated YYYY-MM-DD opened by a 4-digit year) or an unknown alpha sub-tag (not in
+        real_tokens). False if any token is a real modifier (mini/fast/…) or a short version
+        number — either makes a DIFFERENT model, not 'the same id + noise'."""
+        if not remainder:
+            return False
+        tokens = remainder.split("-")
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if not tok:
+                return False
+            if tok.isdigit():
+                if len(tok) >= _STAMP_MIN_DIGITS:
+                    i += 1  # compact date / build stamp (e.g. 20251001)
+                    continue
+                if _YEAR_RE.match(tok):
+                    i += 1  # hyphenated date: consume the year + its month/day tokens
+                    while i < len(tokens) and tokens[i].isdigit() and len(tokens[i]) <= 2:
+                        i += 1
+                    continue
+                return False  # a short digit run = a version bump (glm-5 vs glm-5.1)
+            elif tok in self.real_tokens:
+                return False  # real modifier (mini/fast/nano/flash/…) = a distinct model
+            else:
+                i += 1  # unknown alpha tag (e.g. `jibao`) → provider noise; keep scanning
+        return True
+
+    def _matches_omo_id(self, available_id: str, omo_id: str) -> bool:
+        """Does a provider's `available_id` denote the omo `omo_id`, tolerating `.`/`-` spelling
+        plus a trailing date stamp and/or sub-version tag? `claude-haiku-4-5-20251001` and
+        `claude-sonnet-4-8-jibao` match `claude-haiku-4-5` / `claude-sonnet-4-8`; but `glm-5.1`
+        does NOT match `glm-5`, and `gpt-5.4-mini-fast` does NOT match `gpt-5.4-mini`."""
+        a = normalize_model_id(available_id)
+        c = normalize_model_id(omo_id)
+        if a == c:
+            return True
+        if a.startswith(c + "-"):
+            return self._is_noise_suffix(a[len(c) + 1:])
+        return False
+
+    def _resolve_available(self, omo_id: str) -> "Optional[str]":
+        """The concrete connected model id that fills `omo_id` exactly-or-by-noise, else None.
+        Prefers an exactly-spelled match; otherwise the newest noise-suffixed build (e.g.
+        claude-haiku-4-5 → claude-haiku-4-5-20251001). Returns the AVAILABLE id (the value that
+        saves to config), never the bare omo id — the provider doesn't serve the bare id."""
+        c = normalize_model_id(omo_id)
+        matches: list = []
+        seen: set = set()
+        for prov in self.catalog.connected:
+            for m in self.catalog.available.get(prov, []):
+                if m in seen:
+                    continue
+                if self._matches_omo_id(m, omo_id):
+                    seen.add(m)
+                    matches.append(m)
+        if not matches:
+            return None
+        for m in matches:
+            if normalize_model_id(m) == c:
+                return m  # an exact spelling beats any noise-suffixed build
+        return max(matches, key=self._version_key)  # newest build (date acts as the tiebreak)
 
     def resolve_prefix(self, model_id: str, source: str, entry: dict = None) -> "Optional[str]":
         """Dedicated-first → resolved provider id (str) or None if unavailable.
@@ -97,8 +209,9 @@ class Resolver:
     def candidates(self, target: str) -> list:
         """One pick list of candidate-row dicts — a single filtered pass over `target`'s
         fallbackChain (CONTRACTS.md / DESIGN §candidates). For each entry, in chain order:
-          1. EXACT — the entry's model is served verbatim by >= 1 connected provider → that
-             model; substitute_for=None.
+          1. EXACT — a connected provider serves the entry's model, tolerating `.`/`-` spelling
+             plus a trailing date stamp / sub-version tag (claude-haiku-4-5 ≡
+             claude-haiku-4-5-20251001) → that concrete AVAILABLE id; substitute_for=None.
           2. SAME-LINE — else the newest connected model of the SAME detect_family
              (version-agnostic: glm-5 → glm-5.1); substitute_for=<the omo model id>. If that
              newest same-line model is itself an exactly-available chain entry, this entry is
@@ -120,13 +233,15 @@ class Resolver:
         req_top_variant = requirement.get("variant")  # top-level variant (presently always empty)
         fallback_chain = requirement.get("fallbackChain", [])
 
-        # Models that appear EXACTLY in this chain AND are connected: never used as a
-        # same-line substitute — each is represented by its own (exact) entry instead.
+        # Concrete available ids that fill SOME chain entry (exactly, or via a date/sub-tag
+        # match): never reused as a same-line substitute — each is its own (exact) row instead.
         # Entry ids run through _canonical_omo_id first (k2p5 → kimi-k2.5; see _OMO_MODEL_ALIASES).
-        exact_chain_models = {
-            self._canonical_omo_id(e["model"]) for e in fallback_chain
-            if e.get("model") and self.catalog.providers_for(self._canonical_omo_id(e["model"]))
-        }
+        exact_chain_models: set = set()
+        for e in fallback_chain:
+            if e.get("model"):
+                filled = self._resolve_available(self._canonical_omo_id(e["model"]))
+                if filled is not None:
+                    exact_chain_models.add(filled)
 
         rows: list = []
         seen_keys: set = set()  # resolved 'provider/model' — dedup within the chain
@@ -145,9 +260,10 @@ class Resolver:
             else:
                 variant = None
 
-            # 1. Exact → 2. same-line substitute → 3. skip.
-            if self.catalog.providers_for(model_id):
-                resolved_model = model_id
+            # 1. Exact (incl. date/sub-tag match) → 2. same-line substitute → 3. skip.
+            filled = self._resolve_available(model_id)
+            if filled is not None:
+                resolved_model = filled
                 substitute_for = None
             else:
                 resolved_model = self._same_line_match(model_id)
@@ -193,10 +309,13 @@ class Resolver:
         to first-seen (catalog order). Returns None when the omo model has no family (never
         substitute blindly across unknown ids) or no connected model shares its family.
         Returns the TRUE newest including chain entries — `candidates()` decides whether that
-        match (when it is itself an exact chain entry) means 'defer to its own exact row'."""
+        match (when it is itself an exact chain entry) means 'defer to its own exact row'.
+        Claude carve-out: within `claude-non-opus` (which lumps haiku AND sonnet) a substitute
+        must also share the SIZE token, so a haiku entry is never filled by a sonnet."""
         target_fam = self.suggestions.detect_family(model_id)
         if target_fam is None:
             return None
+        target_size = _claude_size(model_id) if target_fam.family == "claude-non-opus" else None
         same: list = []
         seen: set = set()
         for prov in self.catalog.connected:
@@ -205,6 +324,8 @@ class Resolver:
                     continue
                 fam = self.suggestions.detect_family(m)
                 if fam is not None and fam.family == target_fam.family:
+                    if target_size is not None and _claude_size(m) != target_size:
+                        continue  # haiku != sonnet: same coarse family, different product line
                     seen.add(m)
                     same.append(m)
         if not same:

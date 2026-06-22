@@ -293,9 +293,15 @@ oModel/
   picking the row (no `p`-cycling).
 - **`candidates(target)`:** one pick list — a single filtered pass over the `fallbackChain`, in
   chain (priority) order. For each entry: **(1) exact** — a connected provider serves the entry's
-  model verbatim → that model (`substitute_for=None`); **(2) same-line** —
+  model, tolerating `.`/`-` spelling and a trailing **date stamp / sub-version tag** (a provider's
+  `claude-haiku-4-5-20251001` or `claude-sonnet-4-8-jibao` fills the bare `claude-haiku-4-5` /
+  `claude-sonnet-4-8`) → that **concrete available id** (`substitute_for=None`). A real modifier
+  token omo itself uses (`mini`/`fast`/`nano`/`flash`/…, derived from the chain ids) is *not*
+  stripped, and a short trailing digit stays a version (`glm-5.1` ≠ `glm-5`); **(2) same-line** —
   else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
-  `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen)
+  `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen) — except within the coarse
+  `claude-non-opus` family (haiku **and** sonnet) the substitute must also share the **size** token,
+  so a haiku slot is never filled by a sonnet —
   (`substitute_for=<omo id>`); if that newest same-line model is itself an exactly-available chain
   entry, this entry is **skipped** (deferred to that model's own exact row) — never demoted to an
   *older* same-line model (so an unavailable `minimax-m3` resolves to the newest `minimax-m2.7` you
