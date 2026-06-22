@@ -7,7 +7,7 @@ on:
       omo_ref:
         description: "oh-my-openagent ref to check out (branch, tag, or SHA)"
         required: false
-        default: "main"
+        default: "dev"
   # Or run on a schedule: weekly on Mondays
   schedule:
     - cron: "0 6 * * 1"
@@ -25,8 +25,14 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: code-yeongyu/oh-my-openagent
-          ref: ${{ github.event.inputs.omo_ref || 'main' }}
+          ref: ${{ github.event.inputs.omo_ref || 'dev' }}
           path: oh-my-openagent
+          # The extractor only reads packages/model-core/src (a self-contained
+          # closure, ~240 KB) plus the root package.json. Sparse-checkout (cone
+          # mode also keeps root files) avoids materializing the whole repo on
+          # the runner; the default depth=1 already skips history.
+          sparse-checkout: |
+            packages/model-core
 
       - name: Set up bun
         uses: oven-sh/setup-bun@v2
@@ -63,7 +69,7 @@ jobs:
           title: "chore: refresh omo-suggestions.json"
           body: |
             Automated refresh of `src/omodel/data/omo-suggestions.json` from the latest
-            oh-my-openagent source (${{ github.event.inputs.omo_ref || 'main' }}).
+            oh-my-openagent source (${{ github.event.inputs.omo_ref || 'dev' }}).
 
             Review the diff before merging.
           commit-message: "chore: refresh omo-suggestions.json from omo"
