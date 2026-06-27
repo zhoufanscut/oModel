@@ -121,6 +121,44 @@ class TestIsolation:
         assert h.current_state() == {"d": {"k": "v"}}  # stored bottom still pristine
 
 
+class TestAux:
+    """The optional `aux` companion snapshot (app.py stores _custom_rows there) rides each entry
+    so out-of-cfg state moves in lockstep with undo/redo."""
+
+    def test_aux_defaults_to_empty_dict(self):
+        h = History({"x": 1})
+        assert h.current_aux() == {}                 # no aux stored → {}, not None
+        h.push({"x": 2}, "set")                      # push without aux
+        assert h.current_aux() == {}
+
+    def test_aux_travels_with_undo_redo(self):
+        h = History({"x": 0})
+        h.push({"x": 1}, "add", aux={"t": [{"model": "m"}]})
+        assert h.current_aux() == {"t": [{"model": "m"}]}
+        h.undo()                                     # back to the pre-add entry
+        assert h.current_aux() == {}                 # typed row is gone alongside the cfg value
+        h.redo()
+        assert h.current_aux() == {"t": [{"model": "m"}]}  # and returns on redo
+
+    def test_aux_is_deep_copied_in_and_out(self):
+        payload = {"t": [{"model": "m"}]}
+        h = History({"x": 0})
+        h.push({"x": 1}, "add", aux=payload)
+        payload["t"].append({"model": "other"})      # mutate the dict handed to push
+        got = h.current_aux()
+        got["t"].append({"model": "tampered"})        # mutate the returned snapshot
+        assert h.current_aux() == {"t": [{"model": "m"}]}  # stored aux pristine in both directions
+
+    def test_clear_aux_wipes_all_entries(self):
+        h = History({"x": 0}, aux={"t": [{"model": "init"}]})
+        h.push({"x": 1}, "add", aux={"t": [{"model": "m"}]})
+        h.clear_aux()
+        assert h.current_aux() == {}
+        h.undo()
+        assert h.current_aux() == {}                  # earlier entries wiped too
+        assert h.current_state() == {"x": 0}          # cfg states + cursor untouched
+
+
 class TestLimit:
     def test_cap_drops_oldest_and_keeps_cursor_valid(self):
         h = History({"n": 0}, limit=3)

@@ -858,10 +858,11 @@ class OModelApp(App):
         # the resolver (+ merged _custom_rows) on a cache miss. Dropped by a refresh AND a
         # state restore (undo/redo), since the `●` current-pick depends on cfg.
         self._rows: dict = {}
-        # Durable per-target store of models typed in the add-model modal (off-chain picks),
-        # keyed by target id. Merged into _build_rows so a typed model stays a pickable row.
-        # Deliberately survives undo/redo (unlike _rows) so redoing an add-model brings its row
-        # back; only a refresh clears it (its stored availability ⚠ would be stale).
+        # Per-target store of models typed in the add-model modal (off-chain picks), keyed by
+        # target id. Merged into _build_rows so a typed model stays a pickable row. Snapshotted
+        # into the undo history alongside cfg (as each entry's `aux`, via _record) and restored by
+        # _restore_state, so it moves in lockstep with undo/redo: undoing an add-model drops its
+        # row, redoing brings it back. A refresh clears it (stored availability ⚠ would be stale).
         self._custom_rows: dict = {}
         # The target id currently shown in the right pane.
         self._current_target: Optional[str] = None
@@ -1059,8 +1060,8 @@ class OModelApp(App):
             except CatalogUnavailable:
                 rows = []
         # Re-merge session-added custom rows (typed in the add-model modal) the chain doesn't
-        # already cover, so a typed model stays pickable across undo/redo — _custom_rows is the
-        # durable store; this cache and the resolver list are rebuilt around it.
+        # already cover, so a typed model stays a pickable row — _custom_rows is the store
+        # (snapshotted with the undo history); this cache and the resolver list rebuild around it.
         existing = {f"{r['provider']}/{r['model']}" for r in rows}
         for cr in self._custom_rows.get(target, []):
             key = f"{cr['provider']}/{cr['model']}"
@@ -1352,8 +1353,11 @@ class OModelApp(App):
     def _record(self, label: str) -> None:
         """Snapshot the current cfg into the undo history under `label` (a no-op if nothing
         actually changed) and refresh the hint bar so `u undo` appears. Call after ANY cfg
-        mutation — this single chokepoint is what makes every operation undoable."""
-        if self._history.push(self.cfg, label):
+        mutation — this single chokepoint is what makes every operation undoable. The current
+        `_custom_rows` (off-chain typed models) rides along as the entry's `aux` so a restore
+        moves typed rows in lockstep with cfg — undoing an add-model drops its row, not just its
+        assignment."""
+        if self._history.push(self.cfg, label, aux=self._custom_rows):
             self._render_hints()
 
     def _stage_row(self, target: str, row: dict, label: str) -> None:
@@ -1573,9 +1577,14 @@ class OModelApp(App):
         (detail + the `●` current-pick marker). Mirrors the per-session cache handling a
         refresh does, minus the catalog rebuild — the candidate rows' `●` follows cfg, so the
         per-target row cache is dropped and rebuilt; `_cand_choice` (highlight memory) and
-        `_detail_cache` (keyed by model id) are unaffected and kept."""
+        `_detail_cache` (keyed by model id) are unaffected and kept. `_custom_rows` IS restored
+        (from the entry's `aux`) so typed off-chain rows move in lockstep with undo/redo."""
         self.cfg = state
-        self._rows.clear()  # resolver rows rebuild; _custom_rows persists so typed rows return
+        self._rows.clear()  # resolver rows rebuild around the restored _custom_rows below
+        # Move typed (off-chain) rows in lockstep with undo/redo: load the _custom_rows snapshot
+        # this cfg state was pushed with, so undoing an add-model drops its row and redoing brings
+        # it back — not just the bare cfg value. (Empty {} for entries pushed before any add.)
+        self._custom_rows = self._history.current_aux()
         # Pick a target that still exists after the restore: a sub-target whose node is gone
         # (an undone add-sub) falls back to its parent agent; top-level agent/category rows
         # always exist (they come from suggestions, not cfg).
@@ -1657,9 +1666,11 @@ class OModelApp(App):
         # Drop every per-session cache so the refreshed availability shows everywhere. Any
         # in-flight detail fetch finishes on its own and resets _detail_fetching; bumping the
         # generation makes it discard its (now stale) result rather than re-populating here.
-        # _custom_rows is dropped too: a typed model's stored availability ⚠ is now stale.
+        # _custom_rows is dropped too (a typed model's stored availability ⚠ is now stale); also
+        # wipe the history's aux snapshots so undo/redo can't resurrect a pre-refresh typed row.
         self._rows.clear()
         self._custom_rows.clear()
+        self._history.clear_aux()
         self._detail_cache.clear()
         self._detail_generation += 1
         self._render_providers()

@@ -417,9 +417,12 @@ oModel/
   current one. Entry 0 is the loaded cfg. `push(state, label)` appends a deep copy (and is a
   **no-op when `state == current`**, so a re-pick of the same model makes no junk entry),
   truncating any redo tail first (standard undo semantics). `undo()`/`redo()` move the cursor
-  and return `(state, label)`. A `limit` (200) caps memory for long sessions. Snapshots are
-  deep-copied **in and out** so the app's live cfg and history never alias. Pure data, no
-  Textual — unit-tested in isolation.
+  and return `(state, label)`. Each entry also carries an optional **`aux`** companion snapshot
+  (`push(state, label, aux=)`, read back via `current_aux()`) for state that must move with the
+  entry but isn't cfg — app.py stores `_custom_rows` there; `clear_aux()` wipes it across all
+  entries on a refresh. Change detection stays cfg-only (`aux` never on its own makes an entry).
+  A `limit` (200) caps memory for long sessions. Snapshots are deep-copied **in and out** so the
+  app's live cfg and history never alias. Pure data, no Textual — unit-tested in isolation.
 - **App integration (`app.py`):** every cfg mutation routes through one chokepoint — `_record`
   (and `_stage_row`, which calls it) — so **set / clear / variant / add-model / add-sub** are
   all undoable. `u` → `action_undo`, `ctrl+r` → `action_redo` (vim-style; distinct from `r`
@@ -428,9 +431,12 @@ oModel/
   panes (a sub-target row appears/vanishes on the left; the `●` current-pick follows cfg on the
   right; a vanished sub-target falls back to its parent agent, repopulated via `_populate_targets(
   select=)` so no stale intermediate highlight fires). The per-target row cache is dropped and
-  rebuilt (like a refresh); `_cand_choice`/`_detail_cache`/`_custom_rows` are kept — so redoing an
-  add-model brings its typed row back, not just the bare cfg value (off-chain typed models live in
-  `_custom_rows`, merged into `_build_rows`; only a refresh clears them).
+  rebuilt (like a refresh); `_cand_choice`/`_detail_cache` are kept. `_custom_rows` (off-chain
+  typed models, merged into `_build_rows`) is **snapshotted into the history alongside cfg** (each
+  entry's `aux`, via `_record`) and restored here, so it moves in lockstep with undo/redo —
+  **undoing an add-model drops its typed row** and redoing brings it back, not just the bare cfg
+  value. A refresh still clears it (and the stored `aux` snapshots, via `clear_aux()`), since the
+  stored availability ⚠ is now stale.
 - **Dirtiness is computed, not flagged:** `_is_dirty()` = `serialize(cfg) != _saved_text` (the
   text last written/loaded). So undo back to the saved state quits without a prompt, and an
   empty `ultrawork`/`compaction` sub-object — which `serialize()` drops — is **undoable but not

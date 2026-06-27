@@ -107,11 +107,14 @@ The stub files ARE the signatures; implement their bodies. Summary:
   IDs as documented in `app.py`'s docstring. Every cfg mutation routes through `_record`/`_stage_row`
   (which push onto `History`); `u` undo / `ctrl+r` redo; dirtiness is `_is_dirty()` (serialize vs
   `_saved_text`), not a flag.
-- `history.py`: `@dataclass HistoryEntry(state, label)`; `class History(initial, label="loaded",
-  limit=200)` with `.push(state, label)->bool` (no-op when unchanged), `.undo()`/`.redo()->
-  (state, label)|None`, `.current_state()->dict`, `.matches_current(state)->bool`, and the
-  `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. Pure data; snapshots deep-copied
-  in and out. Consumed only by `app.py`.
+- `history.py`: `@dataclass HistoryEntry(state, label, aux=None)`; `class History(initial,
+  label="loaded", limit=200, aux=None)` with `.push(state, label, aux=None)->bool` (no-op when
+  `state` unchanged; `aux` rides along), `.undo()`/`.redo()->(state, label)|None`,
+  `.current_state()->dict`, `.current_aux()->dict` (the cursor entry's `aux`, `{}` if none),
+  `.clear_aux()->None` (drop all entries' `aux`), `.matches_current(state)->bool`, and the
+  `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. `aux` is an out-of-cfg companion
+  snapshot (app.py stores `_custom_rows`). Pure data; snapshots deep-copied in and out. Consumed
+  only by `app.py`.
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint).
 - `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
   data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).

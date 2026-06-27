@@ -1203,10 +1203,11 @@ def test_pilot_undo_survives_save(pilot_config):
     asyncio.run(_run())
 
 
-def test_pilot_redo_keeps_custom_added_row(pilot_config):
-    """A model typed in the add-model modal is an off-chain row stored in _custom_rows, which
-    survives undo/redo: after add → undo → redo, the typed model is the assignment AND comes
-    back as a `●`-marked candidate row (not just a bare cfg value)."""
+def test_pilot_undo_redo_moves_custom_added_row_in_lockstep(pilot_config):
+    """A model typed in the add-model modal is an off-chain row stored in _custom_rows, which is
+    snapshotted into the undo history (aux) and so moves in lockstep with undo/redo: after add it
+    is a `●`-marked candidate row; undo drops BOTH the assignment AND the row (not just the cfg
+    value); redo brings the assignment AND the row back."""
     cfg_path, _ = pilot_config
 
     def _labels(cands):
@@ -1234,9 +1235,13 @@ def test_pilot_redo_keeps_custom_added_row(pilot_config):
                 f"typed model must be a ●-marked row: {labels}"
             )
 
-            await pilot.press("u")  # undo the add → assignment reverts
+            await pilot.press("u")  # undo the add → assignment AND the typed row revert
             await pilot.pause()
             assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+            labels = _labels(cands)
+            assert not any("zzz-custom" in s for s in labels), (
+                f"undo of an add-model must drop the typed row, not just the assignment: {labels}"
+            )
 
             await pilot.press("ctrl+r")  # redo → typed model + its row return
             await pilot.pause()
