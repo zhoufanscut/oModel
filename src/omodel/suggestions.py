@@ -51,14 +51,16 @@ class Suggestions:
         claude-non-opus.)"""
         normalized = normalize_model_id(model_id)
         for fam in self.families:
-            # Test pattern BEFORE includes within each entry.
-            if fam.pattern is not None:
-                if fam.pattern.search(normalized):
+            # Within each family: pattern first, THEN includes (omo parity). A family may
+            # carry BOTH (kimi-thinking does), and omo checks `includes` even when a `pattern`
+            # is present — so `includes` must NOT be gated behind `pattern is None`, or an
+            # include the pattern fails to cover would be silently skipped and the id would
+            # fall through to the wrong family downstream.
+            if fam.pattern is not None and fam.pattern.search(normalized):
+                return fam
+            for inc in fam.includes:
+                if inc in normalized:
                     return fam
-            else:
-                for inc in fam.includes:
-                    if inc in normalized:
-                        return fam
         return None
 
     def vendor_for(self, model_id: str) -> "Optional[str]":

@@ -5,8 +5,10 @@ Fixtures use REAL omo suggestion IDs from the bundled data/omo-suggestions.json.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
-from omodel.suggestions import load, normalize_model_id
+from omodel.suggestions import Family, Suggestions, load, normalize_model_id
 
 
 @pytest.fixture(scope="module")
@@ -178,3 +180,65 @@ class TestBundledSuggestionsLoad:
                 assert hasattr(fam.pattern, "search"), (
                     f"family '{fam.family}' pattern is not a compiled re.Pattern"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Faithful-port guard: a family may carry BOTH `pattern` and `includes`.
+# omo (detectHeuristicModelFamily) tests pattern THEN includes for EVERY family
+# (two independent `if`s), so `includes` is reachable even when a `pattern` is
+# present. The bundled data's only both-fields family (kimi-thinking) has a
+# pattern that already covers its includes, so no real id can expose a
+# regression — these synthetic families lock the structure so a future
+# `--refresh-omo` (e.g. an include the pattern doesn't cover) can't silently rot
+# detect_family back into the pattern-XOR-includes shape.
+# ---------------------------------------------------------------------------
+
+class TestPatternAndIncludesBothChecked:
+
+    @staticmethod
+    def _fam(name, pattern=None, includes=()):
+        return Family(
+            family=name,
+            pattern=re.compile(pattern) if pattern is not None else None,
+            includes=list(includes),
+            variants=[],
+            reasoning_efforts=[],
+            reasoning_effort_aliases={},
+            supports_thinking=False,
+        )
+
+    def _mk(self, *families):
+        return Suggestions(
+            meta={}, agents={}, categories={}, families=list(families), known_variants=[]
+        )
+
+    def test_includes_checked_even_when_pattern_present(self):
+        """A both-fields family: an id matching `includes` but NOT `pattern` still resolves
+        to that family (omo parity) — it must not fall through to a later family. This is the
+        exact regression: the old `if pattern / else includes` returned 'widget' here."""
+        both = self._fam(
+            "widget-thinking",
+            pattern=r"widget-(?:thinking|think)",
+            includes=["widget-thinking", "widget-reasoner"],
+        )
+        later = self._fam("widget", pattern=r"widget")  # catches it iff includes are skipped
+        sugg = self._mk(both, later)
+        # 'widget-reasoner' matches the include but NOT the pattern.
+        fam = sugg.detect_family("widget-reasoner-v2")
+        assert fam is not None and fam.family == "widget-thinking"
+
+    def test_pattern_still_wins_first_within_family(self):
+        """Pattern is tested before includes: an id matching the pattern resolves via it."""
+        both = self._fam(
+            "widget-thinking",
+            pattern=r"widget-(?:thinking|think)",
+            includes=["widget-reasoner"],
+        )
+        assert self._mk(both).detect_family("widget-thinking-x").family == "widget-thinking"
+
+    def test_earlier_family_still_wins_over_later_includes(self):
+        """Ordering is preserved: an earlier family's pattern beats a later family that would
+        also match via includes — the includes check adds reachability, not reordering."""
+        first = self._fam("alpha", pattern=r"shared")
+        second = self._fam("beta", includes=["shared"])
+        assert self._mk(first, second).detect_family("x-shared-y").family == "alpha"
