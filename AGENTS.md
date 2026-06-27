@@ -24,7 +24,7 @@ pytest tests/ -v --tb=short      # full suite
 pytest tests/ -x -q              # fast, stop on first failure
 pytest tests/test_resolve.py -v                              # one file
 pytest tests/test_catalog_parse.py::TestVerboseParsing -v    # one class
-pytest tests/test_detect_family.py::TestBundledSuggestionsLoad::test_14_families -v   # one test
+pytest tests/test_detect_family.py::TestBundledSuggestionsLoad::test_15_families -v   # one test
 
 # Run the app / CLI (also `python -m omodel ...`)
 omodel                           # launch TUI
@@ -71,7 +71,7 @@ data/omo-suggestions.json ──────────────► suggesti
   corrupt/expired → miss; write errors swallowed.
 - **`suggestions.py`** — "what omo suggests." Loads the bundled JSON; `detect_family()` is a faithful
   port of omo's `detectHeuristicModelFamily` (ordered, pattern-before-includes, first match wins — order
-  matters for parity). `FAMILY_VENDOR` is a hardcoded 14-family→vendor map (NOT from omo) used for
+  matters for parity). `FAMILY_VENDOR` is a hardcoded 15-family→vendor map (NOT from omo) used for
   gateway classification.
 - **`resolve.py`** — the core logic. `candidates(target)` is the heart: a single filtered pass over
   omo's `fallbackChain` keeping only models you can run — **exact** match, else newest **same-line

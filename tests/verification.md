@@ -104,7 +104,7 @@ python -m pytest tests/test_detect_family.py -v
 ## Check 5 — Bundled suggestions load
 
 **Goal:** `importlib.resources` loads `omo-suggestions.json` with no omo checkout present;
-counts match the committed data (11 agents, 8 categories, 14 families, 9 knownVariants).
+counts match the committed data (11 agents, 8 categories, 15 families, 9 knownVariants).
 
 ```sh
 python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v

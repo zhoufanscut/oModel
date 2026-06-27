@@ -1,7 +1,7 @@
 """Bundled omo suggestion data + family heuristics.  DESIGN.md §suggestions.py.
 
 FROZEN CONTRACT — owned by the Core-logic specialist. `FAMILY_VENDOR` below is part of
-the contract (verified complete: its 14 keys == the 14 families in the bundled data).
+the contract (verified complete: its 15 keys == the 15 families in the bundled data).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Optional
 
-# Hardcoded in oModel (omo has NO such table). 14-family → vendor map (DESIGN §suggestions.py).
+# Hardcoded in oModel (omo has NO such table). 15-family → vendor map (DESIGN §suggestions.py).
 # Models whose detect_family is None contribute NO vendor — do not invent a family for them.
 FAMILY_VENDOR = {
     "claude-opus": "anthropic", "claude-non-opus": "anthropic",
@@ -20,7 +20,7 @@ FAMILY_VENDOR = {
     "gemini": "google", "grok": "xai",
     "kimi-thinking": "moonshot", "kimi": "moonshot",
     "glm": "zhipu", "minimax": "minimax", "deepseek": "deepseek",
-    "mistral": "mistral", "llama": "meta",
+    "qwen": "alibaba", "mistral": "mistral", "llama": "meta",
 }
 
 

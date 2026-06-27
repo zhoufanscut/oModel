@@ -89,7 +89,7 @@ prefix and a valid variant, and saves a clean config.
   comes from the **bundled family registry only** (decision #14); **never read `--verbose.variants`**.
 - **What omo suggests (bundled, build-time):** `omo-suggestions.json`, generated from
   `~/source/oh-my-openagent/packages/model-core/src/` (verified importable & serializable under bun:
-  11 agents, 8 categories, 14 families, 9 variants). Schema the app **consumes**:
+  11 agents, 8 categories, 15 families, 9 variants). Schema the app **consumes**:
   ```json
   { "meta": {"omoVersion":"","omoCommit":"","generatedAt":""},
     "agents":   {"<name>": {"fallbackChain":[{"providers":[],"model":"","variant":""}], "variant":"",
@@ -258,10 +258,11 @@ oModel/
   `providers` array (omo's per-model preference order) is **kept** for the gateway tie-break in
   `resolve_prefix`.
 - **`FAMILY_VENDOR` — hardcoded dict in `suggestions.py` (NOT from omo; omo has no such table).** The
-  complete 14-family → vendor map used by `vendors_served`. The authoritative table is the
+  complete 15-family → vendor map used by `vendors_served`. The authoritative table is the
   `FAMILY_VENDOR` dict in `src/omodel/suggestions.py` — read it there; not duplicated here (it drifts).
   `vendor(family) = FAMILY_VENDOR.get(family)` → `None` for unknown/None. Models whose `detect_family`
-  is `None` (opencode's `big-pickle`, `qwen3.x-plus`, `*-free`, `nemotron-*` — no omo family)
+  is `None` (opencode's `big-pickle`, `*-free`, `nemotron-*` — no omo family; note omo 4.13 added a
+  `qwen` family, so `qwen3.x-plus` now detects `qwen`→`alibaba` and is no longer `None`)
   contribute **no** vendor and are skipped in `vendors_served`; **do not invent a family for them**.
 
 ### `resolve.py` — core logic

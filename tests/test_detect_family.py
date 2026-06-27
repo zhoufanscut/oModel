@@ -156,8 +156,8 @@ class TestBundledSuggestionsLoad:
     def test_8_categories(self, sugg):
         assert len(sugg.categories) == 8, f"Expected 8 categories, got {len(sugg.categories)}: {list(sugg.categories)}"
 
-    def test_14_families(self, sugg):
-        assert len(sugg.families) == 14, f"Expected 14 families, got {len(sugg.families)}"
+    def test_15_families(self, sugg):
+        assert len(sugg.families) == 15, f"Expected 15 families, got {len(sugg.families)}"
 
     def test_9_known_variants(self, sugg):
         assert len(sugg.known_variants) == 9, f"Expected 9 knownVariants, got {sugg.known_variants}"

@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.11.1",
-    "omoCommit": "b949c3478684261bdda861bf921acba03856e19c",
-    "generatedAt": "2026-06-19T11:13:20.157Z"
+    "omoVersion": "4.13.0",
+    "omoCommit": "f31c735a5c5318226510e5755dcb5425ddc94352",
+    "generatedAt": "2026-06-27T00:59:43.678Z"
   },
   "agents": {
     "sisyphus": {
@@ -79,7 +79,6 @@
           "providers": [
             "openai",
             "github-copilot",
-            "venice",
             "opencode",
             "vercel"
           ],
@@ -90,7 +89,6 @@
       "requiresProvider": [
         "openai",
         "github-copilot",
-        "venice",
         "opencode",
         "vercel"
       ],
@@ -654,7 +652,6 @@
           "providers": [
             "openai",
             "github-copilot",
-            "venice",
             "opencode",
             "vercel"
           ],
@@ -1096,6 +1093,17 @@
         "medium",
         "high"
       ],
+      "reasoningEfforts": [],
+      "reasoningEffortAliases": {},
+      "supportsThinking": false
+    },
+    {
+      "family": "qwen",
+      "pattern": null,
+      "includes": [
+        "qwen"
+      ],
+      "variants": [],
       "reasoningEfforts": [],
       "reasoningEffortAliases": {},
       "supportsThinking": false
