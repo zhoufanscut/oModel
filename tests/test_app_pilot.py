@@ -1638,6 +1638,41 @@ def test_pilot_addmodal_synthetic_row_dedup(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_addmodal_backspace_after_tab_falls_back_to_fuzzy(pilot_config):
+    """Tab-fill then backspace falls back to the fuzzy matches — NOT a synthetic '⚠ unavailable'
+    row for the half-typed text. Repro: type 'glm' → Tab fills 'zhipuai/glm-5' → backspace leaves
+    'zhipuai/glm-' (still a subsequence of 'zhipuai/glm-5'). The synth row is offered ONLY when
+    nothing fuzzy-matches, so here the list stays the warn-free fuzzy hit and a reflexive Enter is
+    safe."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"
+            await pilot.pause()
+            await pilot.press("tab")  # fills the highlighted dedicated-first pair
+            await pilot.pause()
+            assert inp.value == "zhipuai/glm-5"
+
+            await pilot.press("backspace")  # → "zhipuai/glm-": a fragment of the available pair
+            await pilot.pause()
+            assert inp.value == "zhipuai/glm-"
+
+            scr = pilot.app.screen
+            cands = scr.query_one("#add-candidates", OptionList)
+            labels = _add_candidate_labels(pilot)
+            # Fell back to fuzzy: the lone warn-free hit, no "use as typed" ⚠ row for "zhipuai/glm-".
+            assert not any("unavailable" in s for s in labels), labels
+            assert len(labels) == 1 and labels[0].startswith("zhipuai/glm-5"), labels
+            assert cands.display and cands.highlighted == 0
+            assert scr._staged is not None and scr._staged["warn"] == [], scr._staged
+            assert (scr._staged["provider"], scr._staged["model"]) == ("zhipuai", "glm-5")
+
+    asyncio.run(_run())
+
+
 def test_pilot_addmodal_provider_name_fuzzy(pilot_config):
     """Fuzzy scores the whole 'provider/model' string, so typing a PROVIDER name surfaces that
     provider's rows and excludes unrelated models."""
@@ -1842,10 +1877,11 @@ def test_pilot_addmodal_bare_known_vs_unknown(pilot_config):
 
 
 def test_pilot_addmodal_mixedcase_typed_duplicate(pilot_config):
-    """F2: the synthetic-row de-dup compares case-insensitively (matching the case-insensitive
-    fuzzy matcher), so a mixed-case typed full id that matches an available pair collapses onto the
-    single canonical lowercase row — no second uppercase 'use as typed' row, and no spurious
-    ⚠ unavailable. The staged row is the canonical zhipuai/glm-5 (warn-free)."""
+    """F2: a mixed-case typed full id that matches an available pair collapses onto the single
+    canonical lowercase row — no second uppercase 'use as typed' row, and no spurious ⚠ unavailable.
+    The synth row is suppressed because ANY fuzzy match suppresses it, and the matcher is
+    case-insensitive (so 'ZHIPUAI/GLM-5' fuzzy-matches 'zhipuai/glm-5'). The staged row is the
+    canonical zhipuai/glm-5 (warn-free)."""
     cfg_path, _ = pilot_config
 
     async def _run():

@@ -53,8 +53,9 @@ Ctrl-P/Ctrl-N) move the list while the Input keeps focus, Tab fills the highligh
 Input, enter chooses the
 highlighted (or, when the list is empty, the validated typed) row. A full provider/model is used verbatim (split on FIRST '/'); a bare id
 is auto-prefixed via resolve_prefix if available, else '⚠ unknown — add a provider/' and enter is
-BLOCKED until qualified; a typed full id that isn't a fuzzy hit appears as a synthetic "use as
-typed" row. VARIANT phase: iff the chosen model's family declares variants, pick one or '(none)';
+BLOCKED until qualified; a typed full id that fuzzy-matches nothing appears as a synthetic "use as
+typed" row (a half-typed fragment that still matches falls back to the fuzzy list, no ⚠ row).
+VARIANT phase: iff the chosen model's family declares variants, pick one or '(none)';
 otherwise it's added immediately (variant None). GPT-only targets filter the list to GPT models.
 Add-sub modal (`a` on an agent): a 2-row OptionList (`#sub-list`, IDs 'sub:ultrawork' /
 'sub:compaction') naming each kind + what it's for; a kind already on the agent is disabled
@@ -152,9 +153,10 @@ class AddModelModal(ModalScreen):
     and appears only once you type. ↑↓ (or emacs Ctrl-P/Ctrl-N) move the list highlight while the
     Input keeps focus and keeps filtering; Tab fills the highlighted pair
     into the Input (cursor to end); Enter chooses the highlighted pair, or — when the list is empty
-    — the validated typed text; Esc cancels. A full `provider/model` you type that isn't already a
-    fuzzy hit is offered as a synthetic "use as typed" row, so custom / unavailable ids still work;
-    a bare unknown id yields no row and Enter is a no-op (still blocked). For a GPT-only target
+    — the validated typed text; Esc cancels. A full `provider/model` you type that fuzzy-matches
+    nothing is offered as a synthetic "use as typed" row, so custom / unavailable ids still work; a
+    half-typed fragment that still fuzzy-matches just shows those matches (no ⚠ row); a bare unknown
+    id yields no row and Enter is a no-op (still blocked). For a GPT-only target
     (Hephaestus) the fuzzy list is filtered to GPT models, and a typed non-GPT id stays blocked.
 
     VARIANT PHASE — iff the chosen model's family declares variants (_family_variants), pick one,
@@ -355,11 +357,13 @@ class AddModelModal(ModalScreen):
         """Rebuild #add-candidates from the fuzzy matches for `text`. Type-to-search: an EMPTY
         query shows NO list at all (hidden, nothing staged) so opening the modal stays instant even
         with hundreds of available models, and a reflexive Enter is a no-op. A non-empty query
-        builds the fuzzy list — prepending a synthetic "use as typed" row for a full provider/model
-        that validates and isn't already a hit (custom / unavailable ids), capped at
-        _MAX_CANDIDATES — shows it, and auto-highlights the top row for quick-select. A non-empty
-        query that matches nothing hides the list and shows the typed-path preview (e.g. the
-        bare-unknown block message)."""
+        builds the fuzzy list — or, ONLY when nothing fuzzy-matches, a single synthetic "use as
+        typed" row for a full provider/model that validates (custom / unavailable ids) — capped at
+        _MAX_CANDIDATES, shows it, and auto-highlights the top row for quick-select. A typed string
+        that still fuzzy-matches a model you have (e.g. a Tab-filled id after a backspace) falls back
+        to those matches, never an ⚠-unavailable synth row for the half-typed text. A non-empty query
+        that neither matches anything nor validates hides the list and shows the typed-path preview
+        (e.g. the bare-unknown block message)."""
         cands = self.query_one("#add-candidates", OptionList)
         preview = self.query_one("#add-preview", Static)
 
@@ -378,14 +382,16 @@ class AddModelModal(ModalScreen):
         typed_row, typed_preview, typed_ok = self._build_row(text)
 
         rows = fuzzy
-        if typed_ok and typed_row is not None and "/" in text:
-            # Suppress the synthetic row when it duplicates a fuzzy hit — compared CASE-
-            # INSENSITIVELY (the matcher is case-insensitive), so a mixed-case typed id like
-            # ZHIPUAI/GLM-5 collapses onto the canonical zhipuai/glm-5 instead of adding a second
-            # (uppercase, spuriously ⚠ unavailable) row. A genuinely-custom id keeps its case.
-            key = (typed_row["provider"].lower(), typed_row["model"].lower())
-            if not any((r["provider"].lower(), r["model"].lower()) == key for r in fuzzy):
-                rows = [typed_row] + fuzzy
+        # Synthetic "use as typed" row — ONLY when nothing fuzzy-matched. A typed string that DOES
+        # fuzzy-match is a mid-edit fragment of a model you have (Tab fills the full
+        # `provider/model`, then a backspace leaves "zhipuai/glm-", still a subsequence of
+        # "zhipuai/glm-5"): fall back to those fuzzy matches, don't lead with an "⚠ unavailable" row
+        # for the half-typed text. With no fuzzy match the typed string is a genuinely novel custom
+        # / unavailable id and this synth row is its only way to commit. (No case-insensitive dedup
+        # needed any more: an available id is itself a fuzzy hit, so this branch can't duplicate one
+        # — a mixed-case ZHIPUAI/GLM-5 matches zhipuai/glm-5 and so takes the fuzzy path.)
+        if not fuzzy and typed_ok and typed_row is not None and "/" in text:
+            rows = [typed_row]
 
         rows = rows[: self._MAX_CANDIDATES]  # bound the per-keystroke render cost
         self._candidate_rows = rows

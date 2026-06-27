@@ -525,8 +525,15 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   highlighted/staged pair, or — when the list is empty — the validated typed text; `esc` cancels. A full
   `provider/model` → used **verbatim** (split on the *first* `/`); a bare id → auto-prefixed via
   `resolve_prefix` **if available**, else `⚠ unknown — add a provider/` and `enter` is **blocked**; a
-  typed full id that isn't already a fuzzy hit appears as a synthetic **"use as typed"** row (so
-  custom / `⚠ unavailable` ids still work — warn-but-allow, decision #5). A **GPT-only** target
+  typed full id that **fuzzy-matches nothing** appears as a synthetic **"use as typed"** row (so
+  custom / `⚠ unavailable` ids still work — warn-but-allow, decision #5). A half-typed fragment that
+  *still* fuzzy-matches (e.g. a Tab-filled id after a backspace — `zhipuai/glm-` ⊂ `zhipuai/glm-5`)
+  falls back to those matches rather than leading with that ⚠-unavailable synth row. *(Trade-off:
+  the synth row is offered **only** when nothing fuzzy-matches, so the rare custom id that is itself a
+  subsequence of a longer available pair — e.g. `openrouter/claude` ⊂ `openrouter/anthropic-claude-…`
+  — can't be committed as-typed; it shows the fuzzy matches instead. Accepted to kill the mid-edit
+  footgun: a longer/distinct custom id is never a subsequence of a shorter available one, so the
+  common "add a model I don't have yet" path is unaffected.)* A **GPT-only** target
   (Hephaestus) filters the list to GPT models and still blocks a typed non-GPT id.
   **Variant phase** — *iff* the chosen model's family declares variants (`_family_variants`: strict —
   `fam.variants` or `[]`), `#add-variants` (a `VimOptionList`, IDs `var:<v>` / `var:__none__`) lets you
