@@ -81,6 +81,24 @@ def _build_app(cfg_path: str) -> OModelApp:
     )
 
 
+def _build_app_with(cfg_path: str, catalog: Catalog) -> OModelApp:
+    """Hermetic constructor for tests that need a bespoke Catalog (e.g. a qwen / empty-variants
+    family). Same wiring as _build_app, just an injected catalog."""
+    from omodel import config_io as _config_io
+    from omodel import suggestions as suggestions_mod
+
+    suggestions = suggestions_mod.load()
+    resolver = Resolver.build(catalog, suggestions)
+    cfg, resolved = _config_io.load_config(cfg_path)
+    return OModelApp(
+        catalog=catalog,
+        suggestions=suggestions,
+        resolver=resolver,
+        cfg=cfg,
+        config_path=resolved,
+    )
+
+
 async def _select_target(pilot, option_id: str) -> None:
     """Highlight a target by ID in OptionList#targets, then fire OptionSelected via enter.
     OptionList option IDs contain ':' which is invalid in CSS selectors, so we use
@@ -1272,5 +1290,599 @@ def test_pilot_confirm_modal_diff_scrolls(pilot_config):
             await pilot.press("enter")  # focused Yes button still confirms
             await pilot.pause()
             assert result.get("v") is True, "Enter must still confirm the modal"
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 13: add-model modal — fuzzy model picker + inline variant step
+# ---------------------------------------------------------------------------
+
+
+async def _open_add_modal(pilot, target: str = "agent:sisyphus"):
+    """Select `target`, focus #candidates, and press `a` to open the add-model modal (from
+    #candidates `a` is the add/edit-model modal, not the sub-target chooser). Returns the
+    modal's #add-input."""
+    await _select_target(pilot, target)
+    pilot.app.query_one("#candidates", OptionList).focus()
+    await pilot.pause()
+    await pilot.press("a")
+    await pilot.pause()
+    return pilot.app.screen.query_one("#add-input", Input)
+
+
+def _add_candidate_labels(pilot):
+    cands = pilot.app.screen.query_one("#add-candidates", OptionList)
+    return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+
+def test_pilot_addmodal_fuzzy_filter(pilot_config):
+    """Typing fuzzy-filters #add-candidates to matching provider/model pairs from
+    catalog.available: 'glm' surfaces zhipuai/glm-5 and opencode/glm-5, excluding deepseek-v4-pro."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"
+            await pilot.pause()
+            labels = _add_candidate_labels(pilot)
+            assert any("zhipuai/glm-5" in s for s in labels), labels
+            assert any("opencode/glm-5" in s for s in labels), labels
+            assert not any("deepseek-v4-pro" in s for s in labels), labels
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_empty_query_shows_no_list(pilot_config):
+    """Type-to-search: opening the modal (empty input) renders NO candidate list — the browse dump
+    is intentionally not built, so open stays instant. The list is hidden, nothing is staged, and
+    Matcher('') is never constructed (it raises). The list appears only once you type."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            assert inp.value == ""
+            scr = pilot.app.screen
+            cands = scr.query_one("#add-candidates", OptionList)
+            assert cands.option_count == 0, "empty query must render no rows (type-to-search)"
+            assert not cands.display, "the candidate list stays hidden until you type"
+            assert scr._staged is None, "nothing is staged on open"
+
+            # Typing surfaces the fuzzy list.
+            inp.value = "glm"
+            await pilot.pause()
+            assert cands.option_count > 0 and cands.display, "typing surfaces matches"
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_tab_fills_input(pilot_config):
+    """Tab fills the highlighted provider/model pair into #add-input (cursor to end)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"
+            await pilot.pause()
+            cands = pilot.app.screen.query_one("#add-candidates", OptionList)
+            assert cands.highlighted is not None, "a fuzzy hit must be highlighted"
+            highlighted = str(cands.get_option_at_index(cands.highlighted).prompt)
+
+            await pilot.press("tab")
+            await pilot.pause()
+            assert inp.value == highlighted, (
+                f"tab must fill the highlighted pair: {inp.value!r} vs {highlighted!r}"
+            )
+            assert inp.value == "zhipuai/glm-5", (
+                "dedicated-first puts zhipuai/glm-5 at the top, so tab fills it"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_ctrl_p_n_navigate_list(pilot_config):
+    """Ctrl-P / Ctrl-N navigate the fuzzy list like ↑/↓ (emacs-style). Ctrl-P must NOT open the
+    App command palette while the modal is open (OModelApp.check_action suppresses that priority
+    binding so the key drives the list instead)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"  # ≥2 matches: zhipuai/glm-5 (row 0, dedicated), opencode/glm-5 (row 1)
+            await pilot.pause()
+            cands = pilot.app.screen.query_one("#add-candidates", OptionList)
+            assert cands.option_count >= 2 and cands.highlighted == 0
+
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            assert cands.highlighted == 1, "Ctrl-N moves the highlight down"
+            assert len(pilot.app.screen_stack) == 2, "Ctrl-N must not open another screen"
+            staged = pilot.app.screen._staged
+            assert (staged["provider"], staged["model"]) == ("opencode", "glm-5"), (
+                "Ctrl-N restages the newly-highlighted row"
+            )
+
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            assert cands.highlighted == 0, "Ctrl-P moves the highlight up"
+            assert len(pilot.app.screen_stack) == 2, (
+                "Ctrl-P must navigate the list, NOT open the command palette"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_select_enters_variant_phase(pilot_config):
+    """Choosing a model whose family declares variants enters the variant phase: #add-variants is
+    visible + focused listing the family's variants + (none); picking one sets the assignment's
+    variant alongside the resolved provider/model."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"
+            await pilot.pause()
+            await pilot.press("enter")  # choose highlighted zhipuai/glm-5 → variant phase
+            await pilot.pause()
+
+            variants = pilot.app.screen.query_one("#add-variants", OptionList)
+            assert variants.display, "variant list must be visible in the variant phase"
+            assert pilot.app.focused is variants, "variant list must be focused"
+            vids = [variants.get_option_at_index(i).id for i in range(variants.option_count)]
+            assert vids == ["var:low", "var:medium", "var:high", "var:__none__"], vids
+
+            variants.highlighted = vids.index("var:high")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert len(pilot.app.screen_stack) == 1, "picking a variant must close the modal"
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "zhipuai/glm-5", node
+            assert node.get("variant") == "high", node
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_variant_skipped_for_familyless(pilot_config):
+    """A model whose family declares no variants (or has no family) skips the variant phase: a
+    single Enter adds it with no variant key. Covers a custom (family-less) id AND a qwen id
+    (a real family whose `variants` list is empty)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        # Custom id (detect_family → None) via the standard harness.
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "openrouter/zzz-custom"  # full provider/model → synthetic "use as typed"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, (
+                "a family-less id must add immediately (no variant phase)"
+            )
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openrouter/zzz-custom", node
+            assert "variant" not in node, f"no variant key for a family-less add: {node}"
+
+        # qwen id (family 'qwen', variants == []) via a bespoke catalog.
+        catalog = Catalog(
+            available={"alibaba": ["qwen-3-max"], "zhipuai": ["glm-5"]},
+            connected=["alibaba", "zhipuai"],
+        )
+        app = _build_app_with(cfg_path, catalog)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "alibaba/qwen-3-max"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, (
+                "a variant-less family (qwen) must add immediately"
+            )
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "alibaba/qwen-3-max", node
+            assert "variant" not in node, f"qwen declares no variants: {node}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_esc_returns_then_cancels(pilot_config):
+    """Esc in the variant phase returns to the model phase (Input visible + focused); a second Esc
+    cancels the modal, leaving the assignment untouched."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            before = pilot.app.cfg["agents"]["sisyphus"].get("model")
+            inp.value = "glm"
+            await pilot.pause()
+            await pilot.press("enter")  # → variant phase
+            await pilot.pause()
+            variants = pilot.app.screen.query_one("#add-variants", OptionList)
+            assert variants.display and pilot.app.focused is variants
+
+            await pilot.press("escape")  # back to the model phase
+            await pilot.pause()
+            inp = pilot.app.screen.query_one("#add-input", Input)
+            assert inp.display, "Esc from the variant phase must restore the Input"
+            assert pilot.app.focused is inp, "the model phase must re-focus the Input"
+            assert not pilot.app.screen.query_one("#add-variants", OptionList).display
+
+            await pilot.press("escape")  # cancel the modal
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "a second Esc must close the modal"
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == before, (
+                "cancel must assign nothing"
+            )
+
+    asyncio.run(_run())
+
+
+def test_addmodal_gpt_filter_fuzzy_rows():
+    """AddModelModal(require_gpt=True)._fuzzy_rows filters to GPT models only (a non-GPT pick is a
+    foot-gun, not a warning); a typed non-GPT full id still stays blocked by _build_row."""
+    from omodel.app import AddModelModal
+    from omodel import suggestions as suggestions_mod
+
+    suggestions = suggestions_mod.load()
+    catalog = Catalog(
+        available={
+            "opencode": ["claude-opus-4-7", "kimi-k2.5", "glm-5", "gpt-5.5"],
+            "deepseek": ["deepseek-v4-pro"],
+            "zhipuai": ["glm-5"],
+            "openai": ["gpt-5.5"],
+        },
+        connected=["opencode", "deepseek", "zhipuai", "openai"],
+    )
+    resolver = Resolver.build(catalog, suggestions)
+
+    # Construct inside a running loop (see test_addmodal_gpt_only_gating: a Textual screen needs a
+    # current event loop on Python 3.9).
+    async def _run():
+        gated = AddModelModal(resolver, suggestions, require_gpt=True)
+        ids = [f"{r['provider']}/{r['model']}" for r in gated._fuzzy_rows("")]
+        assert "openai/gpt-5.5" in ids, ids
+        assert "opencode/gpt-5.5" in ids, ids
+        assert all("gpt" in i.rsplit("/", 1)[-1].lower() for i in ids), ids
+        assert not any(("glm" in i or "kimi" in i or "deepseek" in i) for i in ids), ids
+
+        row, preview, ok = gated._build_row("zhipuai/glm-5")
+        assert not ok and row is None and "GPT" in preview, (preview, ok)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test 14: add-model modal — adversarial / edge cases (tester)
+#
+# These exercise the two-phase picker beyond the happy path: empty catalog,
+# de-dup, provider-name fuzzy match, the GPT gate through the *pushed* modal,
+# esc-back value retention, and three behaviours flagged to the lead as
+# footguns/warts (bare-Enter, mixed-case dup, model-level warn). They assert
+# the ACTUAL behaviour (characterization), so a future change that alters any
+# of them trips here.
+# ---------------------------------------------------------------------------
+
+
+def test_pilot_addmodal_empty_catalog(pilot_config):
+    """Empty catalog (available={}, connected=[]): browse mode shows an empty list with no
+    exception and nothing staged; Tab on the empty list is a no-op (input untouched); typing a
+    full provider/model still stages a synthetic row warned 'unavailable', and Enter adds it."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app_with(cfg_path, Catalog(available={}, connected=[]))
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            scr = pilot.app.screen
+            cands = scr.query_one("#add-candidates", OptionList)
+            # Browse mode over an empty catalog: zero rows, nothing staged, no crash.
+            assert cands.option_count == 0, _add_candidate_labels(pilot)
+            assert scr._staged is None
+
+            # Tab with an empty list must not crash and must not change the input.
+            await pilot.press("tab")
+            await pilot.pause()
+            assert inp.value == ""
+            assert pilot.app.focused is inp, "Tab on empty list keeps focus on the input"
+
+            # A typed full id for a model nobody serves still stages a (warned) row.
+            inp.value = "openrouter/zzz-custom"
+            await pilot.pause()
+            assert cands.option_count == 1, _add_candidate_labels(pilot)
+            assert "unavailable" in _add_candidate_labels(pilot)[0]
+            assert scr._staged is not None and scr._staged["warn"] == ["unavailable"]
+
+            await pilot.press("enter")  # family-less → no variant phase → immediate add
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "family-less id adds with a single Enter"
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openrouter/zzz-custom", node
+            assert "variant" not in node, node
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_synthetic_row_dedup(pilot_config):
+    """A typed full id that IS available appears exactly once: the fuzzy hit is NOT also
+    duplicated by a synthetic 'use as typed' row (the synth row is suppressed when the pair is
+    already a fuzzy match)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "zhipuai/glm-5"  # exactly an available pair
+            await pilot.pause()
+            labels = _add_candidate_labels(pilot)
+            matches = [s for s in labels if s.startswith("zhipuai/glm-5")]
+            assert len(matches) == 1, f"available id must appear once, not duplicated: {labels}"
+            # The single row carries no warning (it is genuinely available).
+            assert "unavailable" not in matches[0], matches
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_provider_name_fuzzy(pilot_config):
+    """Fuzzy scores the whole 'provider/model' string, so typing a PROVIDER name surfaces that
+    provider's rows and excludes unrelated models."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "openai"
+            await pilot.pause()
+            labels = _add_candidate_labels(pilot)
+            assert any("openai/gpt-5.5" in s for s in labels), labels
+            assert not any(("glm" in s or "kimi" in s or "deepseek" in s) for s in labels), labels
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_gpt_only_typed_blocked_via_modal(pilot_config):
+    """Through the PUSHED modal on a GPT-only agent (Hephaestus, require_gpt via _gpt_only): the
+    browse list is GPT-only, a typed non-GPT full id stays blocked (Enter is a no-op, no
+    assignment, modal stays open), and a typed GPT id is accepted (staged)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _open_add_modal(pilot, "agent:hephaestus")
+            scr = pilot.app.screen
+            inp = scr.query_one("#add-input", Input)
+
+            # Type-to-search: the list is empty until you type. A query that WOULD match non-GPT
+            # models ("5" matches glm-5 / kimi-k2.5) surfaces only GPT rows — proving the filter.
+            inp.value = "5"
+            await pilot.pause()
+            labels = _add_candidate_labels(pilot)
+            assert labels, "a matching query must surface hephaestus' GPT models"
+            assert all("gpt" in s.lower() for s in labels), f"GPT-only list leaked non-GPT: {labels}"
+
+            # Typed non-GPT full id: blocked. Nothing staged; Enter is a no-op; modal stays.
+            inp.value = "zhipuai/glm-5"
+            await pilot.pause()
+            assert scr._staged is None, "non-GPT id must not stage under require_gpt"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "blocked Enter must not close the modal"
+            assert pilot.app.cfg["agents"].get("hephaestus", {}).get("model") is None
+
+            # Typed GPT id: accepted (staged).
+            inp.value = "openai/gpt-5.5"
+            await pilot.pause()
+            assert scr._staged is not None, "GPT id must stage under require_gpt"
+            assert "gpt" in scr._staged["model"].lower(), scr._staged
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_esc_back_preserves_input_value(pilot_config):
+    """Esc from the variant phase returns to the model phase with the Input's typed value intact,
+    the candidate list visible again, and the variant list hidden (extends the esc-back test with
+    value + candidate-visibility assertions)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm"
+            await pilot.pause()
+            await pilot.press("enter")  # → variant phase
+            await pilot.pause()
+            scr = pilot.app.screen
+            assert scr.query_one("#add-variants", OptionList).display
+
+            await pilot.press("escape")  # back to model phase
+            await pilot.pause()
+            inp = scr.query_one("#add-input", Input)
+            assert inp.display and pilot.app.focused is inp
+            assert inp.value == "glm", f"the typed value must survive esc-back: {inp.value!r}"
+            assert scr.query_one("#add-candidates", OptionList).display, "candidate list back"
+            assert not scr.query_one("#add-variants", OptionList).display, "variant list hidden"
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_open_then_type_selects(pilot_config):
+    """Type-to-search F1: opening renders no list and stages nothing, so a reflexive Enter right
+    after opening is a no-op (modal stays, no assignment). Typing surfaces the fuzzy list and
+    auto-stages the top (dedicated-first) row; Enter selects it — deepseek/deepseek-v4-pro has
+    variants, so it enters the variant phase, and picking one commits."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _open_add_modal(pilot)
+            scr = pilot.app.screen
+            cands = scr.query_one("#add-candidates", OptionList)
+            inp = scr.query_one("#add-input", Input)
+            before = pilot.app.cfg["agents"]["sisyphus"].get("model")
+
+            # Open = no list, nothing staged (F1: a reflexive Enter can't commit).
+            assert cands.option_count == 0 and not cands.display, "open shows no list"
+            assert scr._staged is None, "nothing pre-staged on open"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "bare Enter on open must not close the modal"
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == before, "no assignment"
+
+            # Type to surface deepseek/deepseek-v4-pro; the top row is auto-staged (dedicated-first).
+            inp.value = "deepseek"
+            await pilot.pause()
+            assert cands.display and cands.highlighted == 0
+            row0 = scr._candidate_rows[0]
+            assert (row0["provider"], row0["model"]) == ("deepseek", "deepseek-v4-pro"), row0
+            assert scr._staged == row0, "the top match is auto-staged"
+
+            # Enter selects it; deepseek has variants → variant phase, then pick one to commit.
+            await pilot.press("enter")
+            await pilot.pause()
+            variants = scr.query_one("#add-variants", OptionList)
+            assert variants.display and pilot.app.focused is variants, "Enter selects the row"
+            await pilot.press("down")   # highlight the first variant (low)
+            await pilot.press("enter")  # commit
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "deepseek/deepseek-v4-pro", node
+            assert node.get("variant") == "low", node
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_variantless_typed_then_enter_commits(pilot_config):
+    """Type-to-search F1 (sharp form): even when the lone pair is a VARIANT-LESS family — where
+    there is no variant phase to act as a stop — a reflexive Enter right after opening cannot commit
+    it, because nothing is rendered/staged until you type. Typing surfaces + auto-stages the only
+    pair (the variant-less alibaba/qwen-3-max); a single Enter then commits it with no variant key."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        catalog = Catalog(available={"alibaba": ["qwen-3-max"]}, connected=["alibaba"])
+        app = _build_app_with(cfg_path, catalog)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            scr = pilot.app.screen
+            before = pilot.app.cfg["agents"]["sisyphus"].get("model")
+            assert scr._staged is None, "open must not pre-stage the lone variant-less pair"
+
+            await pilot.press("enter")  # reflexive Enter on open → no-op
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "bare Enter on open must not commit"
+            assert pilot.app.cfg["agents"]["sisyphus"].get("model") == before, "no assignment"
+
+            inp.value = "qwen"          # surface + auto-stage the lone pair
+            await pilot.pause()
+            assert scr._staged is not None
+            await pilot.press("enter")  # variant-less → immediate commit
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "Enter commits the variant-less row in one step"
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "alibaba/qwen-3-max", node
+            assert "variant" not in node, node
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_bare_known_vs_unknown(pilot_config):
+    """A bare (no-slash) KNOWN id is surfaced by fuzzy and staged dedicated-first (zhipuai/glm-5),
+    so Enter works; a bare UNKNOWN id yields no row and Enter is a no-op (still blocked) — there is
+    no synthetic row for a bare id (synth rows require a '/')."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        # Bare known id.
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "glm-5"
+            await pilot.pause()
+            scr = pilot.app.screen
+            assert scr._staged is not None
+            assert (scr._staged["provider"], scr._staged["model"]) == ("zhipuai", "glm-5"), (
+                "bare known id resolves dedicated-first via the fuzzy list"
+            )
+
+        # Bare unknown id.
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "zzznope"
+            await pilot.pause()
+            scr = pilot.app.screen
+            assert scr.query_one("#add-candidates", OptionList).option_count == 0
+            assert scr._staged is None
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "bare unknown id: Enter is a no-op"
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_mixedcase_typed_duplicate(pilot_config):
+    """F2: the synthetic-row de-dup compares case-insensitively (matching the case-insensitive
+    fuzzy matcher), so a mixed-case typed full id that matches an available pair collapses onto the
+    single canonical lowercase row — no second uppercase 'use as typed' row, and no spurious
+    ⚠ unavailable. The staged row is the canonical zhipuai/glm-5 (warn-free)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "ZHIPUAI/GLM-5"
+            await pilot.pause()
+            labels = _add_candidate_labels(pilot)
+            assert len(labels) == 1, (
+                f"mixed-case typed id must collapse onto the canonical pair: {labels}"
+            )
+            assert labels[0].startswith("zhipuai/glm-5"), labels
+            assert "unavailable" not in labels[0], labels
+            scr = pilot.app.screen
+            assert (scr._staged["provider"], scr._staged["model"]) == ("zhipuai", "glm-5")
+            assert scr._staged["warn"] == [], scr._staged
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_trailing_slash_uses_fuzzy(pilot_config):
+    """A trailing-slash typed text ('zhipuai/') is 'incomplete' on the typed path, but the fuzzy
+    list still matches the provider's models, so a real pair (zhipuai/glm-5) is staged and Enter
+    proceeds — the fuzzy list, not the bare typed text, drives selection."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "zhipuai/"
+            await pilot.pause()
+            scr = pilot.app.screen
+            assert scr._staged is not None
+            assert (scr._staged["provider"], scr._staged["model"]) == ("zhipuai", "glm-5"), (
+                "trailing slash: the fuzzy hit is staged, not the incomplete typed text"
+            )
 
     asyncio.run(_run())

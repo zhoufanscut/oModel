@@ -44,9 +44,18 @@ Every cfg mutation routes through `_record` (snapshots into `_history`) and dirt
 by `_is_dirty` (serialize(cfg) vs `_saved_text`, the last-saved/loaded text) rather than a flag —
 so undo back to the saved state reads as clean, and an empty sub-object (which serializes away) is
 undoable but not dirty. `_restore_state` reloads a snapshot and re-renders both panes.
-Add-model modal: one-line Input 'provider/model' + live preview; full provider/model used
-verbatim (split on FIRST '/'); bare id auto-prefixed via resolve_prefix if available, else
-'⚠ unknown — add a provider/' and enter is BLOCKED until qualified.
+Add-model modal: a two-phase picker with stable IDs '#add-input' (the Input — accepts typed
+text), '#add-candidates' (fuzzy `provider/model` list), '#add-variants' (variant list),
+'#add-title', '#add-preview', '#add-hints'. MODEL phase: opens with NO list (type-to-search — the
+empty-query browse dump is intentionally not rendered, so open is instant); typing fuzzy-filters
+'#add-candidates' from catalog.available (dedicated-first, capped at _MAX_CANDIDATES); ↑↓ (or emacs
+Ctrl-P/Ctrl-N) move the list while the Input keeps focus, Tab fills the highlighted pair into the
+Input, enter chooses the
+highlighted (or, when the list is empty, the validated typed) row. A full provider/model is used verbatim (split on FIRST '/'); a bare id
+is auto-prefixed via resolve_prefix if available, else '⚠ unknown — add a provider/' and enter is
+BLOCKED until qualified; a typed full id that isn't a fuzzy hit appears as a synthetic "use as
+typed" row. VARIANT phase: iff the chosen model's family declares variants, pick one or '(none)';
+otherwise it's added immediately (variant None). GPT-only targets filter the list to GPT models.
 Add-sub modal (`a` on an agent): a 2-row OptionList (`#sub-list`, IDs 'sub:ultrawork' /
 'sub:compaction') naming each kind + what it's for; a kind already on the agent is disabled
 ('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Both present → `a` just bells.
@@ -60,6 +69,7 @@ from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.fuzzy import Matcher
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
@@ -106,6 +116,16 @@ def _row_label(row: dict) -> str:
     return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
 
 
+def _family_variants(suggestions: Suggestions, model: str) -> list:
+    """Strict variant set for the add-model flow: the model family's variants if it declares
+    any, else []. Deliberately stricter than action_variant's `v`-key fallback (which offers
+    suggestions.known_variants for an unknown / variant-less family) — a model whose family has
+    no variants (qwen) or no family at all (custom / unknown id) skips the variant step entirely
+    and is added with variant None."""
+    fam = suggestions.detect_family(model)
+    return list(fam.variants) if (fam and fam.variants) else []
+
+
 class VimOptionList(OptionList):
     """OptionList with vim `j`/`k` aliased to cursor down/up (alongside the inherited ↑↓).
 
@@ -124,15 +144,42 @@ class VimOptionList(OptionList):
 
 
 class AddModelModal(ModalScreen):
-    """`e` / cand:add — one-line Input for `provider/model` + live preview of what saves.
+    """`a` / cand:add — two-phase model picker: fuzzy `provider/model`, then variant-if-supported.
 
-    Full `provider/model` (a '/' present) → used verbatim, split on the FIRST '/'.
-    Bare id → auto-prefixed via resolver.resolve_prefix if available, else
-    '⚠ unknown — add a provider/' and `enter` is BLOCKED until qualified.
-    Dismisses with the staged candidate-row dict (source 'add') on accept, or None on cancel.
+    MODEL PHASE — the Input (#add-input) filters a fuzzy list (#add-candidates) of the
+    `provider/model` pairs you actually have (catalog.available, dedicated-first). The list is
+    type-to-search: it opens EMPTY (no browse dump — keeps open instant with hundreds of models)
+    and appears only once you type. ↑↓ (or emacs Ctrl-P/Ctrl-N) move the list highlight while the
+    Input keeps focus and keeps filtering; Tab fills the highlighted pair
+    into the Input (cursor to end); Enter chooses the highlighted pair, or — when the list is empty
+    — the validated typed text; Esc cancels. A full `provider/model` you type that isn't already a
+    fuzzy hit is offered as a synthetic "use as typed" row, so custom / unavailable ids still work;
+    a bare unknown id yields no row and Enter is a no-op (still blocked). For a GPT-only target
+    (Hephaestus) the fuzzy list is filtered to GPT models, and a typed non-GPT id stays blocked.
+
+    VARIANT PHASE — iff the chosen model's family declares variants (_family_variants), pick one,
+    or `(none)` ⇒ variant None (a fresh add, NOT VariantModal's '' clear sentinel), from
+    #add-variants (a VimOptionList, option ids 'var:<v>' / 'var:__none__'). A family with no
+    variants (qwen) or an unknown/custom id skips this phase and adds immediately. Esc returns to
+    the model phase (restores + focuses the Input); the model phase's Esc cancels the modal.
+
+    Dismisses with the staged candidate-row dict (source 'add') on accept, or None on cancel — the
+    frozen CONTRACTS.md candidate-row shape (`variant` was always a field; this modal just stops
+    forcing it to None).
     """
 
     BINDINGS = [
+        # Only ↑/↓ (+ emacs Ctrl-P/Ctrl-N aliases) and Esc are bound on the screen; the Input keeps
+        # h/j/k/l and ←/→ as literal text / cursor moves (do NOT bind those). Tab is intercepted in
+        # on_key. In the model phase ↑/↓/Ctrl-P/Ctrl-N bubble from the (un-binding) Input to drive
+        # the unfocused #add-candidates; in the variant phase the focused #add-variants handles ↑/↓
+        # itself and Ctrl-P/Ctrl-N route to it via action_list_*. (Ctrl-P is normally the App's
+        # priority command-palette binding — OModelApp.check_action suppresses it while this modal
+        # is open so it drives the list instead.)
+        Binding("up", "list_up", "up", show=False),
+        Binding("down", "list_down", "down", show=False),
+        Binding("ctrl+p", "list_up", "up", show=False),
+        Binding("ctrl+n", "list_down", "down", show=False),
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
@@ -147,6 +194,11 @@ class AddModelModal(ModalScreen):
         background: $surface;
         padding: 1 2;
     }
+    AddModelModal #add-candidates, AddModelModal #add-variants {
+        height: auto;
+        max-height: 12;
+        display: none;
+    }
     AddModelModal #add-preview {
         height: auto;
         margin-top: 1;
@@ -158,6 +210,12 @@ class AddModelModal(ModalScreen):
     }
     """
 
+    _MODEL_TITLE = "Add model — type to search (or provider/model):"
+    _MODEL_HINTS = "↑↓ move · tab fill · enter add · esc cancel"
+    # Cap the rendered fuzzy list so a broad query (e.g. one common letter) can't re-introduce the
+    # render lag this type-to-search design removes. Top matches by score; type more to narrow.
+    _MAX_CANDIDATES = 50
+
     def __init__(
         self, resolver: Resolver, suggestions: Suggestions, require_gpt: bool = False
     ) -> None:
@@ -168,20 +226,63 @@ class AddModelModal(ModalScreen):
         # would reject it and reassign the agent to Sisyphus.
         self._require_gpt = require_gpt
         self._staged: Optional[dict] = None
+        self._phase = "model"
+        # Candidate-row dicts currently in #add-candidates, parallel to its options (so a
+        # highlighted/selected option index maps straight back to a row).
+        self._candidate_rows: list = []
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("Add model — type provider/model (or a bare id):")
+            yield Label(self._MODEL_TITLE, id="add-title")
             yield Input(placeholder="provider/model", id="add-input")
+            yield OptionList(id="add-candidates")
+            yield VimOptionList(id="add-variants")
             yield Static("", id="add-preview")
-            yield Static("enter add · esc cancel", id="add-hints", classes="modal-hints")
+            yield Static(self._MODEL_HINTS, id="add-hints", classes="modal-hints")
 
     def on_mount(self) -> None:
+        # The fuzzy list is driven from the Input (↑↓ via screen bindings, Tab via on_key) and
+        # never takes focus, so the Input keeps eating printable keys (h/j/k/l stay literal text).
+        self.query_one("#add-candidates", OptionList).can_focus = False
         self.query_one("#add-input", Input).focus()
-        self._recompute("")
+        self._render_candidates("")
+
+    # ----- validation (shared by typed + fuzzy paths) ----------------------------------
+
+    def _validate_row(self, provider: str, model: str):
+        """Shared validator for the typed path AND the fuzzy-list path: apply the GPT-gate, flag
+        availability, and assemble the candidate-row dict. Returns (row_or_None, preview, ok).
+        `provider`/`model` are already split + stripped."""
+        # GPT-only target: block a non-GPT model (omo would reassign the agent to Sisyphus).
+        if self._require_gpt and not _is_gpt_model(model):
+            return None, "⚠ Hephaestus is GPT-only — the model name must contain 'gpt'", False
+
+        warn = []
+        # Pair-level availability: warn unless THIS provider serves the model. Model-level
+        # ("some provider serves it") would hide a typed mismatch like openai/glm-5 — and the
+        # synthetic typed row makes that a one-keystroke commit. Fuzzy rows come from real
+        # (provider, model) pairs, so they stay warn-free; only a typed mismatch warns.
+        if provider not in self._resolver.catalog.providers_for(model):
+            warn.append("unavailable")
+        # An add row is user-typed ("you asked for it"); warn flags availability but never
+        # blocks. It is not a chain substitute, so substitute_for stays None. variant is filled
+        # by the variant phase (None when the family declares none / is unknown).
+        row = {
+            "source": "add",
+            "model": model,
+            "provider": provider,
+            "variant": None,
+            "entry": None,
+            "substitute_for": None,
+            "warn": warn,
+        }
+        return row, self._saves_line(row), True
 
     def _build_row(self, text: str):
-        """Return (row_or_None, preview_text, accept_ok) for the current Input value."""
+        """Return (row_or_None, preview_text, accept_ok) for raw Input text — split a full
+        `provider/model` on the FIRST '/', else auto-prefix a bare id via resolve_prefix, then
+        delegate to _validate_row. EXACT signature is a pilot-test contract (it is called
+        directly)."""
         text = text.strip()
         if not text:
             return None, "(type a model id)", False
@@ -198,45 +299,228 @@ class AddModelModal(ModalScreen):
             if not provider:
                 return None, "⚠ unknown — add a provider/", False
 
-        # GPT-only target: block a non-GPT model (omo would reassign the agent to Sisyphus).
-        if self._require_gpt and not _is_gpt_model(model):
-            return None, "⚠ Hephaestus is GPT-only — the model name must contain 'gpt'", False
+        return self._validate_row(provider, model)
 
-        warn = []
-        if not self._resolver.catalog.providers_for(model):
-            warn.append("unavailable")
-        # An add row is user-typed ("you asked for it"); warn flags availability but never
-        # blocks. It is not a chain substitute, so substitute_for stays None. Registry only
-        # validates variants (designates no default), so variant stays unset.
-        row = {
-            "source": "add",
-            "model": model,
-            "provider": provider,
-            "variant": None,
-            "entry": None,
-            "substitute_for": None,
-            "warn": warn,
-        }
-        preview = f"saves: {provider}/{model}" + _warn_str(warn)
-        return row, preview, True
+    @staticmethod
+    def _saves_line(row: dict) -> str:
+        """The `saves: provider/model (+ ⚠)` preview line for a candidate row."""
+        return f"saves: {row['provider']}/{row['model']}" + _warn_str(row["warn"])
 
-    def _recompute(self, text: str) -> None:
-        row, preview, ok = self._build_row(text)
-        self._staged = row if ok else None
-        self.query_one("#add-preview", Static).update(preview)
+    # ----- model phase: fuzzy list -----------------------------------------------------
+
+    def _fuzzy_rows(self, text: str) -> list:
+        """Candidate-row dicts for the fuzzy list: the `provider/model` pairs you actually have
+        (catalog.available), filtered by `text` and — for a GPT-only target — to GPT models. An
+        empty `text` returns ALL pairs (dedicated-first); note the modal's render path no longer
+        calls this for an empty query (type-to-search — _render_candidates shows nothing until you
+        type), but the empty branch is kept (it's exercised directly + guards Matcher("")). Scored
+        on the full `provider/model` string so you can filter by either side; BOTH branches are
+        dedicated-first (single-vendor provider before a gateway) then first-seen. Every pair comes
+        from availability, so warn is []."""
+        catalog = self._resolver.catalog
+        gateways = self._resolver.gateways
+        pairs = [(p, m) for p in catalog.connected for m in catalog.available.get(p, [])]
+        if self._require_gpt:
+            pairs = [(p, m) for (p, m) in pairs if _is_gpt_model(m)]
+
+        text = text.strip()
+        if not text:
+            # Browse mode — list everything, dedicated-first then first-seen (the SAME tie-break
+            # as the scored branch, so both are dedicated-first). `pairs` is already first-seen,
+            # and sorted() is stable, so keying on `provider in gateways` (False < True) sorts
+            # every dedicated pair ahead of every gateway pair. Never construct Matcher("") — it
+            # raises (FuzzySearch unpacks an empty query).
+            scored = sorted(pairs, key=lambda pm: pm[0] in gateways)
+        else:
+            matcher = Matcher(text)
+            order = {pair: i for i, pair in enumerate(pairs)}
+            ranked = []
+            for p, m in pairs:
+                score = matcher.match(f"{p}/{m}")
+                if score > 0:
+                    ranked.append((score, p, m))
+            # Highest score first; tie-break dedicated-first (provider not in gateways) then
+            # first-seen (original pair index — catalog.connected order).
+            ranked.sort(key=lambda t: (-t[0], t[1] in gateways, order[(t[1], t[2])]))
+            scored = [(p, m) for _score, p, m in ranked]
+
+        rows = []
+        for p, m in scored:
+            row, _preview, ok = self._validate_row(p, m)
+            if ok and row is not None:
+                rows.append(row)
+        return rows
+
+    def _render_candidates(self, text: str) -> None:
+        """Rebuild #add-candidates from the fuzzy matches for `text`. Type-to-search: an EMPTY
+        query shows NO list at all (hidden, nothing staged) so opening the modal stays instant even
+        with hundreds of available models, and a reflexive Enter is a no-op. A non-empty query
+        builds the fuzzy list — prepending a synthetic "use as typed" row for a full provider/model
+        that validates and isn't already a hit (custom / unavailable ids), capped at
+        _MAX_CANDIDATES — shows it, and auto-highlights the top row for quick-select. A non-empty
+        query that matches nothing hides the list and shows the typed-path preview (e.g. the
+        bare-unknown block message)."""
+        cands = self.query_one("#add-candidates", OptionList)
+        preview = self.query_one("#add-preview", Static)
+
+        if not text.strip():
+            # No browse dump — type to search. Don't build/render the full available list (a
+            # gateway can serve hundreds of models → a visible lag on open); show nothing until the
+            # user types. Also never constructs Matcher("") (which raises on an empty query).
+            self._candidate_rows = []
+            cands.clear_options()
+            cands.display = False
+            self._staged = None
+            preview.update("type to search")
+            return
+
+        fuzzy = self._fuzzy_rows(text)
+        typed_row, typed_preview, typed_ok = self._build_row(text)
+
+        rows = fuzzy
+        if typed_ok and typed_row is not None and "/" in text:
+            # Suppress the synthetic row when it duplicates a fuzzy hit — compared CASE-
+            # INSENSITIVELY (the matcher is case-insensitive), so a mixed-case typed id like
+            # ZHIPUAI/GLM-5 collapses onto the canonical zhipuai/glm-5 instead of adding a second
+            # (uppercase, spuriously ⚠ unavailable) row. A genuinely-custom id keeps its case.
+            key = (typed_row["provider"].lower(), typed_row["model"].lower())
+            if not any((r["provider"].lower(), r["model"].lower()) == key for r in fuzzy):
+                rows = [typed_row] + fuzzy
+
+        rows = rows[: self._MAX_CANDIDATES]  # bound the per-keystroke render cost
+        self._candidate_rows = rows
+        cands.clear_options()
+        for i, row in enumerate(rows):
+            label = f"{row['provider']}/{row['model']}" + _warn_str(row["warn"])
+            cands.add_option(Option(label, id=f"add-cand:{i}"))
+
+        if not rows:
+            cands.display = False
+            self._staged = None
+            preview.update(typed_preview)
+        else:
+            # Typed query with matches: show the list + auto-highlight the top so a single Enter
+            # quick-selects it.
+            cands.display = True
+            cands.highlighted = 0
+            self._staged = rows[0]
+            preview.update(self._saves_line(rows[0]))
 
     @on(Input.Changed, "#add-input")
     def _on_changed(self, event: Input.Changed) -> None:
-        self._recompute(event.value)
+        if self._phase == "model":
+            self._render_candidates(event.value)
+
+    @on(OptionList.OptionHighlighted, "#add-candidates")
+    def _on_cand_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        idx = event.option_index
+        if idx is not None and 0 <= idx < len(self._candidate_rows):
+            self._staged = self._candidate_rows[idx]
+            self.query_one("#add-preview", Static).update(self._saves_line(self._staged))
+
+    @on(OptionList.OptionSelected, "#add-candidates")
+    def _on_cand_selected(self, event: OptionList.OptionSelected) -> None:
+        # Mouse click on a row funnels to the same chooser as Enter.
+        idx = event.option_index
+        if idx is not None and 0 <= idx < len(self._candidate_rows):
+            self._choose_model(self._candidate_rows[idx])
 
     @on(Input.Submitted, "#add-input")
     def _on_submitted(self, event: Input.Submitted) -> None:
-        # enter is BLOCKED until qualified (staged is None ⇒ no-op).
+        # Enter chooses the staged (highlighted) row; a no-op when nothing is staged (e.g. a bare
+        # unknown id → no fuzzy hit and no synth row → still blocked).
         if self._staged is not None:
-            self.dismiss(self._staged)
+            self._choose_model(self._staged)
+
+    def _active_list(self) -> OptionList:
+        """The list ↑↓ / Ctrl-P / Ctrl-N move: the fuzzy #add-candidates in the model phase, the
+        #add-variants list in the variant phase."""
+        sel = "#add-variants" if self._phase == "variant" else "#add-candidates"
+        return self.query_one(sel, OptionList)
+
+    def action_list_down(self) -> None:
+        """↓ / Ctrl-N — move the active list's highlight. Model phase: the Input keeps focus and the
+        unfocused #add-candidates is driven here (a no-op when it is empty/hidden). Variant phase:
+        ↑↓ are handled by the focused #add-variants natively; Ctrl-P/Ctrl-N route here."""
+        self._active_list().action_cursor_down()
+
+    def action_list_up(self) -> None:
+        self._active_list().action_cursor_up()
+
+    def on_key(self, event: events.Key) -> None:
+        """Tab (model phase) fills the highlighted pair into the Input — intercepted here, before
+        Textual's focus traversal (the candidates list is can_focus=False, so there is nowhere to
+        focus anyway). Setting the value re-filters via Input.Changed. Every other key falls
+        through to the bindings / the focused Input."""
+        if event.key == "tab" and self._phase == "model":
+            event.stop()
+            event.prevent_default()
+            if self._staged is not None:
+                inp = self.query_one("#add-input", Input)
+                inp.value = f"{self._staged['provider']}/{self._staged['model']}"
+                inp.cursor_position = len(inp.value)
+
+    # ----- variant phase ---------------------------------------------------------------
+
+    def _choose_model(self, row: Optional[dict]) -> None:
+        """Commit the chosen model: enter the variant phase iff its family declares variants,
+        else dismiss immediately with variant left None (qwen / unknown / custom)."""
+        if row is None:
+            return
+        self._staged = row
+        variants = _family_variants(self._suggestions, row["model"])
+        if not variants:
+            self.dismiss(row)
+            return
+        self._enter_variant_phase(variants)
+
+    def _enter_variant_phase(self, variants: list) -> None:
+        self._phase = "variant"
+        row = self._staged
+        variants_list = self.query_one("#add-variants", VimOptionList)
+        variants_list.clear_options()
+        for v in variants:
+            variants_list.add_option(Option(v, id=f"var:{v}"))
+        variants_list.add_option(Option("(none)", id="var:__none__"))
+        variants_list.display = True
+        # Hide the model-phase widgets now that the variant list can take focus.
+        self.query_one("#add-input", Input).display = False
+        self.query_one("#add-candidates", OptionList).display = False
+        self.query_one("#add-title", Label).update(
+            f"Variant for {row['provider']}/{row['model']}:"
+        )
+        self.query_one("#add-preview", Static).update(self._saves_line(row))
+        self.query_one("#add-hints", Static).update("↑↓/jk move · enter choose · esc back")
+        variants_list.focus()
+
+    @on(OptionList.OptionSelected, "#add-variants")
+    def _on_variant_selected(self, event: OptionList.OptionSelected) -> None:
+        oid = event.option_id or ""
+        row = self._staged
+        if row is None or not oid.startswith("var:"):
+            return
+        # (none) ⇒ variant None — a fresh add, NOT VariantModal's '' clear sentinel.
+        row["variant"] = None if oid == "var:__none__" else oid[len("var:"):]
+        self.dismiss(row)
+
+    def _return_to_model_phase(self) -> None:
+        self._phase = "model"
+        self.query_one("#add-variants", VimOptionList).display = False
+        self.query_one("#add-input", Input).display = True
+        self.query_one("#add-title", Label).update(self._MODEL_TITLE)
+        self.query_one("#add-hints", Static).update(self._MODEL_HINTS)
+        inp = self.query_one("#add-input", Input)
+        inp.focus()
+        # _render_candidates owns #add-candidates visibility (shown only when the current text
+        # yields matches), so it is not force-shown here.
+        self._render_candidates(inp.value)
 
     def action_cancel(self) -> None:
-        self.dismiss(None)
+        """Esc — the variant phase returns to the model phase; the model phase cancels the modal."""
+        if self._phase == "variant":
+            self._return_to_model_phase()
+        else:
+            self.dismiss(None)
 
 
 class VariantModal(ModalScreen):
@@ -1114,6 +1398,12 @@ class OModelApp(App):
         #targets list. (Defense-in-depth: Textual already truncates the binding chain at a
         modal, so these app bindings can't fire while one is up — and the add-model Input's own
         ←/→ cursor bindings take precedence regardless.) All other actions stay enabled."""
+        if action == "command_palette" and isinstance(self.screen, AddModelModal):
+            # Ctrl-P drives the add-model fuzzy list (up) while that modal is open, so suppress the
+            # App's *priority* command-palette binding there (a priority binding is checked from the
+            # App down, before the key reaches the modal — only check_action can gate it). The
+            # palette stays available everywhere else; Ctrl-N is not an app binding.
+            return False
         if action in ("focus_targets", "focus_candidates", "undo", "redo"):
             # Pane-crossing focus AND undo/redo are base-screen-only: a ModalScreen manages its
             # own focus and keys (e.g. AddSubModal binds `u` to pick ultrawork), so the app's

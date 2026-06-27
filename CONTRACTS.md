@@ -65,6 +65,11 @@ connected model — off-chain picks go through the add-model modal.)
 Value written to config = `f"{provider}/{model}"` plus `variant` (omitted when `None`) — i.e.
 the resolved substitute, not the omo id. `substitute_for` is display-only.
 
+The shape is **unchanged** by the two-phase add-model modal (`#add-input` fuzzy `provider/model`
+list `#add-candidates`, then the variant list `#add-variants`): `variant` was always a field — an
+`"add"` row now carries the variant picked in the modal's variant phase (still `None` when the
+chosen model's family declares none), instead of being forced to `None`.
+
 ## Public signatures (authoritative = the stub modules)
 
 The stub files ARE the signatures; implement their bodies. Summary:

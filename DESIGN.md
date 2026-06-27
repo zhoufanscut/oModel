@@ -504,12 +504,39 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `h`/`j`/`k`/`l` as literal text (printable keys reach a widget before its bindings). The vim keys
   are intentionally **absent from the hint bar** (it must stay one line). Pilot tests drive these via
   the stable IDs.
-- **Add-model modal (`a` / `cand:add`):** empty one-line `Input` for `provider/model` + a live preview
-  of what saves. A full `provider/model` → used **verbatim** (split on the *first* `/`, so
-  `openrouter/anthropic/…` works); a bare id → auto-prefixed via `resolve_prefix` **if available**,
-  else `⚠ unknown — add a provider/` and `enter` is **blocked** until qualified. Accept → inserts a
-  selected `+ custom` row (default variant via `detect_family`); `⚠ unavailable` is allowed
-  (warn-but-allow, decision #5). Not a separate mode — the result is just another pickable row.
+- **Add-model modal (`a` / `cand:add`):** a **two-phase** picker (IDs `#add-input`,
+  `#add-candidates`, `#add-variants`, `#add-title`, `#add-preview`, `#add-hints`).
+  **Model phase** — the `Input` (`#add-input`) fuzzy-filters `#add-candidates`, a list of the
+  `provider/model` pairs you actually have (`catalog.available`), **dedicated-first** (single-vendor
+  before gateway, then first-seen). The fuzzy engine is `textual.fuzzy.Matcher`, scored on the full
+  `provider/model` string (so you can filter by either side). It is **type-to-search**: the modal
+  opens with **no list** (the empty-query browse dump is intentionally not rendered — building/
+  laying out every available pair, which a gateway can make hundreds, lagged the open), and the
+  list appears only once you type. Results are capped (`_MAX_CANDIDATES`) so a broad one-letter
+  query can't reintroduce that lag — type more to narrow. `Matcher("")` is never constructed (it
+  raises). A typed query auto-highlights the top match for quick-select; with the list empty (right
+  after opening, or a query that matches nothing) **nothing is staged**, so a reflexive `enter` is a
+  no-op — you never commit a model you didn't choose. `↑`/`↓` (or emacs **`Ctrl-P`/`Ctrl-N`**) move
+  the list while the `Input` keeps focus (driven from screen bindings; the list is `can_focus=False`).
+  `Ctrl-P` is normally the App's *priority* command-palette binding, so `OModelApp.check_action`
+  suppresses the palette while this modal is open (the only way to gate a priority binding — it is
+  checked App-down before the key reaches the modal). **`Tab`** fills the highlighted
+  pair into the `Input` (intercepted in `on_key`, before focus traversal); `enter` chooses the
+  highlighted/staged pair, or — when the list is empty — the validated typed text; `esc` cancels. A full
+  `provider/model` → used **verbatim** (split on the *first* `/`); a bare id → auto-prefixed via
+  `resolve_prefix` **if available**, else `⚠ unknown — add a provider/` and `enter` is **blocked**; a
+  typed full id that isn't already a fuzzy hit appears as a synthetic **"use as typed"** row (so
+  custom / `⚠ unavailable` ids still work — warn-but-allow, decision #5). A **GPT-only** target
+  (Hephaestus) filters the list to GPT models and still blocks a typed non-GPT id.
+  **Variant phase** — *iff* the chosen model's family declares variants (`_family_variants`: strict —
+  `fam.variants` or `[]`), `#add-variants` (a `VimOptionList`, IDs `var:<v>` / `var:__none__`) lets you
+  pick one or `(none)` ⇒ `variant=None` (a *fresh add*, **not** `VariantModal`'s `''` clear sentinel);
+  a variant-less family (qwen) or unknown/custom id skips it and adds immediately. `esc` returns to the
+  model phase. **Deliberate divergence:** the post-hoc `v` key (`action_variant`/`VariantModal`,
+  unchanged) keeps its `known_variants` *fallback* so `v` always offers *something*; the add flow is
+  **strict** (no fallback) — a model with no declared variants is added with none rather than offered
+  the generic `known_variants`. The result dismisses one candidate-row dict (`source` `"add"`); it's
+  just another pickable row.
 - **Add-sub chooser (`a` on an agent):** a 2-row `OptionList` (`#sub-list`, IDs `sub:ultrawork` /
   `sub:compaction`), each row naming the kind + a one-line description of what omo uses it for
   (ultrawork = model swapped in on an `ultrawork`/`ulw` message; compaction = model for auto
