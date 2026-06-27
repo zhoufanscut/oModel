@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from omodel import cache
 from omodel.catalog import Catalog, CatalogUnavailable, load
 
 
@@ -326,3 +327,99 @@ class TestVerboseParsing:
         cost = result["cost"]
         assert cost is not None
         assert "cache" in cost
+
+
+# A no-subprocess guard: variants_for reads ONLY the cache (it must never shell out — there is no
+# subprocess stub in this module, so a stray call would hit the REAL opencode binary).
+_NO_SHELL = patch("subprocess.run", side_effect=AssertionError("variants_for must not shell out"))
+
+
+class TestVariantsFor:
+    """Catalog.variants_for — variant names from the CACHED `opencode … --verbose` output (the
+    decision #14 reversal for the model pickers). Cache-only: never a subprocess. The conftest
+    isolates the cache to a per-test tmp dir, so these seed it directly with cache.write."""
+
+    def _seed(self, provider: str, records: dict) -> None:
+        """Seed a cached verbose-<provider> from {model: [variants]} — mirrors opencode's shape:
+        a `provider/model` header line + a JSON block whose `variants` is an OBJECT keyed by name."""
+        parts = []
+        for model, variants in records.items():
+            parts.append(f"{provider}/{model}")
+            parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
+        cache.write(
+            f"verbose-{provider}",
+            "\n".join(parts) + "\n",
+            ["opencode", "models", provider, "--verbose"],
+        )
+
+    def test_reads_variant_keys_from_cached_verbose(self):
+        """The KEYS of the model's `variants` object (opencode's order, lowercased). Reuses the
+        realistic blob: RECORD_1 → {"max": …}, RECORD_2 → {}, RECORD_3 → no variants key."""
+        cache.write(
+            "verbose-opencode", MOCK_VERBOSE_OUTPUT, ["opencode", "models", "opencode", "--verbose"]
+        )
+        cat = Catalog(
+            available={"opencode": ["claude-opus-4-7", "gpt-5.5", "glm-5"]}, connected=["opencode"]
+        )
+        with _NO_SHELL:
+            assert cat.variants_for("opencode", "claude-opus-4-7") == ["max"]
+            assert cat.variants_for("opencode", "gpt-5.5") == []       # variants: {}
+            assert cat.variants_for("opencode", "glm-5") == []         # no variants key
+
+    def test_total_cache_miss_returns_empty(self):
+        """Nothing cached anywhere → [] (caller shows nothing). Crucially NO subprocess."""
+        cat = Catalog(available={"opencode": ["gpt-5.5"]}, connected=["opencode"])
+        with _NO_SHELL:
+            assert cat.variants_for("opencode", "gpt-5.5") == []
+
+    def test_empty_object_everywhere_is_no_variants(self):
+        """kimi: every serving provider reports `variants: {}` → [] (no variant step)."""
+        self._seed("opencode", {"kimi-k2.5": []})
+        self._seed("moonshotai-cn", {"kimi-k2.5": []})
+        cat = Catalog(
+            available={"opencode": ["kimi-k2.5"], "moonshotai-cn": ["kimi-k2.5"]},
+            connected=["opencode", "moonshotai-cn"],
+        )
+        with _NO_SHELL:
+            assert cat.variants_for("moonshotai-cn", "kimi-k2.5") == []
+
+    def test_prefers_non_empty_across_providers(self):
+        """A dedicated provider reporting `{}` falls through to the gateway's real set — glm-5.2 →
+        high/max lives in the opencode gateway's verbose, not zhipuai's empty one."""
+        self._seed("zhipuai", {"glm-5.2": []})                 # dedicated → empty object
+        self._seed("opencode", {"glm-5.2": ["high", "max"]})   # gateway → the real set
+        cat = Catalog(
+            available={"zhipuai": ["glm-5.2"], "opencode": ["glm-5.2"]},
+            connected=["opencode", "zhipuai"],
+        )
+        with _NO_SHELL:
+            assert cat.variants_for("zhipuai", "glm-5.2") == ["high", "max"]
+
+    def test_picked_provider_non_empty_wins(self):
+        """When the picked provider reports its OWN non-empty set, that wins over the gateway's
+        (variants are genuinely per-endpoint)."""
+        self._seed("zhipuai", {"glm-5.2": ["low", "medium"]})
+        self._seed("opencode", {"glm-5.2": ["high", "max"]})
+        cat = Catalog(
+            available={"zhipuai": ["glm-5.2"], "opencode": ["glm-5.2"]},
+            connected=["opencode", "zhipuai"],
+        )
+        with _NO_SHELL:
+            assert cat.variants_for("zhipuai", "glm-5.2") == ["low", "medium"]
+
+    def test_unknown_model_returns_empty(self):
+        """A model no connected provider serves → [] (no record anywhere, no subprocess)."""
+        self._seed("opencode", {"gpt-5.5": ["low", "medium", "high"]})
+        cat = Catalog(available={"opencode": ["gpt-5.5"]}, connected=["opencode"])
+        with _NO_SHELL:
+            assert cat.variants_for("opencode", "no-such-model") == []
+
+    def test_provider_mismatch_falls_through_to_serving_provider(self):
+        """A picked provider that does NOT serve the model (a typed mismatch like openai/gpt-5.5
+        when only opencode serves it here) still finds the variants via a provider that DOES serve
+        it — variants_for scans [provider, *providers_for(model)]."""
+        self._seed("opencode", {"gpt-5.5": ["low", "medium", "high"]})
+        cat = Catalog(available={"opencode": ["gpt-5.5"]}, connected=["opencode"])
+        with _NO_SHELL:
+            # verbose-openai isn't cached (the openai miss must NOT shell out); opencode serves it.
+            assert cat.variants_for("openai", "gpt-5.5") == ["low", "medium", "high"]

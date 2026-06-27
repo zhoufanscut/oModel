@@ -67,8 +67,9 @@ the resolved substitute, not the omo id. `substitute_for` is display-only.
 
 The shape is **unchanged** by the two-phase add-model modal (`#add-input` fuzzy `provider/model`
 list `#add-candidates`, then the variant list `#add-variants`): `variant` was always a field — an
-`"add"` row now carries the variant picked in the modal's variant phase (still `None` when the
-chosen model's family declares none), instead of being forced to `None`.
+`"add"` row now carries the variant picked in the modal's variant phase (still `None` when opencode
+reports no variants for the chosen `(provider, model)` via `Catalog.variants_for`), instead of being
+forced to `None`.
 
 ## Public signatures (authoritative = the stub modules)
 
@@ -76,7 +77,9 @@ The stub files ARE the signatures; implement their bodies. Summary:
 
 - `catalog.py`: `class CatalogUnavailable(Exception)`; `@dataclass Catalog(available: dict,
   connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id, use_cache=True)->
-  dict|None`; `load(opencode_bin="opencode", use_cache=True)->Catalog`;
+  dict|None`, `.variants_for(provider, model)->list` (cached `--verbose` variant keys for the model
+  pickers — first non-empty across the picked provider then others, else `[]`; never a subprocess);
+  `load(opencode_bin="opencode", use_cache=True)->Catalog`;
   `refresh(opencode_bin="opencode")->Catalog` (force `opencode models --refresh` + rebuild cache).
   All three opencode calls read through the on-disk cache (`cache.py`) and carry a `timeout=`.
 - `cache.py`: on-disk cache of opencode stdout (24h TTL, flat, under `~/.cache/omodel/`).

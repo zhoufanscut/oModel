@@ -55,8 +55,9 @@ highlighted (or, when the list is empty, the validated typed) row. A full provid
 is auto-prefixed via resolve_prefix if available, else '⚠ unknown — add a provider/' and enter is
 BLOCKED until qualified; a typed full id that fuzzy-matches nothing appears as a synthetic "use as
 typed" row (a half-typed fragment that still matches falls back to the fuzzy list, no ⚠ row).
-VARIANT phase: iff the chosen model's family declares variants, pick one or '(none)';
-otherwise it's added immediately (variant None). GPT-only targets filter the list to GPT models.
+VARIANT phase: iff opencode reports variants for the chosen (provider, model)
+(catalog.variants_for — cached `--verbose`), pick one or '(none)'; otherwise (kimi/glm-5, or no
+cached verbose) it's added immediately (variant None). GPT-only targets filter the list to GPT models.
 Add-sub modal (`a` on an agent): a 2-row OptionList (`#sub-list`, IDs 'sub:ultrawork' /
 'sub:compaction') naming each kind + what it's for; a kind already on the agent is disabled
 ('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Both present → `a` just bells.
@@ -117,16 +118,6 @@ def _row_label(row: dict) -> str:
     return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
 
 
-def _family_variants(suggestions: Suggestions, model: str) -> list:
-    """Strict variant set for the add-model flow: the model family's variants if it declares
-    any, else []. Deliberately stricter than action_variant's `v`-key fallback (which offers
-    suggestions.known_variants for an unknown / variant-less family) — a model whose family has
-    no variants (qwen) or no family at all (custom / unknown id) skips the variant step entirely
-    and is added with variant None."""
-    fam = suggestions.detect_family(model)
-    return list(fam.variants) if (fam and fam.variants) else []
-
-
 class VimOptionList(OptionList):
     """OptionList with vim `j`/`k` aliased to cursor down/up (alongside the inherited ↑↓).
 
@@ -159,11 +150,12 @@ class AddModelModal(ModalScreen):
     id yields no row and Enter is a no-op (still blocked). For a GPT-only target
     (Hephaestus) the fuzzy list is filtered to GPT models, and a typed non-GPT id stays blocked.
 
-    VARIANT PHASE — iff the chosen model's family declares variants (_family_variants), pick one,
-    or `(none)` ⇒ variant None (a fresh add, NOT VariantModal's '' clear sentinel), from
-    #add-variants (a VimOptionList, option ids 'var:<v>' / 'var:__none__'). A family with no
-    variants (qwen) or an unknown/custom id skips this phase and adds immediately. Esc returns to
-    the model phase (restores + focuses the Input); the model phase's Esc cancels the modal.
+    VARIANT PHASE — iff opencode reports variants for the chosen (provider, model)
+    (catalog.variants_for — the cached `--verbose` map), pick one, or `(none)` ⇒ variant None (a
+    fresh add, NOT VariantModal's '' clear sentinel), from #add-variants (a VimOptionList, option
+    ids 'var:<v>' / 'var:__none__'). A model opencode lists with no variants (kimi, glm-5) — or
+    whose verbose isn't cached anywhere — skips this phase and adds immediately. Esc returns to the
+    model phase (restores + focuses the Input); the model phase's Esc cancels the modal.
 
     Dismisses with the staged candidate-row dict (source 'add') on accept, or None on cancel — the
     frozen CONTRACTS.md candidate-row shape (`variant` was always a field; this modal just stops
@@ -469,12 +461,14 @@ class AddModelModal(ModalScreen):
     # ----- variant phase ---------------------------------------------------------------
 
     def _choose_model(self, row: Optional[dict]) -> None:
-        """Commit the chosen model: enter the variant phase iff its family declares variants,
-        else dismiss immediately with variant left None (qwen / unknown / custom)."""
+        """Commit the chosen model: enter the variant phase iff opencode reports variants for its
+        (provider, model) — catalog.variants_for, the cached `--verbose` map — else dismiss
+        immediately with variant left None (kimi / glm-5 / any model opencode lists with no
+        variants, or whose verbose isn't cached anywhere)."""
         if row is None:
             return
         self._staged = row
-        variants = _family_variants(self._suggestions, row["model"])
+        variants = self._resolver.catalog.variants_for(row["provider"], row["model"])
         if not variants:
             self.dismiss(row)
             return
@@ -530,8 +524,8 @@ class AddModelModal(ModalScreen):
 
 
 class VariantModal(ModalScreen):
-    """`v` — pick from the family's valid variants + '(none)'.  Dismisses with the chosen
-    variant string, the sentinel '' for (none), or None on cancel."""
+    """`v` — pick from the variants opencode reports for the model + '(none)'.  Dismisses with the
+    chosen variant string, the sentinel '' for (none), or None on cancel."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=False),
@@ -1432,7 +1426,10 @@ class OModelApp(App):
         self._record(f"clear {self._target_label(target)}")
 
     def action_variant(self) -> None:
-        """`v` — push the family's valid variants for the highlighted candidate's model."""
+        """`v` — pick from the variants opencode reports for the highlighted candidate's
+        (provider, model) (catalog.variants_for — the cached `--verbose` map). A model opencode
+        lists with no variants (kimi) — or whose verbose isn't cached anywhere — has nothing to
+        pick, so `v` just bells (no fallback: variant validity is opencode's, not the heuristic's)."""
         target = self._current_target
         if target is None:
             return
@@ -1443,8 +1440,14 @@ class OModelApp(App):
         if not (0 <= idx < len(rows)):
             return
         row = rows[idx]
-        fam = self.suggestions.detect_family(row["model"])
-        variants = list(fam.variants) if fam and fam.variants else list(self.suggestions.known_variants)
+        variants = self.catalog.variants_for(row["provider"], row["model"])
+        if not variants:
+            # No variants opencode-reported for this (provider, model). Bell + a notify (the
+            # detail pane may still show a stray `variant:` from an older config — surface why `v`
+            # is a no-op; to clear such a stray, re-pick the row with Enter or `x`).
+            self.bell()
+            self.notify(f"No variants for {row['provider']}/{row['model']}.")
+            return
 
         def _apply(result) -> None:
             if result is None:

@@ -53,7 +53,7 @@ prefix and a valid variant, and saves a clean config.
 | 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
 | 12 | Distribution | **GitHub-only** (no PyPI): PyInstaller binary + `install.sh` primary; `pipx`/`uvx` from git secondary. |
 | 13 | First save | **Deletes the commented-out palette *inside* agents/categories** (those spans are rewritten clean); comments / commented-out config **outside** them are kept verbatim. The whole original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
-| 14 | Variant validity | **Bundled family registry only** — never `opencode --verbose` (its `variants` is opencode's runtime namespace: different shape, empty for some providers). |
+| 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). The bundled family registry stays the source only for `detect_family`/substitution and resolve's omo-suggestion ⚠ warn — never for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
 
@@ -83,10 +83,13 @@ prefix and a valid variant, and saves a clean config.
   — they're always quoted values — so brace-counting from each header is unambiguous.) Use
   `limit.context`, `cost.input/output` (may also carry `cost.cache.{read,write}`; free models show
   `$0`), `capabilities.reasoning`, `capabilities.input.image` for the **detail pane display only**.
-  ⚠ `--verbose.family`/`--verbose.variants` are **opencode's** runtime namespace, keyed/shaped unlike
-  omo's family variants — and empty for some providers (zhipuai, moonshotai-cn) while populated for
-  others (openai, opencode). For parity with how omo validates/applies variants, variant validity
-  comes from the **bundled family registry only** (decision #14); **never read `--verbose.variants`**.
+  `--verbose.variants` (a per-model object whose KEYS are the variant names) **is** the variant source
+  of truth for the model pickers (`Catalog.variants_for`, decision #14) — read it; `--verbose.family`
+  is still **never** read (family stays heuristic). Caveat that shapes `variants_for`: the object is
+  empty (`{}`) for the dedicated providers (zhipuai, moonshotai-cn) while populated by the gateway
+  (opencode) and openai — so `variants_for` prefers the first NON-EMPTY set across the picked provider
+  then others, treating `{}` as "ask another endpoint", and offers nothing only when it is empty
+  everywhere (kimi) or uncached.
 - **What omo suggests (bundled, build-time):** `omo-suggestions.json`, generated from
   `~/source/oh-my-openagent/packages/model-core/src/` (verified importable & serializable under bun:
   11 agents, 8 categories, 15 families, 9 variants). Schema the app **consumes**:
@@ -535,15 +538,15 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   footgun: a longer/distinct custom id is never a subsequence of a shorter available one, so the
   common "add a model I don't have yet" path is unaffected.)* A **GPT-only** target
   (Hephaestus) filters the list to GPT models and still blocks a typed non-GPT id.
-  **Variant phase** — *iff* the chosen model's family declares variants (`_family_variants`: strict —
-  `fam.variants` or `[]`), `#add-variants` (a `VimOptionList`, IDs `var:<v>` / `var:__none__`) lets you
-  pick one or `(none)` ⇒ `variant=None` (a *fresh add*, **not** `VariantModal`'s `''` clear sentinel);
-  a variant-less family (qwen) or unknown/custom id skips it and adds immediately. `esc` returns to the
-  model phase. **Deliberate divergence:** the post-hoc `v` key (`action_variant`/`VariantModal`,
-  unchanged) keeps its `known_variants` *fallback* so `v` always offers *something*; the add flow is
-  **strict** (no fallback) — a model with no declared variants is added with none rather than offered
-  the generic `known_variants`. The result dismisses one candidate-row dict (`source` `"add"`); it's
-  just another pickable row.
+  **Variant phase** — *iff* opencode reports variants for the chosen `(provider, model)`
+  (`Catalog.variants_for` — the cached `--verbose` map, decision #14), `#add-variants` (a
+  `VimOptionList`, IDs `var:<v>` / `var:__none__`) lets you pick one or `(none)` ⇒ `variant=None` (a
+  *fresh add*, **not** `VariantModal`'s `''` clear sentinel); a model opencode lists with no variants
+  (kimi, glm-5) — or whose verbose isn't cached anywhere — skips it and adds immediately. `esc`
+  returns to the model phase. The post-hoc **`v` key** (`action_variant`/`VariantModal`) now reads the
+  **same** `variants_for` source — the old `known_variants` "always offer *something*" fallback is
+  **gone**; `v` on a model with no reported variants just **bells**. The result dismisses one
+  candidate-row dict (`source` `"add"`); it's just another pickable row.
 - **Add-sub chooser (`a` on an agent):** a 2-row `OptionList` (`#sub-list`, IDs `sub:ultrawork` /
   `sub:compaction`), each row naming the kind + a one-line description of what omo uses it for
   (ultrawork = model swapped in on an `ultrawork`/`ulw` message; compaction = model for auto

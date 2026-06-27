@@ -123,9 +123,13 @@ before changing any public signature or shared shape.
 - **Real-cache safety (hard rule):** never let tests touch the real `~/.cache/omodel/`. The autouse
   `tests/conftest.py` fixture redirects `$OMODEL_CACHE_DIR` to a per-test tmp dir, and `test_app_pilot.py`
   stubs `subprocess.run` so the TUI never spawns real opencode (~320 MB/call — un-stubbed it OOM'd a box).
-- **Variant validity comes only from the bundled family registry** — never from
-  `opencode --verbose.variants` (that's opencode's runtime namespace, a different shape, empty for some
-  providers). Invalid variants warn-but-allow (`⚠`), they don't block.
+- **The model pickers (add-model + `v`) read variants from cached `opencode --verbose`**, via
+  `Catalog.variants_for(provider, model)` — opencode's per-(provider, model) `variants` keys are the
+  source of truth (decision #14). It prefers the first non-empty set across the picked provider then
+  others (dedicated providers report `{}`; the gateway has the real set), and offers **nothing** when
+  empty everywhere or uncached — no heuristic fallback (kimi/glm-5 → no variant step). `--verbose.family`
+  is still never read (family stays heuristic), and the bundled family registry still backs
+  `detect_family`/substitution and resolve's omo-suggestion `⚠` warn (which warn-but-allow, never block).
 - **GPT-only agents:** Hephaestus mirrors omo's `no-hephaestus-non-gpt` hook via `_GPT_ONLY_AGENTS` /
   `_is_gpt_model` in `app.py` — a hardcoded agent key, not a data field.
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import os
 import subprocess
 import time
@@ -99,6 +100,25 @@ def _build_app_with(cfg_path: str, catalog: Catalog) -> OModelApp:
     )
 
 
+def _seed_verbose(provider: str, records: dict) -> None:
+    """Seed a cached `verbose-<provider>` entry so Catalog.variants_for() reads it without a
+    subprocess (the suite stubs opencode + isolates the cache to a tmp dir via conftest). `records`
+    maps model_id -> [variant, ...]; this mirrors `opencode models <prov> --verbose`: a
+    `provider/model` header line followed by a JSON block whose `variants` is an OBJECT keyed by
+    variant name. An empty list → `variants: {}` — opencode's 'no variants' shape (e.g. kimi)."""
+    from omodel import cache
+
+    parts = []
+    for model, variants in records.items():
+        parts.append(f"{provider}/{model}")
+        parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
+    cache.write(
+        f"verbose-{provider}",
+        "\n".join(parts) + "\n",
+        ["opencode", "models", provider, "--verbose"],
+    )
+
+
 async def _select_target(pilot, option_id: str) -> None:
     """Highlight a target by ID in OptionList#targets, then fire OptionSelected via enter.
     OptionList option IDs contain ':' which is invalid in CSS selectors, so we use
@@ -142,6 +162,24 @@ async def _select_candidate(pilot, model_fragment: str) -> str:
     await pilot.press("enter")
     await pilot.pause()
     return found_id
+
+
+async def _highlight_candidate(pilot, model_fragment: str) -> str:
+    """Highlight (do NOT select) the first #candidates row whose label contains model_fragment,
+    and focus the pane; returns its option id, or None. Unlike _select_candidate this presses
+    nothing — for keys that act on the highlighted candidate (e.g. `v`)."""
+    candidates = pilot.app.query_one("#candidates", OptionList)
+    for i in range(candidates.option_count):
+        opt = candidates.get_option_at_index(i)
+        oid = opt.id or ""
+        if oid.startswith("hdr:") or oid == "cand:add":
+            continue
+        if model_fragment in str(opt.prompt):
+            candidates.highlighted = i
+            candidates.focus()
+            await pilot.pause()
+            return oid
+    return None
 
 
 async def _save_and_confirm(pilot) -> None:
@@ -1421,18 +1459,20 @@ def test_pilot_addmodal_ctrl_p_n_navigate_list(pilot_config):
 
 
 def test_pilot_addmodal_select_enters_variant_phase(pilot_config):
-    """Choosing a model whose family declares variants enters the variant phase: #add-variants is
-    visible + focused listing the family's variants + (none); picking one sets the assignment's
-    variant alongside the resolved provider/model."""
+    """Choosing a model opencode reports variants for enters the variant phase: #add-variants is
+    visible + focused listing opencode's variant keys + (none); picking one sets the assignment's
+    variant alongside the resolved provider/model. Variants come from cached `--verbose`
+    (catalog.variants_for), seeded here for openai/gpt-5.5."""
     cfg_path, _ = pilot_config
 
     async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             inp = await _open_add_modal(pilot)
-            inp.value = "glm"
+            inp.value = "openai/gpt-5.5"
             await pilot.pause()
-            await pilot.press("enter")  # choose highlighted zhipuai/glm-5 → variant phase
+            await pilot.press("enter")  # choose openai/gpt-5.5 → variant phase
             await pilot.pause()
 
             variants = pilot.app.screen.query_one("#add-variants", OptionList)
@@ -1448,16 +1488,90 @@ def test_pilot_addmodal_select_enters_variant_phase(pilot_config):
 
             assert len(pilot.app.screen_stack) == 1, "picking a variant must close the modal"
             node = pilot.app.cfg["agents"]["sisyphus"]
-            assert node["model"] == "zhipuai/glm-5", node
+            assert node["model"] == "openai/gpt-5.5", node
             assert node.get("variant") == "high", node
 
     asyncio.run(_run())
 
 
+def test_pilot_addmodal_kimi_no_variant_phase(pilot_config):
+    """Regression for the reported bug: kimi has NO variants, so adding it must skip the variant
+    phase — even though the old heuristic family registry wrongly listed [low,medium,high] for
+    kimi. opencode's cached `--verbose` reports kimi-k2.5 with an EMPTY variants object on every
+    serving provider, so catalog.variants_for returns [] and a single Enter adds it with no
+    variant key (no #add-variants phase)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        # opencode's real-world shape: kimi reports an empty variants object everywhere.
+        _seed_verbose("moonshotai-cn", {"kimi-k2.5": []})
+        _seed_verbose("opencode", {"kimi-k2.5": []})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "moonshotai-cn/kimi-k2.5"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "kimi has no variants → no variant phase"
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "moonshotai-cn/kimi-k2.5", node
+            assert "variant" not in node, f"kimi must be added with no variant: {node}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_vkey_lists_opencode_reported_variants(pilot_config):
+    """`v` on a candidate opens VariantModal listing the variants opencode reports for that
+    (provider, model) — catalog.variants_for (cached `--verbose`), seeded here for openai/gpt-5.5
+    — plus the (none) clear row."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            oid = await _highlight_candidate(pilot, "openai/gpt-5.5")
+            assert oid is not None, "openai/gpt-5.5 must be a sisyphus candidate"
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "v must open the VariantModal"
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            assert vids == ["var:low", "var:medium", "var:high", "var:__none__"], vids
+
+    asyncio.run(_run())
+
+
+def test_pilot_vkey_no_variants_bells(pilot_config):
+    """`v` on a model opencode reports no variants for (kimi) opens NO modal — the old
+    `known_variants` 'always offer something' fallback is gone; variant validity is opencode's,
+    so with an empty variants object everywhere `v` just bells (screen stack unchanged)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        _seed_verbose("moonshotai-cn", {"kimi-k2.5": []})
+        _seed_verbose("opencode", {"kimi-k2.5": []})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            oid = await _highlight_candidate(pilot, "moonshotai-cn/kimi-k2.5")
+            assert oid is not None, "moonshotai-cn/kimi-k2.5 must be a sisyphus candidate"
+            bell_calls = []
+            pilot.app.bell = lambda: bell_calls.append(1)
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "kimi has no variants → v opens no modal"
+            assert bell_calls, "v on a no-variant model must bell"
+
+    asyncio.run(_run())
+
+
 def test_pilot_addmodal_variant_skipped_for_familyless(pilot_config):
-    """A model whose family declares no variants (or has no family) skips the variant phase: a
-    single Enter adds it with no variant key. Covers a custom (family-less) id AND a qwen id
-    (a real family whose `variants` list is empty)."""
+    """A model opencode reports no variants for skips the variant phase: a single Enter adds it
+    with no variant key. Nothing is seeded into the `--verbose` cache here, so catalog.variants_for
+    returns [] for both a custom id (openrouter/zzz-custom) and a real model (alibaba/qwen-3-max)."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -1504,11 +1618,12 @@ def test_pilot_addmodal_esc_returns_then_cancels(pilot_config):
     cfg_path, _ = pilot_config
 
     async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             inp = await _open_add_modal(pilot)
             before = pilot.app.cfg["agents"]["sisyphus"].get("model")
-            inp.value = "glm"
+            inp.value = "openai/gpt-5.5"
             await pilot.pause()
             await pilot.press("enter")  # → variant phase
             await pilot.pause()
@@ -1737,10 +1852,11 @@ def test_pilot_addmodal_esc_back_preserves_input_value(pilot_config):
     cfg_path, _ = pilot_config
 
     async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             inp = await _open_add_modal(pilot)
-            inp.value = "glm"
+            inp.value = "openai/gpt-5.5"
             await pilot.pause()
             await pilot.press("enter")  # → variant phase
             await pilot.pause()
@@ -1751,7 +1867,9 @@ def test_pilot_addmodal_esc_back_preserves_input_value(pilot_config):
             await pilot.pause()
             inp = scr.query_one("#add-input", Input)
             assert inp.display and pilot.app.focused is inp
-            assert inp.value == "glm", f"the typed value must survive esc-back: {inp.value!r}"
+            assert inp.value == "openai/gpt-5.5", (
+                f"the typed value must survive esc-back: {inp.value!r}"
+            )
             assert scr.query_one("#add-candidates", OptionList).display, "candidate list back"
             assert not scr.query_one("#add-variants", OptionList).display, "variant list hidden"
 
@@ -1762,10 +1880,12 @@ def test_pilot_addmodal_open_then_type_selects(pilot_config):
     """Type-to-search F1: opening renders no list and stages nothing, so a reflexive Enter right
     after opening is a no-op (modal stays, no assignment). Typing surfaces the fuzzy list and
     auto-stages the top (dedicated-first) row; Enter selects it — deepseek/deepseek-v4-pro has
-    variants, so it enters the variant phase, and picking one commits."""
+    variants (seeded into the cached `--verbose`), so it enters the variant phase, and picking one
+    commits."""
     cfg_path, _ = pilot_config
 
     async def _run():
+        _seed_verbose("deepseek", {"deepseek-v4-pro": ["low", "medium", "high", "max"]})
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             await _open_add_modal(pilot)

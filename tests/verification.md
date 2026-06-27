@@ -63,18 +63,22 @@ python -m pytest tests/test_catalog_parse.py tests/test_resolve.py -v
 ## Check 3 — Verbose parsing (unit)
 
 **Goal:** multi-record `--verbose` blob → N records with `limit.context`/`cost`/
-`capabilities` extracted; `--verbose.variants` is never read.
+`capabilities` extracted; **`detail()` reads neither `--verbose.variants` nor `.family`** (variants
+are read separately by `Catalog.variants_for` — see the `variants_for` check below).
 
 ```sh
-python -m pytest tests/test_catalog_parse.py::TestVerboseParsing -v
+python -m pytest tests/test_catalog_parse.py::TestVerboseParsing tests/test_catalog_parse.py::TestVariantsFor -v
 ```
 
 **Key assertions:**
 - Detail result has exactly the keys `context, cost, reasoning, image` (no `variants`)
 - Each of 3 records parsed independently; `detail("glm-5")` picks the right block
 - Cache cost nested inside `cost` dict passes through correctly
+- `variants_for` (decision #14): reads the cached `--verbose` `variants` keys; prefers the first
+  NON-EMPTY set across the picked provider then others (`{}` → keep looking); `[]` on empty-
+  everywhere (kimi) or total cache miss; **never shells out** (guarded by `_NO_SHELL`)
 
-**Real-config safety:** no subprocess call to real `opencode`; blob is mocked.
+**Real-config safety:** no subprocess call to real `opencode`; blob is mocked / cache seeded in tmp.
 
 ---
 

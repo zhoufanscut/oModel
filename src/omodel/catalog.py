@@ -46,7 +46,8 @@ class Catalog:
         (providers_for(model_id)[0]); brace-count + json.loads each record; pick the one
         whose header == `<prov>/<model_id>`. Returns a DISPLAY-ONLY dict
         {"context": int|None, "cost": {...}, "reasoning": bool, "image": bool} or None.
-        NEVER read `--verbose.variants`/`.family` (decision #14).
+        Reads NEITHER `--verbose.variants` NOR `.family`: variants are sourced separately by
+        variants_for (the decision #14 picker carve-out); `.family` is never read.
 
         The ~3s `--verbose` call is cached per PROVIDER (one subprocess yields every model of
         that provider) under cache key `verbose-<prov>`; `use_cache=False` forces a live call.
@@ -77,6 +78,37 @@ class Catalog:
 
         return _parse_verbose_record(stdout, f"{prov}/{model_id}")
 
+    def variants_for(self, provider: str, model: str) -> list:
+        """The variant names opencode exposes for (provider, model), read from the CACHED
+        `opencode models <prov> --verbose` output — NEVER a fresh subprocess, so it is safe to
+        call on the UI thread. This is the authoritative variant source for the model pickers:
+        opencode's per-(provider, model) `variants` map, not the heuristic family registry (the
+        deliberate reversal of decision #14 for variants — `.family` is still never read).
+
+        Returns the FIRST NON-EMPTY variant set (lowercased, opencode's order) found across
+        `provider` then any other connected provider serving `model`. A provider that reports an
+        EMPTY `variants` object is treated as "no info from this endpoint, keep looking" rather
+        than an authoritative "no variants" — the dedicated providers (zhipuai, moonshotai-cn)
+        report `{}` for every model (DESIGN §Data sources), so trusting their emptiness would hide
+        real variants that live in the `opencode` gateway's verbose (e.g. glm-5.2 → high/max). So:
+        `provider`'s own non-empty set wins if it has one; else the gateway's (usually warm,
+        covers ~every model); else []. Returns [] when NO cached provider reports a non-empty set
+        — i.e. opencode genuinely lists none (kimi) OR nothing is cached for the model anywhere (a
+        total miss): the caller offers nothing, we never guess. Same 24h cache as detail(); the
+        `r` key / `--refresh-models` clears it."""
+        tried = set()
+        for prov in [provider, *self.providers_for(model)]:
+            if prov in tried:
+                continue
+            tried.add(prov)
+            stdout = cache.read(f"verbose-{prov}")
+            if stdout is None:
+                continue
+            variants = _parse_verbose_variants(stdout, f"{prov}/{model}")
+            if variants:  # non-empty → authoritative for this model; empty/None → keep looking
+                return variants
+        return []
+
 
 def _parse_models(stdout: str):
     """`opencode models` stdout → (available, connected). Split each line on the FIRST '/';
@@ -101,16 +133,16 @@ def _parse_models(stdout: str):
     return available, connected
 
 
-def _parse_verbose_record(stdout: str, target_header: str):
-    """Pick the `<prov>/<model>` record from `opencode models <prov> --verbose` stdout and
-    return its DISPLAY-ONLY fields, or None. Splits records on header lines at column 0 and
-    brace-counts each JSON block. NEVER reads `.variants`/`.family` (decision #14)."""
+def _find_verbose_record(stdout: str, target_header: str):
+    """The parsed JSON record whose header line == `target_header` in
+    `opencode models <prov> --verbose` stdout, or None (not found / unparseable). Records are
+    split on header lines at column 0 (`_HEADER_RE`) and each JSON block is brace-counted. Shared
+    scan for _parse_verbose_record (display fields) and _parse_verbose_variants (variant keys)."""
     lines = stdout.splitlines()
     i = 0
     while i < len(lines):
-        line = lines[i]
-        if _HEADER_RE.match(line):
-            header = line.strip()
+        if _HEADER_RE.match(lines[i]):
+            header = lines[i].strip()
             # Collect the JSON block for this record via brace counting.
             i += 1
             brace_depth = 0
@@ -125,31 +157,55 @@ def _parse_verbose_record(stdout: str, target_header: str):
 
             if header == target_header:
                 try:
-                    record = json.loads("\n".join(block_lines))
+                    return json.loads("\n".join(block_lines))
                 except (json.JSONDecodeError, ValueError):
                     return None
-                # Extract display-only fields; NEVER read .variants/.family.
-                context = None
-                limit = record.get("limit") or {}
-                if isinstance(limit, dict):
-                    context = limit.get("context")
-
-                cost = record.get("cost")
-                caps = record.get("capabilities") or {}
-                reasoning = bool(caps.get("reasoning"))
-                image_caps = caps.get("input") or {}
-                image = bool(image_caps.get("image"))
-
-                return {
-                    "context": context,
-                    "cost": cost,
-                    "reasoning": reasoning,
-                    "image": image,
-                }
         else:
             i += 1
 
     return None
+
+
+def _parse_verbose_record(stdout: str, target_header: str):
+    """The DISPLAY-ONLY fields for the `<prov>/<model>` record, or None. Reads NEITHER
+    `.variants` NOR `.family`: variants are read separately by _parse_verbose_variants /
+    Catalog.variants_for (the deliberate decision #14 carve-out); `.family` is never read."""
+    record = _find_verbose_record(stdout, target_header)
+    if record is None:
+        return None
+
+    context = None
+    limit = record.get("limit") or {}
+    if isinstance(limit, dict):
+        context = limit.get("context")
+
+    cost = record.get("cost")
+    caps = record.get("capabilities") or {}
+    reasoning = bool(caps.get("reasoning"))
+    image_caps = caps.get("input") or {}
+    image = bool(image_caps.get("image"))
+
+    return {
+        "context": context,
+        "cost": cost,
+        "reasoning": reasoning,
+        "image": image,
+    }
+
+
+def _parse_verbose_variants(stdout: str, target_header: str):
+    """The variant names opencode exposes for the `<prov>/<model>` record — the KEYS of its
+    `variants` object (opencode's order, lowercased) — or [] when that object is empty/missing,
+    or None when the record isn't in this stdout (so Catalog.variants_for keeps looking in the
+    next provider). Reads ONLY `.variants` (the deliberate decision #14 carve-out for the model
+    pickers); still never `.family`."""
+    record = _find_verbose_record(stdout, target_header)
+    if record is None:
+        return None
+    variants = record.get("variants")
+    if not isinstance(variants, dict):
+        return []
+    return [str(k).lower() for k in variants]
 
 
 def load(opencode_bin: str = "opencode", use_cache: bool = True) -> Catalog:
