@@ -1228,3 +1228,49 @@ def test_pilot_undo_sub_target_under_non_first_agent(pilot_config):
             )
 
     asyncio.run(_run())
+
+
+def test_pilot_confirm_modal_diff_scrolls(pilot_config):
+    """Regression: a save diff taller than the modal cap (#confirm-body max-height: 20) must be
+    fully scrollable, not clipped at the top. The body is a VerticalScroll driven by the modal's
+    own bindings (↑↓/jk, PageUp/PageDown, Home/End), so it scrolls while the Yes button keeps
+    focus — leaving Enter to confirm as before."""
+    from textual.containers import VerticalScroll
+
+    from omodel.app import ConfirmModal
+
+    cfg_path, _ = pilot_config
+    long_body = "\n".join(f"+ added line {i:02d}" for i in range(40))  # 40 rows > 20-row cap
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            result = {}
+            app.push_screen(
+                ConfirmModal("Save changes?", long_body),
+                lambda v: result.__setitem__("v", v),
+            )
+            await pilot.pause()
+
+            body = app.screen.query_one("#confirm-body", VerticalScroll)
+            assert body.max_scroll_y > 0, "long diff must overflow the cap (i.e. be scrollable)"
+            assert not body.focusable, "scroller stays non-focusable so the Yes button keeps focus"
+            assert app.focused is not None and app.focused.id == "confirm-yes", (
+                "default focus is the Yes button so Enter still confirms"
+            )
+
+            await pilot.press("j")  # one line down (vim)
+            await pilot.pause()
+            assert round(body.scroll_y) >= 1, "j must scroll the body down"
+            await pilot.press("end")  # jump to bottom
+            await pilot.pause()
+            assert round(body.scroll_y) == body.max_scroll_y, "End reaches the last diff line"
+            await pilot.press("home")  # back to top
+            await pilot.pause()
+            assert round(body.scroll_y) == 0, "Home returns to the first diff line"
+
+            await pilot.press("enter")  # focused Yes button still confirms
+            await pilot.pause()
+            assert result.get("v") is True, "Enter must still confirm the modal"
+
+    asyncio.run(_run())

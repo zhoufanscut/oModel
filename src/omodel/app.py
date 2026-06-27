@@ -59,7 +59,7 @@ from typing import Optional
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
@@ -301,12 +301,25 @@ class VariantModal(ModalScreen):
 
 class ConfirmModal(ModalScreen):
     """Generic confirm modal — shows `body` (e.g. the save diff, with the first-save
-    palette-loss warning) and Yes/No.  Dismisses True on accept, False otherwise."""
+    palette-loss warning) and Yes/No.  Dismisses True on accept, False otherwise.
+
+    The body lives in a `VerticalScroll` capped at `max-height`, so a long save diff is fully
+    scrollable: ↑/↓ + j/k, PageUp/PageDown, Home/End.  Those are screen-level bindings (not the
+    scroller's own), so they scroll even while the Yes button keeps focus — leaving Enter to
+    confirm the focused button as before."""
 
     BINDINGS = [
         Binding("escape", "decline", "No", show=False),
         Binding("y", "accept", "Yes", show=False),
         Binding("n", "decline", "No", show=False),
+        Binding("up", "scroll(-1)", "Scroll up", show=False),
+        Binding("k", "scroll(-1)", "Scroll up", show=False),
+        Binding("down", "scroll(1)", "Scroll down", show=False),
+        Binding("j", "scroll(1)", "Scroll down", show=False),
+        Binding("pageup", "scroll_page(-1)", "Page up", show=False),
+        Binding("pagedown", "scroll_page(1)", "Page down", show=False),
+        Binding("home", "scroll_ends(-1)", "Top", show=False),
+        Binding("end", "scroll_ends(1)", "Bottom", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -326,6 +339,7 @@ class ConfirmModal(ModalScreen):
         height: auto;
         max-height: 20;
         margin-bottom: 1;
+        scrollbar-size-vertical: 1;
     }
     ConfirmModal #confirm-buttons {
         height: auto;
@@ -349,11 +363,19 @@ class ConfirmModal(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self._title)
-            yield Static(self._body, id="confirm-body")
+            with VerticalScroll(id="confirm-body") as body:
+                # Non-focusable so default focus stays on the Yes button (Enter still confirms);
+                # scrolling is driven by this screen's own bindings, not the scroller's focus.
+                body.can_focus = False
+                yield Static(self._body, id="confirm-body-text")
             with Horizontal(id="confirm-buttons"):
                 yield Button("Yes", variant="primary", id="confirm-yes")
                 yield Button("No", id="confirm-no")
-            yield Static("y yes · n no · esc cancel", id="confirm-hints", classes="modal-hints")
+            yield Static(
+                "↑↓/jk scroll · y yes · n no · esc cancel",
+                id="confirm-hints",
+                classes="modal-hints",
+            )
 
     @on(Button.Pressed, "#confirm-yes")
     def _yes(self) -> None:
@@ -368,6 +390,25 @@ class ConfirmModal(ModalScreen):
 
     def action_decline(self) -> None:
         self.dismiss(False)
+
+    def _body_scroll(self) -> VerticalScroll:
+        return self.query_one("#confirm-body", VerticalScroll)
+
+    def action_scroll(self, direction: int) -> None:
+        """↑/k, ↓/j — scroll the diff body one line (no-op when it already fits)."""
+        body = self._body_scroll()
+        (body.scroll_down if direction > 0 else body.scroll_up)(animate=False)
+
+    def action_scroll_page(self, direction: int) -> None:
+        """PageUp / PageDown — scroll the diff body one page."""
+        body = self._body_scroll()
+        (body.scroll_page_down if direction > 0 else body.scroll_page_up)(animate=False)
+
+    def action_scroll_ends(self, direction: int) -> None:
+        """Home / End — jump to the top / bottom of the diff body (instant, no animation, so a
+        big diff lands immediately rather than smooth-scrolling for a second)."""
+        body = self._body_scroll()
+        (body.scroll_end if direction > 0 else body.scroll_home)(animate=False)
 
 
 class AddSubModal(ModalScreen):
