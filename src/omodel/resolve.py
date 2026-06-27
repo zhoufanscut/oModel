@@ -281,16 +281,11 @@ class Resolver:
                     continue
                 substitute_for = model_id
 
-            # warn: variant only (unavailable entries are skipped, never shown). Identical for
-            # every provider of this model, so compute it once and copy onto each row.
-            warn: list = []
-            if variant is not None:
-                fam = self.suggestions.detect_family(resolved_model)
-                if fam is not None and variant not in fam.variants:
-                    warn.append("variant")
-
             # One row per serving provider, dedicated (single-vendor) before aggregator
             # (gateway). You pick the prefix by choosing the row — no `p` cycling.
+            # warn (variant only; unavailable entries are skipped, never shown) is computed
+            # per-(provider, model) by _variant_warn: opencode --verbose is the truth source,
+            # the heuristic family.variants only a fallback.
             for provider in self._ordered_providers(resolved_model):
                 key = f"{provider}/{resolved_model}"
                 if key in seen_keys:
@@ -303,10 +298,32 @@ class Resolver:
                     "variant": variant,
                     "entry": entry,
                     "substitute_for": substitute_for,
-                    "warn": list(warn),
+                    "warn": self._variant_warn(variant, provider, resolved_model),
                 })
 
         return rows
+
+    def _variant_warn(self, variant: "Optional[str]", provider: str, model: str) -> list:
+        """``["variant"]`` if `variant` is set but unsupported for (provider, model), else ``[]``.
+
+        opencode `--verbose` is the source of truth — mirroring omo's own runtime > heuristic
+        capability priority, and keeping the warn consistent with what the `v`/add pickers
+        OFFER (both go through `catalog.variants_for`). Validate against the opencode set when it
+        is NON-EMPTY; fall back to the heuristic `family.variants` only when opencode is silent
+        for this model (a dedicated provider's `{}`, an uncached model, or a total miss) so a
+        cold `--verbose` cache never raises a spurious warn. Empty-everywhere therefore does NOT
+        warn: opencode `{}` is "no info from this endpoint", not an authoritative "no variants"
+        (the picker makes the same conservative call)."""
+        if variant is None:
+            return []
+        v = variant.lower()
+        offered = self.catalog.variants_for(provider, model)
+        if offered:
+            return ["variant"] if v not in offered else []
+        fam = self.suggestions.detect_family(model)
+        if fam is not None and v not in [x.lower() for x in fam.variants]:
+            return ["variant"]
+        return []
 
     def _same_line_match(self, model_id: str) -> "Optional[str]":
         """Newest connected model sharing `model_id`'s detect_family, else None.

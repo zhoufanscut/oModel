@@ -53,7 +53,7 @@ prefix and a valid variant, and saves a clean config.
 | 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
 | 12 | Distribution | **GitHub-only** (no PyPI): PyInstaller binary + `install.sh` primary; `pipx`/`uvx` from git secondary. |
 | 13 | First save | **Deletes the commented-out palette *inside* agents/categories** (those spans are rewritten clean); comments / commented-out config **outside** them are kept verbatim. The whole original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
-| 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). The bundled family registry stays the source only for `detect_family`/substitution and resolve's omo-suggestion ⚠ warn — never for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
+| 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). The bundled family registry stays the source for `detect_family`/substitution; the omo-suggestion ⚠ warn (`resolve._variant_warn`) **also** prefers `--verbose` now — the heuristic family `variants` is its fallback only when opencode is silent (dedicated `{}` / uncached) — but the registry is never the source for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
 
@@ -322,7 +322,8 @@ oModel/
   unspecified variant stays unset; set one via `v`). (Top-level requirement `variant` is presently
   **always empty** in omo, so exercise that tier with a *synthetic* fixture, not a real ID.) Last row
   is `+ add model…` (`cand:add`) for off-chain picks; `enter` on any non-`add` row stages it. Flag:
-  `⚠ variant` (variant ∉ family `variants` from the **bundled registry only**). (Unavailable entries
+  `⚠ variant` (variant unsupported for the row's (provider, model): checked against opencode
+  `--verbose` when it lists a non-empty set, else the bundled family `variants`). (Unavailable entries
   are hidden, not flagged — decision #5.) **Current pick (`●`):** the row whose resolved
   `provider/model` equals the target's current assignment in `self.cfg` — at launch that's what
   `oh-my-openagent.jsonc` has on disk, and it follows your selection as you stage edits — is

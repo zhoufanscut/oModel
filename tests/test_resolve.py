@@ -5,10 +5,12 @@ Tests use MOCKED catalog + REAL bundled suggestion IDs.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
 
+from omodel import cache
 from omodel.catalog import Catalog
 from omodel.suggestions import load as load_suggestions
 from omodel.resolve import Resolver
@@ -786,3 +788,70 @@ class TestClaudeLineGuard:
         """claude-opus is its own family (not claude-non-opus) → no line guard, normal newest."""
         res = Resolver.build(_make_catalog(["p/claude-opus-4-6", "p/claude-opus-4-8"]), sugg)
         assert res._same_line_match("claude-opus-4-7") == "claude-opus-4-8"
+
+
+class TestVariantWarnOpencodeFirst:
+    """Resolver._variant_warn via candidates(): opencode --verbose is the truth source for the
+    omo-suggestion variant ⚠, with the heuristic family.variants as the fallback when opencode is
+    silent. One data-driven path for every model — no per-model special-casing. The conftest
+    isolates the cache to a per-test tmp dir; seed verbose-<prov> directly with cache.write."""
+
+    @staticmethod
+    def _seed(provider: str, records: dict) -> None:
+        """Seed a cached verbose-<provider> from {model: [variants]} — opencode's shape (a
+        `provider/model` header + a JSON block whose `variants` is an OBJECT keyed by name)."""
+        parts = []
+        for model, variants in records.items():
+            parts.append(f"{provider}/{model}")
+            parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
+        cache.write(
+            f"verbose-{provider}",
+            "\n".join(parts) + "\n",
+            ["opencode", "models", provider, "--verbose"],
+        )
+
+    @staticmethod
+    def _warn_for(res, model, provider, variant):
+        """The candidates() row warn for a synthetic single-entry requirement."""
+        synth = {
+            "variant": "",
+            "fallbackChain": [{"providers": [provider], "model": model, "variant": variant}],
+        }
+        with patch.object(res, "_requirement_for", return_value=synth):
+            rows = res.candidates("agent:sisyphus")
+        hit = [r for r in rows if r["model"] == model and r["provider"] == provider]
+        assert len(hit) == 1, f"expected one {provider}/{model} row, got {len(hit)}"
+        return hit[0]["warn"]
+
+    def test_opencode_nonempty_excluding_variant_warns(self, sugg):
+        """opencode lists a NON-EMPTY set that omits the suggested variant → warn. gpt-5-nano's
+        heuristic (gpt-5) HAS xhigh, but opencode says [minimal,low,medium,high] → ⚠ (truth wins)."""
+        self._seed("opencode", {"gpt-5-nano": ["minimal", "low", "medium", "high"]})
+        res = Resolver.build(_make_catalog(["opencode/gpt-5-nano"]), sugg)
+        assert self._warn_for(res, "gpt-5-nano", "opencode", "xhigh") == ["variant"]
+
+    def test_opencode_nonempty_including_variant_no_warn(self, sugg):
+        """opencode's non-empty set contains the suggested variant → no warn."""
+        self._seed("opencode", {"gpt-5-nano": ["minimal", "low", "medium", "high"]})
+        res = Resolver.build(_make_catalog(["opencode/gpt-5-nano"]), sugg)
+        assert self._warn_for(res, "gpt-5-nano", "opencode", "high") == []
+
+    def test_opencode_allows_what_heuristic_would_reject(self, sugg):
+        """The reversal both ways: claude-haiku's heuristic (claude-non-opus) has NO 'max', but
+        opencode says [high,max] → 'max' is allowed, no warn (opencode overrides the heuristic)."""
+        self._seed("opencode", {"claude-haiku-4-5": ["high", "max"]})
+        res = Resolver.build(_make_catalog(["opencode/claude-haiku-4-5"]), sugg)
+        assert self._warn_for(res, "claude-haiku-4-5", "opencode", "max") == []
+
+    def test_opencode_empty_falls_back_to_heuristic_warn(self, sugg):
+        """opencode reports `{}` (glm-5, kimi, …) → heuristic fallback: glm has no 'max' → still
+        warns. The conservative empty handling is identical for every such model (not glm-only)."""
+        self._seed("zhipuai", {"glm-5": []})
+        res = Resolver.build(_make_catalog(["zhipuai/glm-5"]), sugg)
+        assert self._warn_for(res, "glm-5", "zhipuai", "max") == ["variant"]
+
+    def test_cold_cache_no_spurious_warn(self, sugg):
+        """Nothing cached (cold --verbose) → heuristic fallback, NOT a blanket warn: a valid
+        heuristic variant stays clean (gpt-5.5 + high), so a fresh machine doesn't scream ⚠."""
+        res = Resolver.build(_make_catalog(["openai/gpt-5.5"]), sugg)
+        assert self._warn_for(res, "gpt-5.5", "openai", "high") == []
