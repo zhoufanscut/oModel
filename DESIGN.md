@@ -41,7 +41,7 @@ prefix and a valid variant, and saves a clean config.
 | # | Decision | Choice |
 |---|----------|--------|
 | 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
-| 2 | Save format | **Clean active-only** `.jsonc`; **timestamped backup each save** (`.backup/<ts>.jsonc`); non-model sections preserved. |
+| 2 | Save format | **Edit-in-place**: only `agents`/`categories` are rewritten clean; **everything else — other keys, formatting, comments, commented-out config — is preserved byte-for-byte** (`render()` splices just those two spans). **Timestamped backup each save** (`.backup/<ts>.jsonc`). |
 | 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`a`) types anything off-chain. Suggested variant. |
 | 4 | Layout | **Two-pane list-detail**. |
 | 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
@@ -52,7 +52,7 @@ prefix and a valid variant, and saves a clean config.
 | 10 | Availability source | **Live `opencode models` CLI** — not omo's cache, **not `auth list`** (see §Data sources). |
 | 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
 | 12 | Distribution | **GitHub-only** (no PyPI): PyInstaller binary + `install.sh` primary; `pipx`/`uvx` from git secondary. |
-| 13 | First save | **Deletes the commented-out palette** (clean active-only); the original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
+| 13 | First save | **Deletes the commented-out palette *inside* agents/categories** (those spans are rewritten clean); comments / commented-out config **outside** them are kept verbatim. The whole original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
 | 14 | Variant validity | **Bundled family registry only** — never `opencode --verbose` (its `variants` is opencode's runtime namespace: different shape, empty for some providers). |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
@@ -334,12 +334,17 @@ oModel/
   `_is_gpt_model` in `app.py` (matching omo's hard-coded agent key, not a data field — `requires*`
   are activation flags, not user-choice restrictions).
 
-### `config_io.py` — clean rewrite
-- Read `json5.load` → ordered dict; `agents`/`categories` editable, all other top-level keys
-  (`claude_code`, `experimental`, `team_mode`, `$schema`, future) passed through by value. (Comments
-  **inside** preserved sections — e.g. a `//"skills": false` line within `claude_code` — are also
-  dropped on rewrite; only `.backup/original.jsonc` retains them. Expected, not a bug.)
-- **`serialize(cfg) -> str` (exact):** (1) build an ordered dict preserving on-disk key order, but
+### `config_io.py` — edit-in-place save
+- Read `json5.load` → ordered dict; `agents`/`categories` are editable, all other top-level keys
+  (`claude_code`, `experimental`, `team_mode`, `$schema`, future) pass through. **The on-disk write
+  is text-preserving (`render`, below): only the `agents`/`categories` value spans are rewritten;
+  the rest of the file — other keys, formatting, and any comments / commented-out config *outside*
+  those two (e.g. a `//"skills": false` line within `claude_code`, or a parked top-level block) — is
+  kept byte-for-byte.** The commented palette *inside* agents/categories is still dropped (those
+  spans are rewritten clean); only `.backup/original.jsonc` retains it.
+- **`serialize(cfg) -> str` (exact):** the **canonical clean form** — used for dirtiness
+  (`_is_dirty` = `serialize(cfg) != _saved_text`, both sides this function, never the on-disk bytes)
+  and as the from-scratch / fallback writer; the actual on-disk write goes through `render`. (1) build an ordered dict preserving on-disk key order, but
   **force `$schema` to position 0** if present; (2) within `agents`/`categories`, a freshly-added
   sub-key (`ultrawork`/`compaction`) is **appended** to the end of its parent object, a cleared field
   is **deleted**; (3) `body = json.dumps(cfg, indent=2, ensure_ascii=False)` — note `json.dumps`
@@ -358,9 +363,21 @@ oModel/
     "categories": {}
   }
   ```
-- **Save flow:** diff `serialize(cfg)` vs on-disk file → confirm modal showing the diff → on accept,
-  snapshot the current on-disk file to `<config_dir>/.backup/<ts>.jsonc` (**verbatim byte copy** —
-  preserves comments), then atomic temp+rename of the new content. No diff → "nothing to save".
+- **`render(cfg, base_text) -> str` (the write form):** returns `base_text` with **only** the
+  top-level `agents` and `categories` value spans replaced by their clean form (`json.dumps`,
+  comment-free, `_clean_agents`-cleaned), re-indented under the key. Everything else splices through
+  verbatim — comments, commented-out config, other keys, key order, formatting. A small JSONC-aware
+  scanner (`_top_level_value_span`, honoring strings / `//` / `/* */` / nesting, so a `}` or
+  `"agents"` inside a string never fools it) locates the two spans; the later span is replaced first
+  so offsets stay valid. **Falls back to `serialize(cfg)`** when `base_text` is empty/blank or either
+  key is not a direct root member (non-omo / hand-broken file — splice unsafe). `render` is
+  **idempotent** (rendering its own output reproduces it byte-for-byte → an unchanged save is a
+  no-op). It does **not** inject the `// Generated by oModel` header (that would touch outside
+  agents/categories); the header is emitted only by the `serialize` from-scratch / fallback path.
+- **Save flow:** diff `render(cfg, on-disk)` vs the on-disk file → confirm modal showing the diff
+  (exactly what changes — agents/categories only, comments outside intact) → on accept, snapshot the
+  current on-disk file to `<config_dir>/.backup/<ts>.jsonc` (**verbatim byte copy** — preserves
+  comments), then atomic temp+rename of `render(cfg, on-disk)`. No diff → "nothing to save".
 - **Backups & rollback:** `<config_dir>/.backup/` (next to the config; `<config_dir>` = dir of the
   active config, default `~/.config/opencode/`). **Exact save order (this sequence):** (1) if
   `.backup/original.jsonc` does **not** exist, copy the current on-disk config to it (verbatim);
@@ -372,10 +389,12 @@ oModel/
   newest 10** timestamped (each with timestamp + size / short diff); items 11–20 are an unlisted
   on-disk buffer. Restoring first snapshots the *current* file (so restore is itself undoable), then
   copies the chosen backup to the config path.
-- ⚠ **First save is lossy by design:** the live config is comment-dense (3–6 commented alternatives
-  per agent); `json5.load` drops comments, so the first clean save **deletes the whole palette**.
-  Intended (decision #13); the palette is preserved verbatim as the pinned **`.backup/original.jsonc`**
-  (never pruned, always restorable) — surface this in the first confirm modal.
+- ⚠ **First save drops the palette *inside* agents/categories:** the live config is comment-dense
+  (3–6 commented alternatives per agent), and those live inside the `agents`/`categories` objects,
+  which `render` rewrites clean — so the first save deletes that palette (decision #13). Comments /
+  commented-out config **outside** those two are preserved verbatim. The whole pre-oModel file is
+  also pinned as **`.backup/original.jsonc`** (never pruned, always restorable) — surface this in the
+  first confirm modal.
 - Missing config → scaffold oModel's own minimal `default-config.jsonc`, then open it. Template (the
   `$schema` is a **literal hardcoded string** committed in `default-config.jsonc`; nothing in the
   refresh path writes it):
@@ -553,7 +572,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 6. **Refresh:** checkout + `OMO_SRC` + bun → rewrites data file (meta bumped); no omo/bun → non-fatal.
 7. **Headless UI (Pilot):** select `agent:sisyphus`, set `cand:*` → `deepseek/deepseek-v4-pro`, `s`,
    confirm → re-`json5.load`: model updated, `team_mode`/`experimental`/`claude_code` unchanged by
-   value, palette comments gone, a `.backup/<ts>.jsonc` snapshot exists (verbatim original); a second
+   value, the palette *inside* agents/categories gone but comments *outside* them preserved verbatim,
+   a `.backup/<ts>.jsonc` snapshot exists (verbatim original); a second
    save adds a second snapshot and `--restore` lists them newest-first.
 8. **Live:** machine with `opencode`, no omo source → `omodel` launches, lists from `opencode models`,
    edits + saves a clean file OMO reloads.

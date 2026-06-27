@@ -61,8 +61,12 @@ line when a new one does.
 
 ## Save / history / cache
 
-- **active-only / clean config** — the save format: JSON, *no comments*. The first save deliberately
-  drops omo's commented **palette** (preserved verbatim in `original.jsonc`). → config_io.py `serialize`
+- **edit-in-place / text-preserving save** — the write splices only the top-level `agents`/`categories`
+  spans clean (*no comments inside them*) and keeps **everything else byte-for-byte** — other keys,
+  formatting, and any comments / commented-out config *outside* those two. → config_io.py `render`
+- **active-only / clean config** — the *canonical clean form* (`serialize`): JSON, *no comments*. Used
+  for dirtiness + as the from-scratch/fallback writer; the first save drops omo's commented **palette**
+  *inside* agents/categories (preserved verbatim in `original.jsonc`). → config_io.py `serialize`
 - **backup vs history** — *backup* = verbatim `.backup/<ts>.jsonc` copy at each save (on disk,
   cross-session, `--restore`); *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`).
   → config_io.py / history.py

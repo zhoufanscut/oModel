@@ -87,8 +87,13 @@ The stub files ARE the signatures; implement their bodies. Summary:
   `build(catalog, suggestions)`, `.vendors_served(p)->int`, `.resolve_prefix(model_id, source,
   entry=None)->str|None`, `.candidates(target)->list[dict]`.
 - `config_io.py`: `config_path(cli_override=None)->str`; `load_config(path=None)->(cfg, path)`;
-  `serialize(cfg)->str`; `diff_text(cfg, path)->str`; `@dataclass SaveResult(changed, backup,
-  original_created)`; `save(cfg, path)->SaveResult`; `@dataclass BackupInfo(name, path,
+  `serialize(cfg)->str` (canonical clean form — dirtiness + from-scratch fallback; never required
+  to equal the on-disk bytes); `render(cfg, base_text)->str` (**text-preserving write form**:
+  `base_text` with only the top-level `agents`/`categories` value spans rewritten clean, everything
+  else — incl. comments / commented-out config outside them — byte-for-byte; falls back to
+  `serialize(cfg)` when `base_text` is empty or a key isn't a direct root member);
+  `diff_text(cfg, path)->str` and `save(cfg, path)->SaveResult` both go through `render`;
+  `@dataclass SaveResult(changed, backup, original_created)`; `@dataclass BackupInfo(name, path,
   is_original, size)`; `list_backups(path)->list`; `restore(path, backup_name)->None`.
 - `app.py`: `class OModelApp(App)` (Textual) + `run_app(config_path=None)->None`. Stable widget
   IDs as documented in `app.py`'s docstring. Every cfg mutation routes through `_record`/`_stage_row`

@@ -82,11 +82,15 @@ data/omo-suggestions.json ──────────────► suggesti
   `gpt-5.5` shows as `openai/gpt-5.5` then `opencode/gpt-5.5` and you pick either. Data-driven — no
   hardcoded provider list. (`resolve_prefix()` keeps the single dedicated-first pick for the add-model
   modal's bare-id auto-prefix.)
-- **`config_io.py`** — clean rewrite + backups. Save is **active-only** (`json.dumps`, no comments — the
-  first save intentionally drops omo's commented palette). Each save snapshots the prior file verbatim to
+- **`config_io.py`** — edit-in-place save + backups. The write is **text-preserving** (`render`): only
+  the top-level `agents`/`categories` value spans are rewritten clean (`json.dumps`, no comments —
+  dropping omo's commented palette *inside* them); **everything else — other keys, formatting, and any
+  comments / commented-out config *outside* those two — is kept byte-for-byte** (a small JSONC-aware
+  span scanner locates the two spans; non-omo / hand-broken files fall back to a full clean rewrite).
+  `serialize()` is the canonical clean form (dirtiness `_is_dirty` + the from-scratch/fallback writer),
+  never required to equal the on-disk bytes. Each save snapshots the prior file verbatim to
   `<config_dir>/.backup/<ts>.jsonc`; the very first save pins `original.jsonc` (never pruned, never
-  counts toward the 20-snapshot cap). Only `agents`/`categories` are edited; all other top-level keys
-  pass through by value.
+  counts toward the 20-snapshot cap).
 - **`app.py`** — Textual two-pane App. Stable widget IDs (`#targets`, `#candidates`, `#detail`,
   `#providers`) and option IDs (`agent:<name>[.ultrawork|.compaction]`, `cat:<name>`, `cand:<i>`,
   `cand:add`) are a contract that pilot tests depend on — see the module docstring; don't rename.

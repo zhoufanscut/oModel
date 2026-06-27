@@ -1268,8 +1268,10 @@ class OModelApp(App):
         )
         if not os.path.exists(original):
             body = (
-                "⚠ First save deletes the commented-out palette (saved verbatim to "
-                ".backup/original.jsonc, always restorable).\n\n" + diff
+                "⚠ First save rewrites agents/categories clean, dropping their commented-out "
+                "palette. Everything outside those two (other keys, comments, commented-out "
+                "config) is kept verbatim; the whole original is saved to .backup/original.jsonc, "
+                "always restorable.\n\n" + diff
             )
 
         def _confirm(ok) -> None:

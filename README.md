@@ -7,7 +7,9 @@
 Per agent/category, oModel shows omo's fallback chain filtered to the models you can actually
 run (via `opencode models`) — each as one row per serving provider, dedicated providers before
 gateways. You pick one and it fills in the correct `provider/` prefix and a valid variant, then
-saves a clean `oh-my-openagent.jsonc` (timestamped backups each save).
+writes it back to `oh-my-openagent.jsonc`: only the `agents`/`categories` blocks are rewritten
+clean — everything else in the file, including comments and commented-out config, is kept
+verbatim (timestamped backups each save).
 
 ```
  Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai    (cached 3h ago · r)

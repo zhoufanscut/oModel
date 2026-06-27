@@ -14,9 +14,11 @@ import time
 
 from omodel.config_io import (
     BackupInfo,
+    _top_level_value_span,
     diff_text,
     list_backups,
     load_config,
+    render,
     restore,
     save,
     serialize,
@@ -236,19 +238,21 @@ class TestSave:
             assert hasattr(result, "original_created")
 
     def test_atomic_write(self):
-        """The config file is updated atomically (temp+rename)."""
+        """The config file is updated atomically (temp+rename) with the text-preserving render."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
             _write_file(cfg_path, ORIGINAL_JSONC)
 
             save(MINIMAL_CONFIG, cfg_path)
 
-            # After save, config must be parseable and match serialized form
+            # After save, the on-disk file is render(cfg, prior-on-disk): only agents/categories
+            # rewritten, everything else (incl. comments) spliced in place.
             written = _read_file(cfg_path)
-            assert written == serialize(MINIMAL_CONFIG)
+            assert written == render(MINIMAL_CONFIG, ORIGINAL_JSONC)
 
-    def test_clean_rewrite_drops_comments(self):
-        """First save produces a comment-free file (comment loss is EXPECTED, decision #13)."""
+    def test_save_drops_inside_palette(self):
+        """First save drops the commented palette INSIDE agents/categories (decision #13) — those
+        spans are rewritten clean (the active model alone remains)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
             _write_file(cfg_path, ORIGINAL_JSONC)
@@ -256,18 +260,15 @@ class TestSave:
             save(MINIMAL_CONFIG, cfg_path)
 
             written = _read_file(cfg_path)
-            # No LINES starting with '//' (after stripping whitespace) except the oModel header.
-            # (Note: '//' inside a JSON string value like a URL is fine and expected.)
-            lines = written.splitlines()
-            comment_lines = [line for line in lines[1:] if line.strip().startswith("//")]
-            assert comment_lines == [], (
-                "Comments inside the config body must be dropped on clean rewrite: "
-                + str(comment_lines)
-            )
+            # The sisyphus palette alternatives lived INSIDE agents → gone.
+            assert "moonshotai-cn/kimi-k2.5" not in written
+            assert "openai/gpt-5.5" not in written
+            # The one active model remains.
+            assert "opencode/claude-opus-4-7" in written
 
-    def test_comment_loss_asserted_as_expected(self):
-        """Explicitly assert the original JSONC had comments; the saved version does not.
-        (Decision #13: lossy by design. The original is preserved in .backup/original.jsonc.)"""
+    def test_save_preserves_outside_comments(self):
+        """Comments / commented-out config OUTSIDE agents/categories survive verbatim — omodel
+        manages only those two keys (decision #13, narrowed)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
             _write_file(cfg_path, ORIGINAL_JSONC)
@@ -276,12 +277,13 @@ class TestSave:
 
             save(MINIMAL_CONFIG, cfg_path)
             written = _read_file(cfg_path)
-            # Comments gone in the new file (only header allowed)
-            body_lines = written.split("\n")[1:]
-            comment_lines = [line for line in body_lines if line.strip().startswith("//")]
-            assert comment_lines == [], f"Palette comments must be gone after save: {comment_lines}"
 
-            # But original is verbatim
+            # The top banner comment and the inline comment inside the non-model `claude_code`
+            # block are OUTSIDE agents/categories → preserved.
+            assert "// hand-curated palette" in written
+            assert '// "skills": false' in written
+
+            # And the original remains pinned verbatim regardless.
             orig_path = os.path.join(tmpdir, ".backup", "original.jsonc")
             assert _read_file(orig_path) == ORIGINAL_JSONC
 
@@ -522,3 +524,181 @@ class TestDiffText:
             _write_file(cfg_path, serialize(MINIMAL_CONFIG))
             diff = diff_text(MINIMAL_CONFIG, cfg_path)
             assert diff == ""
+
+    def test_diff_text_does_not_delete_outside_comments(self):
+        """The confirm-modal diff must NOT show outside comments being removed — only
+        agents/categories lines change."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
+            _write_file(cfg_path, ORIGINAL_JSONC)
+            diff = diff_text(MINIMAL_CONFIG, cfg_path)
+            # No '-' (removal) line that strips the outside claude_code comment.
+            removed = [ln for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---")]
+            assert not any('"skills": false' in ln for ln in removed)
+            assert not any("hand-curated palette" in ln for ln in removed)
+
+
+# ---------------------------------------------------------------------------
+# render() — text-preserving splice (only agents/categories rewritten)
+# ---------------------------------------------------------------------------
+
+# Stress fixture: a fakeout string carrying `{`, `}`, `"agents":`, and `//` (the span scanner
+# must not be fooled), a commented palette INSIDE both agents and categories, a parked
+# commented-out top-level block, and an inline /* */ block comment in a non-model section.
+RICH_JSONC = """\
+// top banner the user wrote — keep me
+{
+  "$schema": "https://example.com/s.json",
+  "note": "has { braces } and \\"agents\\": fakeout and // slashes",
+  "agents": {
+    "sisyphus": {
+      "model": "opencode/claude-opus-4-7"
+      // "model": "openai/gpt-5.5"
+    }
+  },
+  "categories": {
+    "summarizer": {
+      "model": "opencode/gpt-5.5-mini"
+      // "model": "deepseek/deepseek-v4"
+    }
+  },
+  "team_mode": false,
+  // parked top-level config the user wants to keep:
+  // "team_mode_overrides": { "x": 1 },
+  "weird": "trailing } brace and \\" quote",
+  "claude_code": { "enabled": true /* inline block */ }
+}
+"""
+
+RICH_CFG = {
+    "$schema": "https://example.com/s.json",
+    "note": 'has { braces } and "agents": fakeout and // slashes',
+    "agents": {"sisyphus": {"model": "deepseek/deepseek-v4-pro"}},
+    "categories": {"summarizer": {"model": "opencode/gpt-5.5"}},
+    "team_mode": False,
+    "weird": 'trailing } brace and " quote',
+    "claude_code": {"enabled": True},
+}
+
+
+class TestRender:
+
+    def test_rewrites_agents_and_categories(self):
+        out = render(RICH_CFG, RICH_JSONC)
+        assert '"model": "deepseek/deepseek-v4-pro"' in out
+        assert '"model": "opencode/gpt-5.5"' in out
+
+    def test_drops_palette_inside_agents_and_categories(self):
+        out = render(RICH_CFG, RICH_JSONC)
+        assert '// "model": "openai/gpt-5.5"' not in out      # agents palette
+        assert '// "model": "deepseek/deepseek-v4"' not in out  # categories palette
+
+    def test_preserves_outside_comments_and_config(self):
+        out = render(RICH_CFG, RICH_JSONC)
+        assert "// top banner the user wrote" in out
+        assert '// "team_mode_overrides": { "x": 1 }' in out   # parked top-level block
+        assert "/* inline block */" in out                     # inline comment in claude_code
+
+    def test_fakeout_string_not_mistaken_for_member(self):
+        """A string value containing `{ }`, `"agents":`, and `//` must be preserved verbatim and
+        must not confuse the span scan."""
+        out = render(RICH_CFG, RICH_JSONC)
+        # Verbatim in the raw text (escaped quotes intact); the decoded value is checked in
+        # test_result_parses_and_matches_active_structure.
+        assert "has { braces } and" in out
+        assert "fakeout and // slashes" in out
+        assert "trailing } brace and" in out
+
+    def test_result_parses_and_matches_active_structure(self):
+        import json5
+        out = render(RICH_CFG, RICH_JSONC)
+        parsed = json5.loads(out)
+        assert parsed["agents"] == {"sisyphus": {"model": "deepseek/deepseek-v4-pro"}}
+        assert parsed["categories"] == {"summarizer": {"model": "opencode/gpt-5.5"}}
+        assert parsed["note"] == RICH_CFG["note"]
+        assert parsed["weird"] == RICH_CFG["weird"]
+        assert parsed["team_mode"] is False
+        assert parsed["claude_code"] == {"enabled": True}
+
+    def test_idempotent(self):
+        """Rendering already-rendered output reproduces it byte-for-byte (so an unchanged save is
+        'nothing to save')."""
+        out = render(RICH_CFG, RICH_JSONC)
+        assert render(RICH_CFG, out) == out
+
+    def test_empty_value_objects_unchanged(self):
+        """`"agents": {}` / `"categories": {}` stay inline `{}` when empty (idempotent splice)."""
+        base = (
+            '{\n  "$schema": "x",\n  "agents": {},\n  "categories": {},\n'
+            '  // keep\n  "team_mode": false\n}\n'
+        )
+        cfg = {"$schema": "x", "agents": {}, "categories": {}, "team_mode": False}
+        out = render(cfg, base)
+        assert out == base                       # nothing to change → byte-identical
+        assert "// keep" in out
+
+    def test_preserves_four_space_indent_alignment(self):
+        """A 4-space-indented file keeps its key indent on the spliced block's closing brace."""
+        base = (
+            "{\n"
+            '    "agents": {\n'
+            '        "sisyphus": {\n'
+            '            "model": "old"\n'
+            "        }\n"
+            "    },\n"
+            '    "categories": {}\n'
+            "}\n"
+        )
+        cfg = {"agents": {"sisyphus": {"model": "new"}}, "categories": {}}
+        out = render(cfg, base)
+        assert '"model": "new"' in out
+        # The agents object's closing brace aligns under the 4-space key indent.
+        assert "\n    }," in out
+        import json5
+        assert json5.loads(out)["agents"]["sisyphus"]["model"] == "new"
+
+    def test_fallback_to_serialize_when_no_base(self):
+        cfg = {"agents": {}, "categories": {}}
+        assert render(cfg, "") == serialize(cfg)
+        assert render(cfg, None) == serialize(cfg)
+        assert render(cfg, "   \n  ") == serialize(cfg)
+
+    def test_fallback_when_key_absent(self):
+        """If a top-level key isn't a direct root member, splicing is unsafe → clean rewrite."""
+        cfg = {"agents": {}, "categories": {}, "team_mode": False}
+        base_no_categories = '{\n  "agents": {},\n  "team_mode": false\n}\n'
+        assert render(cfg, base_no_categories) == serialize(cfg)
+
+
+# ---------------------------------------------------------------------------
+# _top_level_value_span() — the JSONC span scanner render() relies on
+# ---------------------------------------------------------------------------
+
+class TestTopLevelValueSpan:
+
+    def test_finds_agents_and_categories(self):
+        a = _top_level_value_span(RICH_JSONC, "agents")
+        c = _top_level_value_span(RICH_JSONC, "categories")
+        assert a is not None and c is not None
+        agents_text = RICH_JSONC[a[0]:a[1]]
+        categories_text = RICH_JSONC[c[0]:c[1]]
+        assert agents_text.startswith("{") and agents_text.endswith("}")
+        assert "sisyphus" in agents_text
+        assert "summarizer" in categories_text
+        # categories comes after agents in the file
+        assert c[0] > a[1]
+
+    def test_fakeout_string_does_not_match(self):
+        """The real `agents` span (with sisyphus) is found, not the `"agents":` inside `note`."""
+        a = _top_level_value_span(RICH_JSONC, "agents")
+        assert "sisyphus" in RICH_JSONC[a[0]:a[1]]
+
+    def test_nested_key_is_not_a_root_member(self):
+        assert _top_level_value_span(RICH_JSONC, "model") is None
+        assert _top_level_value_span(RICH_JSONC, "sisyphus") is None
+
+    def test_absent_key_returns_none(self):
+        assert _top_level_value_span(RICH_JSONC, "does_not_exist") is None
+
+    def test_no_root_object_returns_none(self):
+        assert _top_level_value_span("// just a comment\n[1, 2, 3]\n", "agents") is None
