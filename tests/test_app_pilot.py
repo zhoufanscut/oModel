@@ -519,13 +519,14 @@ def test_pilot_add_sub_chooser(pilot_config):
 
 
 # ---------------------------------------------------------------------------
-# Pilot test 5b': `ultrawork` is Sisyphus-only — the chooser omits it for other agents
+# Pilot test 5b': `ultrawork` is Sisyphus-only — a non-Sisyphus agent adds compaction directly
 # ---------------------------------------------------------------------------
 def test_pilot_ultrawork_is_sisyphus_only(pilot_config):
-    """omo only honors the `ultrawork`/`ulw` swap on Sisyphus, so the add-sub chooser must offer
-    `ultrawork` there alone. On a non-Sisyphus agent (oracle) the chooser lists a single
-    `compaction` row, the `u` shortcut is a no-op (no dead `ultrawork` block can be added), and
-    once compaction is present `a` just bells. Sisyphus still gets both (test_pilot_add_sub_chooser)."""
+    """omo only honors the `ultrawork`/`ulw` swap on Sisyphus, so every other agent has a single
+    addable sub-kind: `compaction`. With no choice to make, `a` on a non-Sisyphus agent (oracle)
+    skips the chooser and adds compaction **directly** — no modal, never an `ultrawork` block —
+    and once compaction is present `a` just bells. Sisyphus, which supports both kinds, still opens
+    the chooser (test_pilot_add_sub_chooser)."""
     cfg_path, _ = pilot_config
 
     def _ids(ol):
@@ -543,35 +544,25 @@ def test_pilot_ultrawork_is_sisyphus_only(pilot_config):
             _highlight_oracle()
             await pilot.pause()
 
-            # `a` opens the chooser, but it offers ONLY compaction — no ultrawork row.
+            # `a` adds compaction directly — no chooser modal opens, and never an ultrawork row.
             await pilot.press("a")
             await pilot.pause()
-            assert len(pilot.app.screen_stack) > 1, "`a` on an agent must open the chooser modal"
-            sub_list = pilot.app.screen_stack[-1].query_one("#sub-list", OptionList)
-            assert _ids(sub_list) == ["sub:compaction"], (
-                "a non-Sisyphus agent must be offered compaction only, never ultrawork"
+            assert len(pilot.app.screen_stack) == 1, (
+                "a single-kind agent must skip the chooser — `a` adds compaction directly"
             )
-
-            # The `u` shortcut is a no-op here (ultrawork isn't a valid kind): modal stays open,
-            # nothing is added.
-            await pilot.press("u")
-            await pilot.pause()
-            assert len(pilot.app.screen_stack) > 1, "`u` must not dismiss — ultrawork isn't offered"
-            assert "agent:oracle.ultrawork" not in _ids(targets)
-
-            # `c` adds compaction as usual.
-            await pilot.press("c")
-            await pilot.pause()
             assert "agent:oracle.compaction" in _ids(targets)
             assert "agent:oracle.ultrawork" not in _ids(targets)
             assert "ultrawork" not in pilot.app.cfg["agents"].get("oracle", {})
 
-            # compaction is the only kind oracle supports → a second `a` just bells (no modal).
+            # compaction is the only kind oracle supports → a second `a` just bells (no modal,
+            # no new row).
             _highlight_oracle()
             await pilot.pause()
+            before = _ids(targets)
             await pilot.press("a")
             await pilot.pause()
-            assert len(pilot.app.screen_stack) == 1, "only supported kind present → no chooser"
+            assert len(pilot.app.screen_stack) == 1, "nothing left to add → no chooser"
+            assert _ids(targets) == before
 
     asyncio.run(_run())
 
@@ -1680,11 +1671,9 @@ def test_pilot_undo_sub_target_under_non_first_agent(pilot_config):
             targets.focus()
             await pilot.pause()
 
-            await pilot.press("a")  # chooser
-            await pilot.pause()
-            # compaction (not ultrawork) — `second` is non-Sisyphus, so ultrawork isn't offered;
+            # `second` is non-Sisyphus → single-kind, so `a` adds compaction directly (no chooser);
             # this test exercises the sub-row index/undo path, which is kind-agnostic.
-            await pilot.press("c")  # → add compaction
+            await pilot.press("a")
             await pilot.pause()
             assert f"{target}.compaction" in _ids(targets)
 

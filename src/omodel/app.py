@@ -62,10 +62,12 @@ typed" row (a half-typed fragment that still matches falls back to the fuzzy lis
 VARIANT phase: iff opencode reports variants for the chosen (provider, model)
 (catalog.variants_for — cached `--verbose`), pick one or '(none)'; otherwise (kimi/glm-5, or no
 cached verbose) it's added immediately (variant None). GPT-only targets filter the list to GPT models.
-Add-sub modal (`a` on an agent): an OptionList (`#sub-list`, IDs 'sub:ultrawork' / 'sub:compaction')
-with one row per kind valid for that agent (compaction always; ultrawork Sisyphus-only — see
-_ULTRAWORK_AGENTS), naming each kind + what it's for; a kind already on the agent is disabled
-('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Every supported kind present → `a` bells.
+Add-sub (`a` on an agent): an agent that supports more than one sub-kind (only Sisyphus — ultrawork
++ compaction) opens a chooser modal, an OptionList (`#sub-list`, IDs 'sub:ultrawork' /
+'sub:compaction') with one row per kind valid for that agent (see _ULTRAWORK_AGENTS), naming each
+kind + what it's for; a kind already on the agent is disabled ('✓ added'); `u`/`c` shortcut or enter
+picks one, esc cancels. An agent with a single sub-kind (every non-Sisyphus agent → compaction only)
+has no choice, so `a` adds it directly — no modal. Every supported kind present → `a` bells.
 """
 from __future__ import annotations
 
@@ -100,8 +102,9 @@ _GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 
 # Agents for which omo actually honors an `ultrawork` sub-model. The `ultrawork`/`ulw` keyword
 # only swaps the model on Sisyphus; on any other agent an `ultrawork` block is dead config (omo
-# never reads it). We mirror that — the add-sub chooser offers `ultrawork` only here. `compaction`
-# is valid on every agent. Hard-coded agent key, like `_GPT_ONLY_AGENTS`, not a data field.
+# never reads it). We mirror that — only Sisyphus can add an `ultrawork` sub-target (and so only it
+# gets an add-sub chooser; every other agent has just `compaction`, which `a` adds directly).
+# `compaction` is valid on every agent. Hard-coded agent key, like `_GPT_ONLY_AGENTS`, not a data field.
 _ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
 
@@ -713,11 +716,13 @@ class ConfirmModal(ModalScreen):
 
 
 class AddSubModal(ModalScreen):
-    """`a` — pick which sub-target to add to an agent.  Offers only the kinds valid for that
-    agent (`_subkinds_for`): every agent gets `compaction`, but `ultrawork` only Sisyphus.  Each
-    row names the kind and one line on what omo uses it for; a kind already on the agent is shown
-    disabled (`✓ added`).  Dismisses with the chosen kind ('ultrawork'|'compaction') — via the
-    `u`/`c` shortcut or enter on the row — or None on cancel."""
+    """`a` — pick which sub-target to add to an agent.  Shown only when the agent supports more
+    than one kind (so there's an actual choice — only Sisyphus, with `ultrawork` + `compaction`);
+    a single-kind agent skips this and `a` adds straight away (see `OModelApp._add_sub`).  Offers
+    only the kinds valid for that agent (`_subkinds_for`): every agent gets `compaction`, but
+    `ultrawork` only Sisyphus.  Each row names the kind and one line on what omo uses it for; a
+    kind already on the agent is shown disabled (`✓ added`).  Dismisses with the chosen kind
+    ('ultrawork'|'compaction') — via the `u`/`c` shortcut or enter on the row — or None on cancel."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=False),
@@ -1614,10 +1619,12 @@ class OModelApp(App):
         )
 
     def _add_sub(self) -> None:
-        """`a` in #targets — choose a sub-target to add to the highlighted agent. Opens AddSubModal
-        with the kinds valid for that agent (`_subkinds_for`: compaction always, ultrawork only on
-        Sisyphus); the picked kind becomes an empty sub-row. Bell when the row isn't an agent or
-        every supported kind already exists (nothing to add)."""
+        """`a` in #targets — add a sub-target to the highlighted agent. When the agent supports
+        more than one kind (only Sisyphus — `ultrawork` + `compaction`) this opens AddSubModal to
+        pick; an agent with a single kind (every non-Sisyphus agent → `compaction` only) has no
+        choice, so `a` adds it directly — no modal (`_subkinds_for`). Either way the picked kind
+        becomes an empty sub-row. Bell when the row isn't an agent or every supported kind already
+        exists (nothing to add)."""
         target = self._current_target
         if target is None or not target.startswith("agent:"):
             return
@@ -1644,6 +1651,12 @@ class OModelApp(App):
             except Exception:
                 pass
             self._record(f"add {kind} sub-target to {name}")
+
+        # Single supported kind (non-Sisyphus → compaction only): no choice to make, so skip the
+        # chooser and add it straight away. Sisyphus (ultrawork + compaction) opens the modal.
+        if len(allowed) == 1:
+            _add(allowed[0])
+            return
 
         self.push_screen(AddSubModal(allowed, present), _add)
 
