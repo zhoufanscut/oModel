@@ -31,9 +31,10 @@ a literal — `$border-blurred` renders near-black on a dark terminal background
 KEYS: ↑↓ (or vim j/k) move within the focused pane · ←/→ (or vim h/l) focus
 targets/candidates (gated to the base screen via check_action) · enter set (dispatch by row:
 cand:add → add-model modal, else set
-model + default variant) · v variant · x clear · a pane-contextual (candidates + targets category
+model + default variant) · v variant · x clear (on an ultrawork/compaction sub-target row: delete
+the whole row) · a pane-contextual (candidates + targets category
 rows → add/edit-model modal; targets agent rows → add sub-target chooser) · u undo / ctrl+r redo
-(in-session undo of EVERY edit — set/clear/variant/add-model/add-sub — for mis-press recovery;
+(in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
 CatalogUnavailable) · q quit (confirm if dirty). The pane keys are shown in Static#hints (and
@@ -1244,6 +1245,11 @@ class OModelApp(App):
         tail += ["s save", "q quit"]
         tail_text = " · ".join(tail)
         cands = self.query_one("#candidates", OptionList)
+        # A sub-target row (agent:<name>.<kind>) deletes with `x` (clear == delete there);
+        # base agent/category rows clear the model. The label/hint follows so it's never
+        # misleading — and so the delete capability is discoverable on the left pane.
+        target = self._current_target or ""
+        is_sub = target.startswith("agent:") and "." in target[len("agent:"):]
         if self.focused is cands:
             # Right pane: the '+ add model…' row repurposes enter and drops v/x.
             hi = cands.highlighted
@@ -1256,19 +1262,21 @@ class OModelApp(App):
             if on_add:
                 text = f"↑↓ move · ← targets · enter add · {tail_text}"
             else:
+                x_label = "x delete" if is_sub else "x clear"
                 text = ("↑↓ move · ← targets · enter set · v variant · a edit · "
-                        f"x clear · {tail_text}")
+                        f"{x_label} · {tail_text}")
         else:
             # Left pane (targets): `a` is `sub` on an agent row, `edit` on a category row
-            # (categories have no sub-targets, so `a` opens the add/edit-model modal there).
-            tgt = self._current_target or ""
-            if tgt.startswith("agent:"):
+            # (categories have no sub-targets, so `a` opens the add/edit-model modal there); a
+            # sub-target row also advertises `x delete`.
+            if target.startswith("agent:"):
                 a_hint = "a sub · "
-            elif tgt.startswith("cat:"):
+            elif target.startswith("cat:"):
                 a_hint = "a edit · "
             else:
                 a_hint = ""
-            text = f"↑↓ move · → candidates · {a_hint}{tail_text}"
+            x_hint = "x delete · " if is_sub else ""
+            text = f"↑↓ move · → candidates · {a_hint}{x_hint}{tail_text}"
         hints.update(text)
 
     # ----- events ----------------------------------------------------------------------
@@ -1417,10 +1425,18 @@ class OModelApp(App):
         return True
 
     def action_clear(self) -> None:
-        """`x` — clear the current target's assignment (delete model/variant). Undoable (`u`)
-        — a fat-fingered `x` is one keystroke from being reverted."""
+        """`x` — clear/delete the current target. On a base agent/category row it clears the
+        assignment (drops model/variant, keeps the row). On an ↳ ultrawork/compaction SUB-target
+        it deletes the whole row: a cleared sub-object serializes away anyway (config_io drops
+        empty sub-objects), so a model-less placeholder isn't worth keeping — for a sub-target
+        clear == delete, which is also how you undo a stray `a` add without reaching for `u`.
+        Undoable (`u`) either way — a fat-fingered `x` is one keystroke from being reverted."""
         target = self._current_target
         if target is None:
+            return
+        if target.startswith("agent:") and "." in target[len("agent:"):]:
+            name, kind = target[len("agent:"):].split(".", 1)
+            self._delete_subtarget(target, name, kind)
             return
         node = self._node_for(target)
         if isinstance(node, dict) and ("model" in node or "variant" in node):
@@ -1428,6 +1444,22 @@ class OModelApp(App):
             node.pop("variant", None)
         self._refresh_right(target)
         self._record(f"clear {self._target_label(target)}")
+
+    def _delete_subtarget(self, target: str, name: str, kind: str) -> None:
+        """`x` on an ↳ ultrawork/compaction row — remove the sub-target outright, dropping the
+        cfg node (along with any model it held) plus its off-chain typed rows and cached resolver
+        rows, so re-adding the same sub-target later starts clean rather than resurrecting a stale
+        ⚠ row. Rebuilds the left pane onto the parent agent and records an undoable snapshot — the
+        `_custom_rows` ride along as the entry's `aux`, so `u` restores the row in lockstep with cfg."""
+        agent = (self.cfg.get("agents") or {}).get(name)
+        if isinstance(agent, dict):
+            agent.pop(kind, None)
+        self._custom_rows.pop(target, None)
+        self._rows.pop(target, None)
+        parent = f"agent:{name}"
+        self._populate_targets(select=parent)
+        self._refresh_right(parent)
+        self._record(f"delete {kind} sub-target from {name}")
 
     def action_variant(self) -> None:
         """`v` — pick from the variants opencode reports for the highlighted candidate's
@@ -1551,8 +1583,8 @@ class OModelApp(App):
 
     def action_undo(self) -> None:
         """`u` — revert the last edit (mis-press recovery). Steps back through the in-session
-        history (set / clear / variant / add-model / add sub-target) and notifies what was
-        undone; at the bottom of the stack it just says so."""
+        history (set / clear / variant / add-model / add sub-target / delete sub-target) and
+        notifies what was undone; at the bottom of the stack it just says so."""
         result = self._history.undo()
         if result is None:
             self.notify("Nothing to undo.")

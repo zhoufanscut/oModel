@@ -2,7 +2,7 @@
 
 A linear snapshot stack of `cfg` states. `app.py` routes EVERY config mutation through it
 (see app's `_record` / `_stage_row`), so any operation — set model, clear, variant, add-model,
-add sub-target — can be undone with one key (`u`) and re-applied with `ctrl+r`. The point is
+add/delete sub-target — can be undone with one key (`u`) and re-applied with `ctrl+r`. The point is
 mis-press recovery: a fat-fingered `x` (clear) or a wrong pick is one keystroke away from being
 reverted.
 

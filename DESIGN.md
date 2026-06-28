@@ -55,7 +55,7 @@ prefix and a valid variant, and saves a clean config.
 | 13 | First save | **Deletes the commented-out palette *inside* agents/categories** (those spans are rewritten clean); comments / commented-out config **outside** them are kept verbatim. The whole original is pinned verbatim as **`.backup/original.jsonc`** (never pruned). |
 | 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). The bundled family registry stays the source for `detect_family`/substitution; the omo-suggestion ⚠ warn (`resolve._variant_warn`) **also** prefers `--verbose` now — the heuristic family `variants` is its fallback only when opencode is silent (dedicated `{}` / uncached) — but the registry is never the source for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
-| 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
+| 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub/delete-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
 
 ## Data sources
 
@@ -424,8 +424,8 @@ oModel/
   A `limit` (200) caps memory for long sessions. Snapshots are deep-copied **in and out** so the
   app's live cfg and history never alias. Pure data, no Textual — unit-tested in isolation.
 - **App integration (`app.py`):** every cfg mutation routes through one chokepoint — `_record`
-  (and `_stage_row`, which calls it) — so **set / clear / variant / add-model / add-sub** are
-  all undoable. `u` → `action_undo`, `ctrl+r` → `action_redo` (vim-style; distinct from `r`
+  (and `_stage_row`, which calls it) — so **set / clear / variant / add-model / add-sub /
+  delete-sub** are all undoable. `u` → `action_undo`, `ctrl+r` → `action_redo` (vim-style; distinct from `r`
   refresh), both **gated to the base screen** via `check_action` (a modal owns its own keys —
   e.g. AddSubModal binds `u`). `_restore_state` swaps in the snapshot and re-renders **both**
   panes (a sub-target row appears/vanishes on the left; the `●` current-pick follows cfg on the
@@ -487,9 +487,11 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   of the pane renders instantly so highlighting is never blocked.
 - **Hint bar** `Static#hints` (bottom row): **pane-aware** key hints — only the keys that do
   something for the focused pane + highlighted row, so it stays one line. Left/targets:
-  `↑↓ move · → candidates · [a sub ·|a edit ·] s save · q quit` (`a sub` on an agent row, `a edit`
-  on a category row — categories have no sub-targets, so `a` opens the model modal there).
-  Right/candidates: `↑↓ move · ← targets · enter set · v variant · a edit · x clear · s save · q quit`,
+  `↑↓ move · → candidates · [a sub ·|a edit ·] [x delete ·] s save · q quit` (`a sub` on an agent
+  row, `a edit` on a category row — categories have no sub-targets, so `a` opens the model modal
+  there; `x delete` only on an ultrawork/compaction sub-target row).
+  Right/candidates: `↑↓ move · ← targets · enter set · v variant · a edit · x clear · s save · q quit`
+  (`x clear` becomes `x delete` on a sub-target row),
   or `… · enter add · …` on the `+ add model…` row. A shared global tail carries `u undo` / `⌃r redo`
   **only when there's something to undo/redo** (then `s save · q quit`), so the bar stays one line.
   Re-rendered on focus (`on_descendant_focus`) and highlight changes. Modals carry their own one-line
@@ -501,7 +503,9 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
   `v` → push `OptionList` of the family's valid variants + `(none)`; `a` → pane-contextual: opens the
   add/edit-model modal (below) from #candidates **and** from a #targets *category* row (`enter` on
-  `cand:add` also opens it), or the add-sub chooser (below) from a #targets *agent* row; `x` → clear;
+  `cand:add` also opens it), or the add-sub chooser (below) from a #targets *agent* row; `x` → clear
+  the assignment (on an ultrawork/compaction sub-target row → **delete the whole row**, parent agent
+  regains focus — clear == delete since an empty sub-object serializes away);
   `u` → undo / `ctrl+r` → redo the last edit (in-session snapshot stack, §history.py — gated to the
   base screen via `check_action`, so they don't reach through a modal that binds `u` itself);
   `s` → diff+confirm save; `r` → refresh

@@ -1089,6 +1089,237 @@ def test_pilot_undo_add_sub_target(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_x_deletes_sub_target(pilot_config):
+    """`x` on an ↳ ultrawork/compaction sub-target row deletes the WHOLE row (clear == delete
+    there — an empty sub-object never saves, so there's no model-less placeholder to keep), and
+    the parent agent regains the highlight. `u` brings the row back (the delete is an undoable
+    snapshot). This is the direct way to remove a stray `a`-added sub-target."""
+    cfg_path, _ = pilot_config
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+            targets.highlighted = targets.get_option_index("agent:sisyphus")
+            targets.focus()
+            await pilot.pause()
+
+            # Add the ultrawork sub-target (chooser's `u` shortcut leaves it highlighted).
+            await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("u")
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" in _ids(targets)
+
+            # `x` on the sub-row deletes it outright and lands the highlight on the parent agent.
+            await pilot.press("x")
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" not in _ids(targets), (
+                "x on a sub-target must remove the whole row, not leave an empty placeholder"
+            )
+            assert "ultrawork" not in pilot.app.cfg["agents"].get("sisyphus", {}), (
+                "the cfg sub-object must be gone after delete"
+            )
+            assert pilot.app._current_target == "agent:sisyphus", (
+                "deleting a sub-target lands the highlight on its parent agent"
+            )
+
+            # Undo brings the sub-row back.
+            await pilot.press("u")
+            await pilot.pause()
+            assert "agent:sisyphus.ultrawork" in _ids(targets), (
+                "undo must restore the deleted sub-target row"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_delete_sub_target_with_model_is_undoable(pilot_config):
+    """Deleting a sub-target that already holds a model drops the model too (the whole sub-object
+    goes, not just its `model` field); `u` restores both the row and the model it held."""
+    cfg_path, _ = pilot_config
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+            targets.highlighted = targets.get_option_index("agent:sisyphus")
+            targets.focus()
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            await pilot.press("u")  # chooser → ultrawork
+            await pilot.pause()
+
+            # Assign a model into the new sub-target (inherits the parent chain).
+            await _select_target(pilot, "agent:sisyphus.ultrawork")
+            assert await _select_candidate(pilot, "zhipuai/glm-5") is not None
+            assert pilot.app.cfg["agents"]["sisyphus"]["ultrawork"].get("model") == "zhipuai/glm-5"
+
+            # Delete the model-bearing sub-row with `x`.
+            await _select_target(pilot, "agent:sisyphus.ultrawork")
+            await pilot.press("x")
+            await pilot.pause()
+            assert "ultrawork" not in pilot.app.cfg["agents"]["sisyphus"], (
+                "x must delete the whole sub-object, model and all"
+            )
+            assert "agent:sisyphus.ultrawork" not in _ids(targets)
+
+            # Undo restores the row AND the model it held.
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["ultrawork"].get("model") == "zhipuai/glm-5", (
+                "undo of a sub-target delete must restore its model assignment"
+            )
+
+    asyncio.run(_run())
+
+
+async def _add_ultrawork_sub(pilot) -> None:
+    """Highlight `agent:sisyphus`, focus #targets, and add its ultrawork sub-target via the
+    chooser's `u` shortcut (leaving the new sub-row highlighted)."""
+    targets = pilot.app.query_one("#targets", OptionList)
+    targets.highlighted = targets.get_option_index("agent:sisyphus")
+    targets.focus()
+    await pilot.pause()
+    await pilot.press("a")  # open the sub-target chooser
+    await pilot.pause()
+    await pilot.press("u")  # → ultrawork
+    await pilot.pause()
+
+
+def test_pilot_re_add_after_delete_does_not_resurrect_custom_row(pilot_config):
+    """Deleting a sub-target drops its off-chain typed rows (_custom_rows) and cached resolver
+    rows (_rows), so re-adding the same sub-target starts clean: a model TYPED into the first
+    incarnation does not reappear as a candidate in the second. This is the case that exercises
+    the `_custom_rows.pop` / `_rows.pop` in `_delete_subtarget` (the existing tests don't)."""
+    cfg_path, _ = pilot_config
+
+    def _labels(cands):
+        return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+    def _ids(targets):
+        return [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_ultrawork_sub(pilot)
+
+            # Type a custom (off-chain) model into the ultrawork sub-target.
+            inp = await _open_add_modal(pilot, "agent:sisyphus.ultrawork")
+            inp.value = "openrouter/zzz-custom"  # full provider/model → used verbatim
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert any("zzz-custom" in s for s in _labels(cands)), "typed custom row must be present"
+
+            # Delete the sub-target straight from the right pane (focus is #candidates), then
+            # re-add a fresh one.
+            await pilot.press("x")
+            await pilot.pause()
+            targets = pilot.app.query_one("#targets", OptionList)
+            assert "agent:sisyphus.ultrawork" not in _ids(targets)
+            await _add_ultrawork_sub(pilot)
+
+            # The fresh sub-target must NOT inherit the deleted incarnation's typed row.
+            await _select_target(pilot, "agent:sisyphus.ultrawork")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert not any("zzz-custom" in s for s in _labels(cands)), (
+                f"re-added sub-target must not resurrect the deleted custom row: {_labels(cands)}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_delete_then_undo_restores_custom_sub_target_row(pilot_config):
+    """Undo of a sub-target delete restores its off-chain typed row via the history `aux`
+    snapshot, not just the cfg value: a CUSTOM model assigned to the sub-target reappears as a
+    ●-marked candidate after `u` (it isn't in the chain, so ONLY a restored _custom_rows can
+    render it — a plain cfg restore wouldn't)."""
+    cfg_path, _ = pilot_config
+
+    def _labels(cands):
+        return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_ultrawork_sub(pilot)
+
+            inp = await _open_add_modal(pilot, "agent:sisyphus.ultrawork")
+            inp.value = "openrouter/zzz-custom"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            node = pilot.app.cfg["agents"]["sisyphus"]["ultrawork"]
+            assert node.get("model") == "openrouter/zzz-custom"
+
+            await pilot.press("x")  # delete the (custom-model-bearing) sub-target
+            await pilot.pause()
+            assert "ultrawork" not in pilot.app.cfg["agents"]["sisyphus"]
+
+            await pilot.press("u")  # undo the delete → row + custom model restored via aux
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["ultrawork"].get("model") == "openrouter/zzz-custom", (
+                "undo must restore the sub-target's custom model assignment"
+            )
+            await _select_target(pilot, "agent:sisyphus.ultrawork")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert any("●" in s and "zzz-custom" in s for s in _labels(cands)), (
+                f"undo must restore the custom ●-row via aux, not just cfg: {_labels(cands)}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_save_after_delete_drops_sub_target_from_disk(tmp_path):
+    """End-to-end: a sub-target deleted with `x` is gone from the SAVED file (render rewrites the
+    agents span clean from cfg), while config OUTSIDE agents/categories is preserved verbatim."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "{\n"
+            '  "agents": {\n'
+            '    "sisyphus": {\n'
+            '      "model": "opencode/claude-opus-4-7",\n'
+            '      "ultrawork": {"model": "zhipuai/glm-5"}\n'
+            "    }\n"
+            "  },\n"
+            '  "categories": {},\n'
+            '  "team_mode": true\n'
+            "}\n"
+        )
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+            ids = [targets.get_option_at_index(i).id for i in range(targets.option_count)]
+            assert "agent:sisyphus.ultrawork" in ids, "pre-existing ultrawork must show as a row"
+
+            await _select_target(pilot, "agent:sisyphus.ultrawork")
+            await pilot.press("x")  # delete the sub-target
+            await pilot.pause()
+            assert "ultrawork" not in pilot.app.cfg["agents"]["sisyphus"]
+
+            await _save_and_confirm(pilot)
+            with open(cfg_path, encoding="utf-8") as fh:
+                saved = fh.read()
+            assert "ultrawork" not in saved, f"deleted sub-target must not persist to disk: {saved}"
+            assert '"model": "opencode/claude-opus-4-7"' in saved, "the base model must remain"
+            assert "team_mode" in saved, "config outside agents/categories must be preserved"
+
+    asyncio.run(_run())
+
+
 def test_pilot_undo_restores_clean_state(pilot_config):
     """Dirtiness is computed (serialize vs on-disk), so undoing back to the launch state reads
     as clean (quit won't prompt) and redoing re-dirties."""
