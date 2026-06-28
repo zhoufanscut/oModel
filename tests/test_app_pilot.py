@@ -1922,6 +1922,100 @@ def test_pilot_vkey_no_variants_bells(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_vkey_on_assigned_row_stages_variant(pilot_config):
+    """`v` on the currently-assigned row stages the chosen variant onto that assignment (the
+    restage branch of action_variant._apply)."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "openai/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await pilot.press("v")
+            await pilot.pause()
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            vlist.highlighted = vids.index("var:high")
+            await pilot.press("enter")
+            await pilot.pause()
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openai/gpt-5.5", node
+            assert node.get("variant") == "high", f"variant must be staged onto the assignment: {node}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_vkey_other_provider_row_does_not_switch_provider(pilot_config):
+    """`v` on a candidate that shares the assigned model but under a DIFFERENT provider must not
+    silently switch the provider. Sisyphus is assigned opencode/gpt-5.5; varianting the
+    openai/gpt-5.5 row (same model, other provider, NOT the assignment) leaves the on-disk
+    opencode/gpt-5.5 untouched — only Enter sets a model. (Regression: the old model-only match
+    restaged openai/gpt-5.5, switching the provider.)"""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "v must open the VariantModal"
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            vlist.highlighted = vids.index("var:high")
+            await pilot.press("enter")
+            await pilot.pause()
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "opencode/gpt-5.5", (
+                f"v on a non-assigned row must not switch the provider: {node}"
+            )
+            assert "variant" not in node, (
+                f"v on a non-assigned row must not create an assignment/variant on disk: {node}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_vkey_apply_survives_rows_cache_cleared(pilot_config):
+    """If a background refresh clears the per-target row cache while the VariantModal is open,
+    applying the picked variant must not crash on the now-stale idx — the edit is dropped and the
+    assignment is left as-is. (Regression: _apply did self._rows[target][idx] = row unguarded,
+    KeyError-ing once a refresh cleared the cache.)"""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "openai/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2
+            # Simulate a background `r` refresh completing under the open modal: it clears _rows.
+            pilot.app._rows.clear()
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            vlist.highlighted = vids.index("var:high")
+            await pilot.press("enter")  # must not raise (guarded against the cleared cache)
+            await pilot.pause()
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openai/gpt-5.5", node
+            assert node.get("variant") is None, f"variant edit must be dropped after cache clear: {node}"
+
+    asyncio.run(_run())
+
+
 def test_pilot_addmodal_variant_skipped_for_familyless(pilot_config):
     """A model opencode reports no variants for skips the variant phase: a single Enter adds it
     with no variant key. Nothing is seeded into the `--verbose` cache here, so catalog.variants_for

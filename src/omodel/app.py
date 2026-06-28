@@ -1527,15 +1527,23 @@ class OModelApp(App):
         def _apply(result) -> None:
             if result is None:
                 return
+            # A background `r` refresh finishing while this modal was open clears/rebuilds the
+            # per-target row cache (with fresh row dicts). If the row we captured is no longer the
+            # object at `idx`, that refresh supersedes this edit — drop it (refresh already
+            # re-rendered) rather than indexing a cleared/reshaped cache.
+            cached = self._rows.get(target)
+            if cached is None or not (0 <= idx < len(cached)) or cached[idx] is not row:
+                return
             chosen = result or None  # '' sentinel → clear
-            row["variant"] = chosen
-            self._rows[target][idx] = row
-            # `v` adjusts the highlighted candidate's variant but must NOT create an
-            # assignment (DESIGN §Events: only Enter sets a model). Restage only when this
-            # row is already the staged assignment; otherwise just re-render so the chosen
-            # variant rides along if the user later picks the row with Enter.
+            row["variant"] = chosen  # row is cached[idx] (guarded above) → mutation persists
+            # `v` adjusts the highlighted candidate's variant but must NOT create or switch an
+            # assignment (DESIGN §Events: only Enter sets a model). Restage only when THIS row —
+            # by full provider/model, the same test the `●` marker uses — IS the current
+            # assignment; matching the model alone would let `v` on a same-model/other-provider
+            # row silently switch the provider. Otherwise just re-render so the chosen variant
+            # rides along if the user later picks the row with Enter.
             model, _ = self._current_assignment(target)
-            if model and model.split("/", 1)[-1] == row["model"]:
+            if model and model == f"{row['provider']}/{row['model']}":
                 self._stage_row(
                     target,
                     row,
