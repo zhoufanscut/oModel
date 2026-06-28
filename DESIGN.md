@@ -477,9 +477,11 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Left** `OptionList#targets`: AGENTS then CATEGORIES; option IDs `agent:<name>`,
   `agent:<name>.ultrawork` / `.compaction` (indented sub-rows, shown when present in config or added
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`;
-  `a` opens a **chooser modal** (below) to add an `ultrawork`/`compaction` sub-target — both are
-  valid on every agent (verified: omo schema permits both on all 11 agents), so the chooser names
-  each kind + what it's for rather than blindly cycling.
+  `a` opens a **chooser modal** (below) to add a sub-target — naming each kind + what it's for
+  rather than blindly cycling. `compaction` is valid on every agent; `ultrawork` is **Sisyphus-only**
+  (omo's `ultrawork`/`ulw` keyword swaps the model only on Sisyphus — on any other agent it's dead
+  config omo never reads), so the chooser offers `ultrawork` on Sisyphus alone
+  (`_ULTRAWORK_AGENTS` / `_subkinds_for` in `app.py`, hard-coded like `_GPT_ONLY_AGENTS`).
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
   row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
@@ -565,13 +567,16 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   **same** `variants_for` source — the old `known_variants` "always offer *something*" fallback is
   **gone**; `v` on a model with no reported variants just **bells**. The result dismisses one
   candidate-row dict (`source` `"add"`); it's just another pickable row.
-- **Add-sub chooser (`a` on an agent):** a 2-row `OptionList` (`#sub-list`, IDs `sub:ultrawork` /
-  `sub:compaction`), each row naming the kind + a one-line description of what omo uses it for
-  (ultrawork = model swapped in on an `ultrawork`/`ulw` message; compaction = model for auto
-  summaries). A kind already on the agent is **disabled** (`✓ added`); `u`/`c` shortcut or `enter`
-  picks one (→ empty sub-row, not dirty until a model is staged), `esc` cancels. Both kinds present
-  → `a` just bells (the chooser would have nothing to offer). Replaces the old blind add-next cycle
-  so the choice — and what each kind means — is explicit for newcomers.
+- **Add-sub chooser (`a` on an agent):** an `OptionList` (`#sub-list`, IDs `sub:ultrawork` /
+  `sub:compaction`) with one row per kind **valid for that agent** (`_subkinds_for`) — `compaction`
+  for all, `ultrawork` only on Sisyphus, so a non-Sisyphus agent shows a single `compaction` row.
+  Each row names the kind + a one-line description of what omo uses it for (ultrawork = model swapped
+  in on an `ultrawork`/`ulw` message; compaction = model for auto summaries). A kind already on the
+  agent is **disabled** (`✓ added`); the `u`/`c` shortcut (only the offered kinds — `u` is a no-op on
+  a non-Sisyphus agent) or `enter` picks one (→ empty sub-row, not dirty until a model is staged),
+  `esc` cancels. Every supported kind present → `a` just bells (the chooser would have nothing to
+  offer). Replaces the old blind add-next cycle so the choice — and what each kind means — is explicit
+  for newcomers.
 
 ## Packaging & distribution (GitHub-only, no PyPI)
 

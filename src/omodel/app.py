@@ -62,9 +62,10 @@ typed" row (a half-typed fragment that still matches falls back to the fuzzy lis
 VARIANT phase: iff opencode reports variants for the chosen (provider, model)
 (catalog.variants_for — cached `--verbose`), pick one or '(none)'; otherwise (kimi/glm-5, or no
 cached verbose) it's added immediately (variant None). GPT-only targets filter the list to GPT models.
-Add-sub modal (`a` on an agent): a 2-row OptionList (`#sub-list`, IDs 'sub:ultrawork' /
-'sub:compaction') naming each kind + what it's for; a kind already on the agent is disabled
-('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Both present → `a` just bells.
+Add-sub modal (`a` on an agent): an OptionList (`#sub-list`, IDs 'sub:ultrawork' / 'sub:compaction')
+with one row per kind valid for that agent (compaction always; ultrawork Sisyphus-only — see
+_ULTRAWORK_AGENTS), naming each kind + what it's for; a kind already on the agent is disabled
+('✓ added'); `u`/`c` shortcut or enter picks one, esc cancels. Every supported kind present → `a` bells.
 """
 from __future__ import annotations
 
@@ -97,11 +98,23 @@ _SUBKINDS = ("ultrawork", "compaction")
 # mirror that — the chain + add-model are both restricted to GPT models for these agents.
 _GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 
+# Agents for which omo actually honors an `ultrawork` sub-model. The `ultrawork`/`ulw` keyword
+# only swaps the model on Sisyphus; on any other agent an `ultrawork` block is dead config (omo
+# never reads it). We mirror that — the add-sub chooser offers `ultrawork` only here. `compaction`
+# is valid on every agent. Hard-coded agent key, like `_GPT_ONLY_AGENTS`, not a data field.
+_ULTRAWORK_AGENTS = frozenset({"sisyphus"})
+
 
 def _is_gpt_model(model_id: str) -> bool:
     """omo's `isGptModel` (model-core): the model name (after the LAST '/'), lowercased,
     contains 'gpt'. Used to gate the add-model modal for GPT-only agents (Hephaestus)."""
     return "gpt" in model_id.rsplit("/", 1)[-1].lower()
+
+
+def _subkinds_for(name: str) -> tuple:
+    """Sub-target kinds addable to agent `name`, in `_SUBKINDS` order: `compaction` for every
+    agent; `ultrawork` only for the agents omo honors it on (`_ULTRAWORK_AGENTS` — Sisyphus)."""
+    return tuple(k for k in _SUBKINDS if k != "ultrawork" or name in _ULTRAWORK_AGENTS)
 
 
 def _warn_str(warn: list) -> str:
@@ -700,8 +713,9 @@ class ConfirmModal(ModalScreen):
 
 
 class AddSubModal(ModalScreen):
-    """`a` — pick which sub-target to add to an agent: `ultrawork` or `compaction`.  Each row
-    names the kind and one line on what omo uses it for; a kind already on the agent is shown
+    """`a` — pick which sub-target to add to an agent.  Offers only the kinds valid for that
+    agent (`_subkinds_for`): every agent gets `compaction`, but `ultrawork` only Sisyphus.  Each
+    row names the kind and one line on what omo uses it for; a kind already on the agent is shown
     disabled (`✓ added`).  Dismisses with the chosen kind ('ultrawork'|'compaction') — via the
     `u`/`c` shortcut or enter on the row — or None on cancel."""
 
@@ -736,32 +750,35 @@ class AddSubModal(ModalScreen):
         "compaction": "model used for automatic context summaries",
     }
 
-    def __init__(self, present) -> None:
+    def __init__(self, kinds, present) -> None:
         super().__init__()
+        self._kinds = tuple(kinds)  # the kinds valid for this agent (see _subkinds_for)
         self._present = set(present)
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Add sub-target:")
             yield VimOptionList(id="sub-list")
-            yield Static(
-                "↑↓ move · u/c or enter add · esc cancel",
-                id="sub-hints",
-                classes="modal-hints",
-            )
+            yield Static("", id="sub-hints", classes="modal-hints")
 
     def on_mount(self) -> None:
         ol = self.query_one("#sub-list", OptionList)
-        for kind in _SUBKINDS:
+        for kind in self._kinds:
             added = kind in self._present
             tag = "   ✓ added" if added else ""
             label = f"{kind[0]}  {kind:<10} — {self._BLURB[kind]}{tag}"
             ol.add_option(Option(label, id=f"sub:{kind}", disabled=added))
+        # Hint names only the shortcuts that exist for this agent ("u/c" on Sisyphus, "c" else).
+        keys = "/".join(k[0] for k in self._kinds)
+        self.query_one("#sub-hints", Static).update(
+            f"↑↓ move · {keys} or enter add · esc cancel"
+        )
         ol.focus()
 
     def action_pick(self, kind: str) -> None:
-        # Shortcut path (`u`/`c`): ignore a kind already present (its row is disabled anyway).
-        if kind in _SUBKINDS and kind not in self._present:
+        # Shortcut path (`u`/`c`): ignore a kind not valid here or already present (the row would
+        # be absent or disabled anyway — `u` on a non-Sisyphus agent is a no-op).
+        if kind in self._kinds and kind not in self._present:
             self.dismiss(kind)
 
     @on(OptionList.OptionSelected, "#sub-list")
@@ -1597,16 +1614,18 @@ class OModelApp(App):
         )
 
     def _add_sub(self) -> None:
-        """`a` in #targets — choose an ultrawork/compaction sub-target to add to the highlighted
-        agent. Opens AddSubModal (names both kinds + what each does); the picked kind becomes an
-        empty sub-row. Bell when the row isn't an agent or both kinds already exist (nothing to add)."""
+        """`a` in #targets — choose a sub-target to add to the highlighted agent. Opens AddSubModal
+        with the kinds valid for that agent (`_subkinds_for`: compaction always, ultrawork only on
+        Sisyphus); the picked kind becomes an empty sub-row. Bell when the row isn't an agent or
+        every supported kind already exists (nothing to add)."""
         target = self._current_target
         if target is None or not target.startswith("agent:"):
             return
         name = target[len("agent:"):].split(".", 1)[0]
+        allowed = _subkinds_for(name)
         present = set(self._agent_subtargets(name))
-        if all(k in present for k in _SUBKINDS):
-            self.bell()  # both already added — nothing to choose
+        if all(k in present for k in allowed):
+            self.bell()  # every kind this agent supports is already added — nothing to choose
             return
 
         def _add(kind) -> None:
@@ -1626,7 +1645,7 @@ class OModelApp(App):
                 pass
             self._record(f"add {kind} sub-target to {name}")
 
-        self.push_screen(AddSubModal(present), _add)
+        self.push_screen(AddSubModal(allowed, present), _add)
 
     def action_undo(self) -> None:
         """`u` — revert the last edit (mis-press recovery). Steps back through the in-session

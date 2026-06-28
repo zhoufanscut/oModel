@@ -21,8 +21,9 @@ line when a new one does.
   `agent:<name>.compaction`, `cat:<name>` (== the `#targets` option IDs). → CONTRACTS.md "Shared shapes"
 - **agent / category** — a named omo agent (sisyphus, hephaestus…; 11) / task category (deep,
   quick…; 8). → DESIGN §Problem
-- **sub-target** — `ultrawork` (model swapped in on an `ulw` message) or `compaction` (auto-summary
-  model), nested under an agent. *Agents only; categories have none.* → DESIGN §Textual contract
+- **sub-target** — `ultrawork` (model swapped in on an `ulw` message; **Sisyphus-only** — omo honors
+  it on no other agent) or `compaction` (auto-summary model, any agent), nested under an agent.
+  *Agents only; categories have none.* → DESIGN §Textual contract, app.py `_ULTRAWORK_AGENTS`
 
 ## Recommendation → row
 

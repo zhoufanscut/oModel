@@ -519,6 +519,64 @@ def test_pilot_add_sub_chooser(pilot_config):
 
 
 # ---------------------------------------------------------------------------
+# Pilot test 5b': `ultrawork` is Sisyphus-only — the chooser omits it for other agents
+# ---------------------------------------------------------------------------
+def test_pilot_ultrawork_is_sisyphus_only(pilot_config):
+    """omo only honors the `ultrawork`/`ulw` swap on Sisyphus, so the add-sub chooser must offer
+    `ultrawork` there alone. On a non-Sisyphus agent (oracle) the chooser lists a single
+    `compaction` row, the `u` shortcut is a no-op (no dead `ultrawork` block can be added), and
+    once compaction is present `a` just bells. Sisyphus still gets both (test_pilot_add_sub_chooser)."""
+    cfg_path, _ = pilot_config
+
+    def _ids(ol):
+        return [ol.get_option_at_index(i).id for i in range(ol.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            targets = pilot.app.query_one("#targets", OptionList)
+
+            def _highlight_oracle():
+                targets.highlighted = targets.get_option_index("agent:oracle")
+                targets.focus()
+
+            _highlight_oracle()
+            await pilot.pause()
+
+            # `a` opens the chooser, but it offers ONLY compaction — no ultrawork row.
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "`a` on an agent must open the chooser modal"
+            sub_list = pilot.app.screen_stack[-1].query_one("#sub-list", OptionList)
+            assert _ids(sub_list) == ["sub:compaction"], (
+                "a non-Sisyphus agent must be offered compaction only, never ultrawork"
+            )
+
+            # The `u` shortcut is a no-op here (ultrawork isn't a valid kind): modal stays open,
+            # nothing is added.
+            await pilot.press("u")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "`u` must not dismiss — ultrawork isn't offered"
+            assert "agent:oracle.ultrawork" not in _ids(targets)
+
+            # `c` adds compaction as usual.
+            await pilot.press("c")
+            await pilot.pause()
+            assert "agent:oracle.compaction" in _ids(targets)
+            assert "agent:oracle.ultrawork" not in _ids(targets)
+            assert "ultrawork" not in pilot.app.cfg["agents"].get("oracle", {})
+
+            # compaction is the only kind oracle supports → a second `a` just bells (no modal).
+            _highlight_oracle()
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "only supported kind present → no chooser"
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Pilot test 5c: `a` on a #targets *category* row opens the model modal, not the chooser
 # ---------------------------------------------------------------------------
 
@@ -1624,13 +1682,15 @@ def test_pilot_undo_sub_target_under_non_first_agent(pilot_config):
 
             await pilot.press("a")  # chooser
             await pilot.pause()
-            await pilot.press("u")  # → add ultrawork
+            # compaction (not ultrawork) — `second` is non-Sisyphus, so ultrawork isn't offered;
+            # this test exercises the sub-row index/undo path, which is kind-agnostic.
+            await pilot.press("c")  # → add compaction
             await pilot.pause()
-            assert f"{target}.ultrawork" in _ids(targets)
+            assert f"{target}.compaction" in _ids(targets)
 
             await pilot.press("u")  # app-level undo → remove the sub-target
             await pilot.pause()
-            assert f"{target}.ultrawork" not in _ids(targets)
+            assert f"{target}.compaction" not in _ids(targets)
             assert pilot.app._current_target == target, "undo must fall back to the parent agent"
             hi = targets.highlighted
             assert hi is not None and targets.get_option_at_index(hi).id == target, (
