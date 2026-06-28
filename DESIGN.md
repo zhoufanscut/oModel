@@ -328,7 +328,13 @@ oModel/
   `provider/model` equals the target's current assignment in `self.cfg` — at launch that's what
   `oh-my-openagent.jsonc` has on disk, and it follows your selection as you stage edits — is
   prefixed `● `; all other rows get a 2-space prefix. If the current model isn't in the (chain-only)
-  list (an off-chain hand-pick), nothing is marked.
+  list (an off-chain hand-pick — a custom model set in a prior session / by hand, or one that has
+  dropped off the chain), `app.py` **surfaces it as its own row just before `+ add model…`** (built
+  from `self.cfg`; ⚠-flagged `unavailable` only when the catalog is readable and the *assigned*
+  provider doesn't serve the model — suppressed in degraded mode, where availability is unknown) so
+  the configured model is always shown and re-selectable, and that row carries the `●` (see `_build_rows`). The
+  picker proper stays chain-only; this single extra row is the current assignment, never a
+  connected-model dump.
 - **GPT-only agents (Hephaestus):** omo's `no-hephaestus-non-gpt` hook makes Hephaestus
   GPT-exclusive (`isGptModel` = model name after the last `/`, lowercased, contains "gpt"; a non-GPT
   model reassigns the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
@@ -477,7 +483,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
   row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
-  `● ` (others `  `). The **highlighted (cursor) row is remembered per target** — keyed by the row's
+  `● ` (others `  `); an off-chain assignment not otherwise in the list gets its own `cand:<i>` row
+  just before `cand:add` so it's shown + re-selectable (see §`resolve.py` "Current pick"). The **highlighted (cursor) row is remembered per target** — keyed by the row's
   `provider/model` identity, not its index — and restored on every re-render, so the cursor returns
   to your last position when you revisit a target **and after `r` refresh** (a refresh re-resolves
   the chain against new availability and reorders rows; identity-keying survives that, an index

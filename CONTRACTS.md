@@ -43,8 +43,9 @@ Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operat
 `"agent:<name>.compaction"` · `"cat:<name>"` — identical to the `OptionList#targets` option IDs.
 
 **`source` enum** (string): `"omo"` (a fallbackChain entry — exact or same-line substitute) ·
-`"add"` (typed in the add-model modal). (`"mine"` retired: `candidates()` no longer dumps every
-connected model — off-chain picks go through the add-model modal.)
+`"add"` (an off-chain pick — typed in the add-model modal, or the target's current off-chain
+assignment surfaced by `app.py` from cfg as a `cand:<i>` row). (`"mine"` retired: `candidates()`
+no longer dumps every connected model — off-chain picks go through the add-model modal.)
 
 **candidate-row dict** — yielded by `Resolver.candidates()`, rendered by `app.py`:
 ```python

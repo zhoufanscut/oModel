@@ -625,6 +625,124 @@ def test_pilot_marker_follows_selection(pilot_config):
 
 
 # ---------------------------------------------------------------------------
+# Pilot test 6d: an off-chain assignment already on disk is shown before + add model…
+# ---------------------------------------------------------------------------
+
+def test_pilot_off_chain_assignment_shown_before_add(pilot_config):
+    """A custom model already set on disk that isn't in the chain (not typed this session) is
+    surfaced as its own candidate row: ●-marked, placed immediately before `+ add model…`, and
+    ⚠-flagged unavailable when no connected provider serves it — so what's configured is always
+    visible and re-selectable, never silently dropped."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "myprovider/custom-model" } } }')
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+
+            ids = [cands.get_option_at_index(i).id for i in range(cands.option_count)]
+            assert ids[-1] == "cand:add", f"+ add model… must stay last: {ids}"
+            # The off-chain row is the cand:<i> immediately before the add row.
+            before_add = str(cands.get_option_at_index(cands.option_count - 2).prompt)
+            assert "myprovider/custom-model" in before_add, (
+                f"off-chain assignment must be the row before + add model…: {before_add!r}"
+            )
+            assert "●" in before_add, f"configured off-chain model must be ●-marked: {before_add!r}"
+            assert "⚠" in before_add and "unavailable" in before_add, (
+                f"a model no provider serves must warn unavailable: {before_add!r}"
+            )
+
+            # Exactly one such row (no duplicate vs the chain) and it's the only ●.
+            all_labels = [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+            custom = [s for s in all_labels if "myprovider/custom-model" in s]
+            assert len(custom) == 1, f"exactly one off-chain row: {custom}"
+            assert sum("●" in s for s in all_labels) == 1, f"only the off-chain row is ●: {all_labels}"
+
+            # Re-selectable: enter on it round-trips the same value through _set_candidate.
+            found = await _select_candidate(pilot, "myprovider/custom-model")
+            assert found is not None, "off-chain row must be selectable"
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "myprovider/custom-model"
+
+    asyncio.run(_run())
+
+
+def test_pilot_off_chain_row_tracks_assignment_through_set_and_undo(pilot_config):
+    """The synthesized off-chain row strictly mirrors the current cfg assignment (the per-target
+    cache is dropped when it changes): picking an in-chain model drops the off-chain row, and undo
+    restores both the off-chain assignment and its ●-marked row."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "myprovider/custom-model" } } }')
+
+    def _labels(cands):
+        return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert any("myprovider/custom-model" in s for s in _labels(cands))
+
+            # Pick an in-chain model → the off-chain row is no longer the assignment, so it drops.
+            found = await _select_candidate(pilot, "zhipuai/glm-5")
+            assert found is not None, "zhipuai/glm-5 must be a chain candidate"
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+            assert not any("myprovider/custom-model" in s for s in _labels(cands)), (
+                f"off-chain row must drop once an in-chain model is picked: {_labels(cands)}"
+            )
+
+            # Undo restores the off-chain assignment AND its ●-marked row.
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "myprovider/custom-model"
+            assert any("●" in s and "myprovider/custom-model" in s for s in _labels(cands)), (
+                f"undo must restore the off-chain ●-marked row, not just cfg: {_labels(cands)}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_off_chain_assignment_available_has_no_warn(pilot_config):
+    """An off-chain model the *assigned* provider actually serves is surfaced before
+    `+ add model…` and ●-marked, but WITHOUT the ⚠ unavailable flag — the
+    `provider in providers_for(model)` branch of the synthesized row. `myprovider/custom-model`
+    is off-chain (a made-up id no omo chain names) yet served by `myprovider`, so it's available."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "myprovider/custom-model" } } }')
+
+    catalog = Catalog(
+        available={
+            "opencode": ["claude-opus-4-7", "glm-5", "gpt-5.5"],
+            "myprovider": ["custom-model"],
+        },
+        connected=["opencode", "myprovider"],
+    )
+
+    async def _run():
+        app = _build_app_with(cfg_path, catalog)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            ids = [cands.get_option_at_index(i).id for i in range(cands.option_count)]
+            assert ids[-1] == "cand:add", f"+ add model… must stay last: {ids}"
+            before_add = str(cands.get_option_at_index(cands.option_count - 2).prompt)
+            assert "myprovider/custom-model" in before_add, (
+                f"available off-chain assignment must be the row before + add model…: {before_add!r}"
+            )
+            assert "●" in before_add, f"configured off-chain model must be ●-marked: {before_add!r}"
+            assert "⚠" not in before_add, (
+                f"a model its assigned provider serves must NOT warn unavailable: {before_add!r}"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Pilot test 6c: the highlighted candidate is remembered per target + across refresh
 # ---------------------------------------------------------------------------
 

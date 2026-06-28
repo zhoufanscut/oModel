@@ -15,10 +15,13 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             background worker (cached per model) and appears when ready —
                             highlighting renders the rest of the pane instantly.
   * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
-                            row matching the current assignment (follows your pick) is '● '.
-                            The highlighted (cursor) row is remembered per target by model
-                            identity and restored on re-render, so it survives a target switch
-                            and `r` refresh (see _cand_choice / _restore_cand_highlight).
+                            row matching the current assignment (follows your pick) is '● '. If
+                            that assignment is off-chain (a custom/hand-set model not in the
+                            chain), it's surfaced as its own 'cand:<i>' row just before
+                            'cand:add' (see _build_rows), so what's configured is always shown
+                            and re-selectable. The highlighted (cursor) row is remembered per
+                            target by model identity and restored on re-render, so it survives a
+                            target switch and `r` refresh (see _cand_choice / _restore_cand_highlight).
   * Static#hints           — pane-aware key hint bar (bottom row). Content switches on focus
                             + highlighted row (see _render_hints); modals carry their own
                             one-line hint instead.
@@ -1049,9 +1052,13 @@ class OModelApp(App):
     # ----- right pane: detail + candidates ---------------------------------------------
 
     def _build_rows(self, target: str) -> list:
-        """Candidate rows for `target`: resolver.candidates(target) when a resolver exists,
-        else just the current assignment (degraded mode). Cached per target so staged edits
-        survive re-highlight."""
+        """Candidate rows for `target`: resolver.candidates(target) when a resolver exists (the
+        chain-only pick list), plus session-typed custom rows, plus the current off-chain
+        assignment (so a model that's set but not in the chain is still shown). In degraded mode
+        (no resolver) the chain is empty, leaving just those last two. Cached per target so staged
+        edits survive re-highlight; the cache is dropped whenever the assignment changes (e.g.
+        _stage_row, action_clear, sub-target delete, state restore, refresh) so the synthesized row
+        below tracks cfg."""
         if target in self._rows:
             return self._rows[target]
         rows: list = []
@@ -1069,6 +1076,32 @@ class OModelApp(App):
             if key not in existing:
                 rows.append(cr)
                 existing.add(key)
+        # Surface the target's CURRENT off-chain assignment as its own pickable row when neither
+        # the chain nor a typed custom already covers it — e.g. a model set in a prior session, a
+        # hand-edited config, or one that has since dropped off the chain. Derived straight from
+        # cfg (the source of truth), so it always reflects what's set: it carries the `●` marker,
+        # is re-selectable, and — because the per-target cache is dropped whenever the assignment
+        # changes — appears/vanishes in lockstep with cfg across set/clear/undo/redo. Appended
+        # LAST so it renders right before `+ add model…`. Skips a bare id with no `provider/` (a
+        # malformed value) rather than rendering it as `/model`.
+        current, current_variant = self._current_assignment(target)
+        if current and "/" in current and current not in existing:
+            provider, model = current.split("/", 1)
+            # ⚠ unavailable only when the catalog is readable and no connected provider serves the
+            # model; never in degraded mode (empty `connected`), where availability is unknown and
+            # an unqualified ⚠ would mislead. source 'add' = off-chain pick (CONTRACTS enum).
+            warn = []
+            if self.catalog.connected and provider not in self.catalog.providers_for(model):
+                warn.append("unavailable")
+            rows.append({
+                "source": "add",
+                "model": model,
+                "provider": provider,
+                "variant": current_variant,
+                "entry": None,
+                "substitute_for": None,
+                "warn": warn,
+            })
         self._rows[target] = rows
         return rows
 
@@ -1377,6 +1410,10 @@ class OModelApp(App):
             node["variant"] = row["variant"]
         else:
             node.pop("variant", None)
+        # The assignment changed, so _build_rows' synthesized current-off-chain row may no longer
+        # apply (picked a chain model) or now describes a different model — drop the cache so it
+        # rebuilds from the new cfg value.
+        self._rows.pop(target, None)
         self._refresh_right(target)
         self._record(label)
 
@@ -1442,6 +1479,8 @@ class OModelApp(App):
         if isinstance(node, dict) and ("model" in node or "variant" in node):
             node.pop("model", None)
             node.pop("variant", None)
+        # Drop the cache so _build_rows stops synthesizing the now-cleared off-chain row.
+        self._rows.pop(target, None)
         self._refresh_right(target)
         self._record(f"clear {self._target_label(target)}")
 
