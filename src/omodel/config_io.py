@@ -19,6 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+class ConfigParseError(ValueError):
+    """Raised by load_config() when the on-disk JSONC fails to parse (malformed syntax).
+    The message includes the config path and the underlying json5 error, so callers (cli.py)
+    can print a friendly one-liner instead of letting a raw json5 traceback escape."""
+
+
 def config_path(cli_override: str = None) -> str:
     """Resolve the config path: cli_override, else $XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc,
     else ~/.config/opencode/oh-my-openagent.jsonc. Does NOT require the file to exist."""
@@ -35,7 +41,7 @@ def load_config(path: str = None):
     data/default-config.jsonc to that location; json5.load → ordered dict.
     Returns (cfg: dict, resolved_path: str). `agents`/`categories` are editable; every
     other top-level key (claude_code, experimental, team_mode, $schema, …) passes through
-    by value."""
+    by value. Raises ConfigParseError if the on-disk JSONC is malformed."""
     import json5
     import importlib.resources
 
@@ -45,12 +51,17 @@ def load_config(path: str = None):
         # Scaffold from bundled default-config.jsonc
         default_ref = importlib.resources.files("omodel.data") / "default-config.jsonc"
         default_text = default_ref.read_text(encoding="utf-8")
-        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        # dirname() of a bare relative filename (no directory component) is "" — resolve via
+        # abspath first so a relative `--config foo.jsonc` doesn't crash makedirs(exist_ok=True).
+        os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
         with open(resolved, "w", encoding="utf-8") as f:
             f.write(default_text)
 
     with open(resolved, encoding="utf-8") as f:
-        cfg = json5.load(f)
+        try:
+            cfg = json5.load(f)
+        except ValueError as exc:
+            raise ConfigParseError(f"could not parse config at {resolved}: {exc}") from exc
 
     return cfg, resolved
 

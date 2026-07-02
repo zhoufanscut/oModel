@@ -2,8 +2,9 @@
 # install.sh — curl|sh installer for omodel
 # Usage: curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh
 #
-# Detects OS/arch, downloads the matching release binary from GitHub, installs to
-# ~/.local/bin/omodel, and prints a PATH hint if needed.
+# Detects OS/arch, downloads the matching release tarball from GitHub (verifying its published
+# checksum when available), extracts the binary to ~/.local/bin/omodel, and prints a PATH hint
+# if needed.
 set -e
 
 REPO="zhoufanscut/oModel"
@@ -72,16 +73,47 @@ if [ -z "${TAG}" ]; then
   exit 1
 fi
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
+TARBALL="${ASSET}.tar.gz"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${TARBALL}"
+CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
 
 # ---------------------------------------------------------------------------
-# Download and install
+# Download, verify, and install
 # ---------------------------------------------------------------------------
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+
+echo "Downloading ${TARBALL} (${TAG}) ..."
+curl -fsSL --output "${WORK_DIR}/${TARBALL}" "${DOWNLOAD_URL}"
+
+if curl -fsSL --output "${WORK_DIR}/${TARBALL}.sha256" "${CHECKSUM_URL}" 2>/dev/null; then
+  echo "Verifying checksum ..."
+  if command -v sha256sum > /dev/null 2>&1; then
+    VERIFY_CMD="sha256sum -c"
+  elif command -v shasum > /dev/null 2>&1; then
+    VERIFY_CMD="shasum -a 256 -c"
+  else
+    VERIFY_CMD=""
+  fi
+
+  if [ -n "${VERIFY_CMD}" ]; then
+    if ! ( cd "${WORK_DIR}" && ${VERIFY_CMD} "${TARBALL}.sha256" ); then
+      echo "error: checksum verification failed for ${TARBALL}" >&2
+      exit 1
+    fi
+  else
+    echo "warning: no sha256sum/shasum found; skipping checksum verification" >&2
+  fi
+else
+  echo "warning: checksum file not found for this release; skipping verification" >&2
+fi
+
+echo "Extracting ..."
+tar xzf "${WORK_DIR}/${TARBALL}" -C "${WORK_DIR}"
+
 mkdir -p "${BIN_DIR}"
 DEST="${BIN_DIR}/${BIN_NAME}"
-
-echo "Downloading ${ASSET} (${TAG}) ..."
-curl -fsSL --output "${DEST}" "${DOWNLOAD_URL}"
+mv "${WORK_DIR}/${BIN_NAME}" "${DEST}"
 chmod +x "${DEST}"
 
 echo ""

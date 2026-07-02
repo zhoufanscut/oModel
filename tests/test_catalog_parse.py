@@ -6,12 +6,15 @@ DESIGN §catalog.py / §Data sources / §Verification checks #2 and #3.
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from omodel import cache
-from omodel.catalog import Catalog, CatalogUnavailable, load
+from omodel.catalog import Catalog, CatalogUnavailable, load, refresh
+
+from _helpers import seed_verbose
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +187,98 @@ class TestCatalogErrorRules:
 
 
 # ---------------------------------------------------------------------------
+# load()'s cache-hit branch — DESIGN §cache.py (the whole point of the cache: a warm
+# launch skips the opencode subprocess entirely).
+# ---------------------------------------------------------------------------
+
+class TestCatalogLoadCacheHit:
+
+    def test_warm_cache_skips_subprocess(self):
+        cache.write("models", MOCK_MODELS_OUTPUT, ["opencode", "models"])
+
+        def _must_not_run(*a, **kw):
+            raise AssertionError("subprocess must not be called on a cache hit")
+
+        with patch("subprocess.run", side_effect=_must_not_run):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                cat = load()
+        assert "opencode" in cat.available
+        assert "claude-opus-4-7" in cat.available["opencode"]
+
+    def test_empty_cached_blob_falls_through_to_subprocess(self):
+        """A cached but empty/garbage stdout (zero parsed provider/model lines — no '/' at
+        all) is treated as a miss — load() falls through to the (here, stubbed-OK) subprocess
+        rather than returning an empty Catalog."""
+        cache.write("models", "no slash lines in this blob at all\n", ["opencode", "models"])
+        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                cat = load()
+        assert "opencode" in cat.available
+        assert "claude-opus-4-7" in cat.available["opencode"]
+
+
+# ---------------------------------------------------------------------------
+# catalog.refresh() — the `r` key / `--refresh-models` (DESIGN §cache.py / §Data sources)
+# ---------------------------------------------------------------------------
+
+class TestCatalogRefresh:
+    """catalog.refresh() forces `opencode models --refresh` and rebuilds the local cache from
+    scratch — the manual-refresh path behind the `r` key / `--refresh-models`."""
+
+    def test_not_on_path_returns_empty_and_clears_cache(self):
+        """Not on PATH → empty Catalog, and any existing cache entries are cleared."""
+        cache.write("models", "opencode/stale-model\n", ["opencode", "models"])
+        cache.write(
+            "verbose-opencode", "stale verbose blob",
+            ["opencode", "models", "opencode", "--verbose"],
+        )
+        with patch("shutil.which", return_value=None):
+            cat = refresh()
+        assert cat.available == {}
+        assert cat.connected == []
+        assert cache.read("models") is None
+        assert cache.read("verbose-opencode") is None
+
+    def test_timeout_raises_catalog_unavailable(self):
+        timeout_exc = subprocess.TimeoutExpired(cmd=["opencode"], timeout=90)
+        with patch("subprocess.run", side_effect=timeout_exc):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                with pytest.raises(CatalogUnavailable):
+                    refresh()
+
+    def test_nonzero_exit_raises_catalog_unavailable(self):
+        with patch("subprocess.run", return_value=_mock_run("", returncode=1)):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                with pytest.raises(CatalogUnavailable):
+                    refresh()
+
+    def test_zero_lines_raises_catalog_unavailable(self):
+        empty_output = "no slash lines here\n"
+        with patch("subprocess.run", return_value=_mock_run(empty_output)):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                with pytest.raises(CatalogUnavailable):
+                    refresh()
+
+    def test_happy_path_returns_catalog_and_rebuilds_cache(self):
+        """A successful refresh returns the parsed Catalog AND rewrites the cache: stale
+        verbose-* keys are gone, and a fresh `models` entry holds this run's stdout."""
+        cache.write("models", "opencode/old-stale-model\n", ["opencode", "models"])
+        cache.write(
+            "verbose-opencode", "old stale verbose blob",
+            ["opencode", "models", "opencode", "--verbose"],
+        )
+
+        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
+            with patch("shutil.which", return_value="/usr/bin/opencode"):
+                cat = refresh()
+
+        assert "opencode" in cat.available
+        assert "claude-opus-4-7" in cat.available["opencode"]
+        assert cache.read("verbose-opencode") is None  # stale verbose-* cleared
+        assert cache.read("models") == MOCK_MODELS_OUTPUT  # fresh models cache written
+
+
+# ---------------------------------------------------------------------------
 # Verbose record parsing — DESIGN §Data sources "per-model detail"
 # ---------------------------------------------------------------------------
 
@@ -328,6 +423,32 @@ class TestVerboseParsing:
         assert cost is not None
         assert "cache" in cost
 
+    def test_detail_provider_param_selects_that_providers_record(self):
+        """detail(model, provider=p) describes (p, model) when p serves the model — the detail
+        pane passes the ASSIGNED provider so a gateway assignment shows the gateway's record
+        (its cost/context can differ), never silently the first-seen provider's. An unknown /
+        non-serving provider falls back to the old first-of-providers_for behavior. Seeds the
+        cache for both providers (no subprocess), mirroring TestVariantsFor."""
+        from omodel import cache
+
+        cat = Catalog(
+            available={"openai": ["gpt-5.5"], "opencode": ["gpt-5.5"]},
+            connected=["openai", "opencode"],
+        )
+        openai_record = {"limit": {"context": 400000}, "cost": {"input": 1, "output": 8}}
+        opencode_record = {"limit": {"context": 128000}, "cost": {"input": 2, "output": 16}}
+        cache.write("verbose-openai", "openai/gpt-5.5\n" + json.dumps(openai_record, indent=2))
+        cache.write(
+            "verbose-opencode", "opencode/gpt-5.5\n" + json.dumps(opencode_record, indent=2)
+        )
+
+        with _NO_SHELL:
+            assert cat.detail("gpt-5.5", provider="opencode")["context"] == 128000
+            assert cat.detail("gpt-5.5", provider="openai")["context"] == 400000
+            # No provider / a provider that doesn't serve it → first of providers_for (openai).
+            assert cat.detail("gpt-5.5")["context"] == 400000
+            assert cat.detail("gpt-5.5", provider="zhipuai")["context"] == 400000
+
 
 # A no-subprocess guard: variants_for reads ONLY the cache (it must never shell out — there is no
 # subprocess stub in this module, so a stray call would hit the REAL opencode binary).
@@ -340,17 +461,8 @@ class TestVariantsFor:
     isolates the cache to a per-test tmp dir, so these seed it directly with cache.write."""
 
     def _seed(self, provider: str, records: dict) -> None:
-        """Seed a cached verbose-<provider> from {model: [variants]} — mirrors opencode's shape:
-        a `provider/model` header line + a JSON block whose `variants` is an OBJECT keyed by name."""
-        parts = []
-        for model, variants in records.items():
-            parts.append(f"{provider}/{model}")
-            parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
-        cache.write(
-            f"verbose-{provider}",
-            "\n".join(parts) + "\n",
-            ["opencode", "models", provider, "--verbose"],
-        )
+        """Delegates to the shared canonical seeder (tests/_helpers.py)."""
+        seed_verbose(provider, records)
 
     def test_reads_variant_keys_from_cached_verbose(self):
         """The KEYS of the model's `variants` object (opencode's order, lowercased). Reuses the

@@ -119,14 +119,27 @@ def main(argv: list = None) -> int:
     # Default: launch the TUI (import lazily so --version/--check/--refresh never import app).
     # Pin the color depth BEFORE importing app — Textual reads $TEXTUAL_COLOR_SYSTEM at import.
     _default_color_system()
+    from omodel.config_io import ConfigParseError
     from omodel.app import run_app
-    run_app(config_path=args.config)
+    # load_config() runs once, at app construction (before the UI starts) and is never
+    # re-called during the session — catching this narrow type around the whole call is safe.
+    try:
+        run_app(config_path=args.config)
+    except ConfigParseError as exc:
+        _print_config_parse_error(exc)
+        return 1
     return 0
 
 
 # ---------------------------------------------------------------------------
 # Sub-command implementations
 # ---------------------------------------------------------------------------
+
+def _print_config_parse_error(exc: Exception) -> None:
+    """Friendly stderr message for a ConfigParseError, in place of a raw json5 traceback."""
+    print(f"error: {exc}", file=sys.stderr)
+    print("Fix the file or restore a backup with `omodel --restore`.", file=sys.stderr)
+
 
 def _default_color_system() -> None:
     """Pin the TUI to a 256-color palette by default so it looks the same across terminals.
@@ -158,7 +171,11 @@ def _cmd_restore(config_override: "str | None") -> int:
         print(f"  {i + 1:2d}.  {b.name}{tag}  ({b.size} bytes)")
 
     print()
-    choice = input("Restore which backup? (number, or q to cancel): ").strip()
+    try:
+        choice = input("Restore which backup? (number, or q to cancel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("Cancelled.")
+        return 1
     if choice.lower() in ("q", ""):
         print("Cancelled.")
         return 0
@@ -181,10 +198,14 @@ def _cmd_restore(config_override: "str | None") -> int:
 
 def _cmd_print(config_override: "str | None") -> int:
     """Resolve current agent/category models from config + suggestions/catalog, print."""
-    from omodel.config_io import load_config
+    from omodel.config_io import load_config, ConfigParseError
     from omodel.catalog import load as load_catalog, CatalogUnavailable
 
-    cfg, path = load_config(config_override)
+    try:
+        cfg, path = load_config(config_override)
+    except ConfigParseError as exc:
+        _print_config_parse_error(exc)
+        return 1
 
     try:
         catalog = load_catalog()

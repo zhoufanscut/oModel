@@ -11,9 +11,11 @@ import re
 import tempfile
 import time
 
+import pytest
 
 from omodel.config_io import (
     BackupInfo,
+    ConfigParseError,
     _top_level_value_span,
     diff_text,
     list_backups,
@@ -287,6 +289,29 @@ class TestSave:
             orig_path = os.path.join(tmpdir, ".backup", "original.jsonc")
             assert _read_file(orig_path) == ORIGINAL_JSONC
 
+    def test_save_when_config_never_existed(self):
+        """save() to a path with no on-disk file at all (the `old_text is None` branch):
+        render() falls back to serialize(cfg) since there's no base text to splice into, the
+        timestamped snapshot is created but EMPTY (nothing existed to snapshot verbatim), and
+        original.jsonc is NOT created — there is nothing on disk to pin as "original". This is
+        the intended behavior (a first-ever save has no prior state to preserve), not a gap."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
+            # Deliberately no file written at cfg_path — this is a first-ever save.
+
+            result = save(MINIMAL_CONFIG, cfg_path)
+
+            assert result.changed is True
+            assert result.original_created is False
+            assert _read_file(cfg_path) == serialize(MINIMAL_CONFIG)
+
+            assert result.backup is not None
+            assert os.path.exists(result.backup)
+            assert _read_file(result.backup) == ""
+
+            orig_path = os.path.join(tmpdir, ".backup", "original.jsonc")
+            assert not os.path.exists(orig_path)
+
 
 # ---------------------------------------------------------------------------
 # Prune logic
@@ -501,6 +526,30 @@ class TestLoadConfig:
         assert real_path_accessed == [], (
             f"load_config must not touch the real config: {real_path_accessed}"
         )
+
+    def test_relative_missing_path_scaffolds_via_cwd(self, monkeypatch, tmp_path):
+        """A bare RELATIVE filename that doesn't exist yet must not crash: os.path.dirname of a
+        bare filename (no directory component) is "" — load_config resolves the parent via
+        os.path.abspath before makedirs so this scaffolds cleanly instead of raising
+        FileNotFoundError."""
+        monkeypatch.chdir(tmp_path)
+        cfg, resolved = load_config("rel-missing.jsonc")
+        assert os.path.exists(resolved)
+        assert isinstance(cfg, dict)
+        assert "agents" in cfg
+        assert "categories" in cfg
+
+    def test_malformed_config_raises_config_parse_error(self):
+        """A JSONC syntax error raises ConfigParseError (not a raw json5 traceback), with the
+        config path in the message — cli.py's --print / TUI-launch paths catch this narrow
+        type to print a friendly message instead of letting the traceback escape."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
+            _write_file(cfg_path, "{ this is not valid json ][")
+
+            with pytest.raises(ConfigParseError) as exc_info:
+                load_config(cfg_path)
+            assert cfg_path in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

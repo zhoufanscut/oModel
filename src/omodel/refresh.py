@@ -12,6 +12,10 @@ import subprocess
 import sys
 from importlib.resources import files
 
+# Generous budget for the weekly CI refresh job: bun must never hang forever (AGENTS.md —
+# every subprocess call carries a timeout).
+_BUN_TIMEOUT = 300
+
 
 def refresh(omo_src: str = None) -> int:
     """Locate omo src: `omo_src` (= --omo-src) | $OMO_SRC | ~/source/oh-my-openagent
@@ -50,7 +54,10 @@ def refresh(omo_src: str = None) -> int:
     # --- Locate bundled snapshot_omo.ts ---
     ts_resource = files("omodel.tools") / "snapshot_omo.ts"
     # importlib.resources may return a Path or a non-filesystem traversable; materialize
-    # it to a real filesystem path so bun can open it.
+    # it to a real filesystem path so bun can open it. ts_temp_path tracks that materialized
+    # copy (stays None when ts_resource was already a plain path) so it can be removed once
+    # bun is done with it below — never the real bundled tools/snapshot_omo.ts.
+    ts_temp_path = None
     try:
         ts_path = str(ts_resource)
         # Verify it's accessible as a file
@@ -68,20 +75,36 @@ def refresh(omo_src: str = None) -> int:
             encoding="utf-8",
         )
         tmp.write(ts_text)
-        tmp.flush()
+        tmp.close()
         ts_path = tmp.name
+        ts_temp_path = ts_path
 
-    # --- Run bun snapshot_omo.ts <omo_src> ---
     try:
-        result = subprocess.run(
-            [bun_bin, "run", ts_path, omo_src],
-            capture_output=True,
-            text=True,
-        )
-    except Exception as exc:
-        print(f"[refresh] Failed to run bun: {exc}. Non-fatal — keeping bundled data.")
-        _print_bundled_meta()
-        return 0
+        # --- Run bun snapshot_omo.ts <omo_src> ---
+        try:
+            result = subprocess.run(
+                [bun_bin, "run", ts_path, omo_src],
+                capture_output=True,
+                text=True,
+                timeout=_BUN_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"[refresh] `bun` timed out after {_BUN_TIMEOUT}s. "
+                "Non-fatal — keeping bundled data."
+            )
+            _print_bundled_meta()
+            return 0
+        except Exception as exc:
+            print(f"[refresh] Failed to run bun: {exc}. Non-fatal — keeping bundled data.")
+            _print_bundled_meta()
+            return 0
+    finally:
+        if ts_temp_path is not None:
+            try:
+                os.remove(ts_temp_path)
+            except OSError:
+                pass
 
     if result.returncode != 0:
         print(
@@ -123,15 +146,20 @@ def _resolve_write_target() -> str:
     """Return the path to write omo-suggestions.json.
     Prefer the repo checkout src/omodel/data/ if it is writable (maintainer mode);
     else fall back to $XDG_DATA_HOME/omodel/omo-suggestions.json."""
-    # Walk up from this file to find a src/omodel/data/ that is writable
-    this_file = os.path.abspath(__file__)
-    # This file is at <repo>/src/omodel/refresh.py when installed editable;
-    # try the sibling data/ directory.
-    repo_data = os.path.join(os.path.dirname(this_file), "data", "omo-suggestions.json")
-    # Check if the data directory is writable
-    data_dir = os.path.dirname(repo_data)
-    if os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
-        return repo_data
+    # A PyInstaller --onefile build extracts to an ephemeral _MEIPASS tempdir; __file__ (and
+    # its "writable" sibling data/ dir) resolves inside it and vanishes on process exit, so a
+    # frozen build must never be mistaken for a maintainer checkout — go straight to the XDG
+    # fallback below instead of even looking at the repo-checkout branch.
+    if not getattr(sys, "frozen", False):
+        # Walk up from this file to find a src/omodel/data/ that is writable
+        this_file = os.path.abspath(__file__)
+        # This file is at <repo>/src/omodel/refresh.py when installed editable;
+        # try the sibling data/ directory.
+        repo_data = os.path.join(os.path.dirname(this_file), "data", "omo-suggestions.json")
+        # Check if the data directory is writable
+        data_dir = os.path.dirname(repo_data)
+        if os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
+            return repo_data
 
     # Fall back to XDG_DATA_HOME/omodel/omo-suggestions.json (user override)
     xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))

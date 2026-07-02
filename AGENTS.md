@@ -67,7 +67,9 @@ data/omo-suggestions.json ──────────────► suggesti
 - **`cache.py`** — on-disk cache (24h TTL) of the two opencode subprocess outputs under
   `~/.cache/omodel/` (flat: `models.json`, `verbose-<provider>.json`). opencode calls are ~3s / ~320 MB,
   so the detail fetch runs in an `app.py` worker (never the UI thread) and is **capped to one at a time**
-  (`asyncio.to_thread` can't kill a spawned process — stacking them OOM'd a machine). Best-effort:
+  (a spawned process can't be killed — stacking them OOM'd a machine). Those workers run on **daemon
+  threads** (`_to_thread_daemon` in app.py, not `asyncio.to_thread`) so `q` never blocks on an
+  in-flight call; `r` is single-flight. Best-effort:
   corrupt/expired → miss; write errors swallowed.
 - **`suggestions.py`** — "what omo suggests." Loads the bundled JSON; `detect_family()` is a faithful
   port of omo's `detectHeuristicModelFamily` (ordered, pattern-before-includes, first match wins — order

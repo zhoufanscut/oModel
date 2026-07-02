@@ -5,15 +5,15 @@ Tests use MOCKED catalog + REAL bundled suggestion IDs.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest
 
-from omodel import cache
 from omodel.catalog import Catalog
 from omodel.suggestions import load as load_suggestions
 from omodel.resolve import Resolver
+
+from _helpers import seed_verbose
 
 
 # ---------------------------------------------------------------------------
@@ -798,17 +798,8 @@ class TestVariantWarnOpencodeFirst:
 
     @staticmethod
     def _seed(provider: str, records: dict) -> None:
-        """Seed a cached verbose-<provider> from {model: [variants]} — opencode's shape (a
-        `provider/model` header + a JSON block whose `variants` is an OBJECT keyed by name)."""
-        parts = []
-        for model, variants in records.items():
-            parts.append(f"{provider}/{model}")
-            parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
-        cache.write(
-            f"verbose-{provider}",
-            "\n".join(parts) + "\n",
-            ["opencode", "models", provider, "--verbose"],
-        )
+        """Delegates to the shared canonical seeder (tests/_helpers.py)."""
+        seed_verbose(provider, records)
 
     @staticmethod
     def _warn_for(res, model, provider, variant):

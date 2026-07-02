@@ -2,7 +2,9 @@
 
 FROZEN CONTRACT — owned by the TUI specialist. Consumes catalog / suggestions / resolve /
 config_io against their frozen signatures. Implements the App class `OModelApp` and the
-module entrypoint `run_app`.
+module entrypoint `run_app` (== `create_app(config_path).run()` — `create_app` is the testable
+construction half, building catalog/suggestions/resolver/cfg without launching the Textual
+event loop).
 
 STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do not rename):
   * Static#providers      — "Providers: <id · id · …>" from catalog.connected (first-seen);
@@ -12,7 +14,7 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             'cat:<name>'.
   * Static#detail          — current model/variant + catalog.detail() line. The detail()
                             line is a ~3s opencode subprocess, so it is fetched in a
-                            background worker (cached per model) and appears when ready —
+                            background worker (cached per (provider, model)) and appears when ready —
                             highlighting renders the rest of the pane instantly.
   * OptionList#candidates  — option IDs 'cand:<i>'; LAST row 'cand:add' (+ add model…). The
                             row matching the current assignment (follows your pick) is '● '. If
@@ -72,6 +74,7 @@ has no choice, so `a` adds it directly — no modal. Every supported kind presen
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Optional
 
 from textual import events, on, work
@@ -136,6 +139,60 @@ def _row_label(row: dict) -> str:
     sub = row.get("substitute_for")
     subtext = f"  (≈ omo {sub})" if sub else ""
     return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
+
+
+def _coerce_dict(parent: dict, key: str) -> dict:
+    """`parent[key]`, creating `{}` on demand — and, mirroring the defensive `isinstance` reads
+    in `_node_for`, REPLACING a present non-dict value (e.g. a hand-edited `"agents": null` or
+    `"sisyphus": null`) with a fresh `{}` written back into `parent`, rather than handing the
+    caller a non-dict node (or crashing, for a plain `dict.setdefault` on a non-dict parent) to
+    write `model`/`variant` into. Used by `_ensure_node` at every level it creates on demand."""
+    value = parent.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        parent[key] = value
+    return value
+
+
+async def _to_thread_daemon(func, *args, **kwargs):
+    """Like `asyncio.to_thread`, but `func` runs on a `threading.Thread(daemon=True)` instead of
+    the loop's default (non-daemon) executor. Non-daemon executor threads are joined at
+    interpreter shutdown — since a spawned `opencode` subprocess can't be killed once started,
+    that joins `q` (quit) to however long the in-flight `--verbose`/`--refresh` call takes (up to
+    20s/90s; a 6s-sleeping stub measured a matching 6s hang on quit). A daemon thread instead lets
+    the process exit immediately; the orphaned opencode child finishing on its own afterwards is
+    harmless — nothing is left awaiting its result. Used by `_fetch_detail` and
+    `_refresh_catalog` in place of `asyncio.to_thread`."""
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def _set_result(result) -> None:
+        # The awaiting worker may have been cancelled (cancelling `future` with it) by the time
+        # this callback runs — set_result/set_exception on an already-done future raises
+        # InvalidStateError, so skip once that's happened.
+        if not future.done():
+            future.set_result(result)
+
+    def _set_exception(exc: BaseException) -> None:
+        if not future.done():
+            future.set_exception(exc)
+
+    def _run() -> None:
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:  # propagate to the awaiter, like asyncio.to_thread
+            try:
+                loop.call_soon_threadsafe(_set_exception, exc)
+            except RuntimeError:
+                pass  # event loop already closed by delivery time — nothing to deliver to
+        else:
+            try:
+                loop.call_soon_threadsafe(_set_result, result)
+            except RuntimeError:
+                pass
+
+    threading.Thread(target=_run, daemon=True).start()
+    return await future
 
 
 class VimOptionList(OptionList):
@@ -275,8 +332,12 @@ class AddModelModal(ModalScreen):
         # Pair-level availability: warn unless THIS provider serves the model. Model-level
         # ("some provider serves it") would hide a typed mismatch like openai/glm-5 — and the
         # synthetic typed row makes that a one-keystroke commit. Fuzzy rows come from real
-        # (provider, model) pairs, so they stay warn-free; only a typed mismatch warns.
-        if provider not in self._resolver.catalog.providers_for(model):
+        # (provider, model) pairs, so they stay warn-free; only a typed mismatch warns. Skipped
+        # entirely in degraded mode (empty catalog.connected, e.g. after a CatalogUnavailable
+        # launch): availability is UNKNOWN there, so an unqualified ⚠ would mislead — mirrors
+        # _build_rows' identical reasoning for the current off-chain assignment's row.
+        catalog = self._resolver.catalog
+        if catalog.connected and provider not in catalog.providers_for(model):
             warn.append("unavailable")
         # An add row is user-typed ("you asked for it"); warn flags availability but never
         # blocks. It is not a chain substitute, so substitute_for stays None. variant is filled
@@ -900,17 +961,25 @@ class OModelApp(App):
         # _refresh_catalog (unlike _rows / _detail_cache), which is what makes it survive refresh.
         self._cand_choice: dict = {}
         # Detail-pane enrichment (catalog.detail()) is a ~3s, ~320 MB `opencode … --verbose`
-        # subprocess. It runs in a background worker and is cached by bare model id, so
+        # subprocess. It runs in a background worker and is cached per (provider, model), so
         # highlighting never blocks the UI thread. Crucially only ONE fetch runs at a time
-        # (_detail_fetching): asyncio.to_thread can't kill a spawned process, so stacking
-        # fetches would pile up 320 MB each. On completion the worker re-renders the *current*
+        # (_detail_fetching): a spawned opencode process can't be killed, so stacking fetches
+        # would pile up 320 MB each. On completion the worker re-renders the *current*
         # target, which schedules the next fetch if it's still uncached ("chase the cursor").
-        # _detail_cache: bare → info dict | None (None = known-empty); _detail_timer debounces.
+        # _detail_cache: 'provider/bare' (see _detail_key) → info dict | None (None =
+        # known-empty); _detail_timer debounces.
         self._detail_cache: dict = {}
         self._detail_fetching = False
         self._detail_timer = None
         # Bumped by a refresh (r) so an in-flight detail fetch can tell its result is stale.
         self._detail_generation = 0
+        # Single-flight guard for `r` (action_refresh): @work(exclusive=True) on _refresh_catalog
+        # cancels a PRIOR ASYNCIO TASK on a second `r`, but not the underlying opencode
+        # subprocess/thread it's awaiting (which can't be killed — see _to_thread_daemon), so two
+        # concurrent `opencode models --refresh` calls would race cache.clear()/cache.write()
+        # (last finisher wins regardless of press order). action_refresh checks this instead of
+        # spawning a second worker; set/cleared by _refresh_catalog itself (try/finally).
+        self._refresh_inflight = False
 
     # ----- composition -----------------------------------------------------------------
 
@@ -1039,19 +1108,23 @@ class OModelApp(App):
 
     def _ensure_node(self, target: str) -> dict:
         """Return (creating if needed) the cfg node for `target`. agents/categories maps and
-        the agent object / sub-object are created on demand so staged edits can land."""
+        the agent object / sub-object are created on demand so staged edits can land. Every level
+        goes through `_coerce_dict`, so a hand-edited config's non-dict value anywhere along the
+        path (e.g. `"agents": null` or `"sisyphus": null`) is coerced back to `{}` instead of
+        crashing (`setdefault` on a non-dict parent) or handing back a non-dict node for the
+        caller to write `model`/`variant` into."""
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
-            agents = self.cfg.setdefault("agents", {})
+            agents = _coerce_dict(self.cfg, "agents")
             if "." in rest:
                 name, kind = rest.split(".", 1)
-                agent = agents.setdefault(name, {})
-                return agent.setdefault(kind, {})
-            return agents.setdefault(rest, {})
+                agent = _coerce_dict(agents, name)
+                return _coerce_dict(agent, kind)
+            return _coerce_dict(agents, rest)
         # cat:
         name = target[len("cat:"):]
-        cats = self.cfg.setdefault("categories", {})
-        return cats.setdefault(name, {})
+        cats = _coerce_dict(self.cfg, "categories")
+        return _coerce_dict(cats, name)
 
     def _current_assignment(self, target: str):
         """(model_str, variant) currently assigned in cfg for `target`; ('', None) if unset.
@@ -1085,10 +1158,7 @@ class OModelApp(App):
             return self._rows[target]
         rows: list = []
         if self.resolver is not None:
-            try:
-                rows = list(self.resolver.candidates(target))
-            except CatalogUnavailable:
-                rows = []
+            rows = list(self.resolver.candidates(target))
         # Re-merge session-added custom rows (typed in the add-model modal) the chain doesn't
         # already cover, so a typed model stays a pickable row — _custom_rows is the store
         # (snapshotted with the undo history); this cache and the resolver list rebuild around it.
@@ -1136,16 +1206,20 @@ class OModelApp(App):
         if model:
             lines.append(f"model: {model}")
             lines.append("variant: " + (variant if variant else "—"))
-            # Detail line from catalog (display only); bare model id is after the first '/'.
-            # Always reserve this row so switching targets refreshes its text in place rather
-            # than adding/removing a line (which makes the pane jump). Cache hit → render the
-            # line now; miss → a dim placeholder holds the slot while the ~3s background fetch
-            # runs, and the worker's re-render swaps in the real content (or blank if none).
+            # Detail line from catalog (display only); the assignment splits on the first '/'
+            # into provider + bare id, and the PROVIDER rides along so the pane describes the
+            # (provider, model) actually assigned — an `opencode/x` assignment shows the
+            # gateway's record (cost can differ per provider), never silently the dedicated
+            # provider's. Always reserve this row so switching targets refreshes its text in
+            # place rather than adding/removing a line (which makes the pane jump). Cache hit →
+            # render the line now; miss → a dim placeholder holds the slot while the ~3s
+            # background fetch runs, and the worker's re-render swaps in the real content.
+            prov = model.split("/", 1)[0] if "/" in model else None
             bare = model.split("/", 1)[1] if "/" in model else model
-            info = self._detail_info(target, bare)
+            info = self._detail_info(target, prov, bare)
             if info:
                 lines.append(self._detail_line(info))
-            elif bare in self._detail_cache:
+            elif self._detail_key(prov, bare) in self._detail_cache:
                 lines.append("")  # fetch done, no detail available — keep the slot blank
             else:
                 lines.append("[dim]…[/dim]")  # fetch pending — keep the slot, fill on arrival
@@ -1156,53 +1230,72 @@ class OModelApp(App):
             lines.append("⚑ GPT-only: Hephaestus needs a GPT model (omo) — non-GPT is blocked.")
         detail.update("\n".join(lines))
 
-    def _detail_info(self, target: str, bare: str):
-        """Cached `catalog.detail(bare)` for the detail pane. Returns the info dict (or None)
-        when already known; on a cache miss schedules a background fetch and returns None so
-        the base detail renders immediately. `catalog.detail()` is a ~3s `opencode --verbose`
-        subprocess — it must never run on the UI thread (highlighting has to stay smooth)."""
-        if bare in self._detail_cache:
-            return self._detail_cache[bare]
+    @staticmethod
+    def _detail_key(provider: "Optional[str]", bare: str) -> str:
+        """_detail_cache key: the provider-qualified 'provider/bare' — the pane describes a
+        (provider, model) pair, and the same model's record can differ per provider (gateway
+        vs dedicated cost) — or the bare id alone for a prefix-less (hand-edited) assignment."""
+        return f"{provider}/{bare}" if provider else bare
+
+    def _detail_info(self, target: str, provider: "Optional[str]", bare: str):
+        """Cached `catalog.detail(bare, provider=provider)` for the detail pane. Returns the
+        info dict (or None) when already known; on a cache miss schedules a background fetch
+        and returns None so the base detail renders immediately. `catalog.detail()` is a ~3s
+        `opencode --verbose` subprocess — it must never run on the UI thread (highlighting has
+        to stay smooth)."""
+        key = self._detail_key(provider, bare)
+        if key in self._detail_cache:
+            return self._detail_cache[key]
         # No connected provider serves it → detail() would no-op; cache None, skip the worker.
         if not self.catalog.providers_for(bare):
-            self._detail_cache[bare] = None
+            self._detail_cache[key] = None
             return None
-        self._schedule_detail_fetch(target, bare)
+        self._schedule_detail_fetch(target, provider, bare)
         return None
 
-    def _schedule_detail_fetch(self, target: str, bare: str) -> None:
+    def _schedule_detail_fetch(self, target: str, provider: "Optional[str]", bare: str) -> None:
         """Debounce (~0.2s) so scrolling doesn't fetch per row, and never start a second
         fetch while one is in flight — the running fetch re-renders the current target on
         completion, which reschedules from here if it's still uncached."""
-        if self._detail_fetching or bare in self._detail_cache:
+        if self._detail_fetching or self._detail_key(provider, bare) in self._detail_cache:
             return
         if self._detail_timer is not None:
             self._detail_timer.stop()
         self._detail_timer = self.set_timer(
-            0.2, lambda: self._fetch_detail(target, bare)
+            0.2, lambda: self._fetch_detail(target, provider, bare)
         )
 
     @work(group="detail")
-    async def _fetch_detail(self, target: str, bare: str) -> None:
+    async def _fetch_detail(self, target: str, provider: "Optional[str]", bare: str) -> None:
         """Background worker: run the blocking ~320 MB `catalog.detail()` subprocess off the
         event loop, cache it, then re-render the CURRENT target. At most one fetch runs at a
-        time (the `_detail_fetching` gate, since a to_thread subprocess can't be killed); the
+        time (the `_detail_fetching` gate, since a spawned subprocess can't be killed); the
         post-render reschedules the next fetch if the current target still needs one."""
-        if self._detail_fetching or bare in self._detail_cache:
+        key = self._detail_key(provider, bare)
+        if self._detail_fetching or key in self._detail_cache:
             return
         generation = self._detail_generation
         self._detail_fetching = True
+        failed = False
         try:
-            info = await asyncio.to_thread(self.catalog.detail, bare)
+            info = await _to_thread_daemon(self.catalog.detail, bare, provider=provider)
         except Exception:
             info = None
+            failed = True
         finally:
             self._detail_fetching = False
         # If a refresh (r) cleared the cache while we were off-thread, this result describes
         # the pre-refresh catalog — drop it instead of repopulating the cleared cache. The
-        # re-render below still runs, so the current target schedules a fresh fetch.
-        if self._detail_generation == generation:
-            self._detail_cache[bare] = info
+        # re-render below still runs, so the current target schedules a fresh fetch. A
+        # TRANSIENT failure (the `except` above — catalog.detail raised) is likewise never
+        # cached, so the next highlight retries rather than blanking this model's detail line
+        # for the rest of the session; a genuine `None` RETURN (no record for this model / no
+        # providers) still caches as "known-empty", same as before. Remaining limitation: a
+        # timeout swallowed INSIDE catalog.detail's own try/except still returns None and is
+        # indistinguishable from "known-empty" here — only an exception that escapes catalog.detail
+        # is treated as transient.
+        if not failed and self._detail_generation == generation:
+            self._detail_cache[key] = info
         # Re-render whatever is current NOW: shows the line if this was it, and (via
         # _detail_info → _schedule_detail_fetch) kicks off the next fetch if still uncached.
         if self._current_target is not None:
@@ -1592,7 +1685,11 @@ class OModelApp(App):
 
     def _open_add_modal(self) -> None:
         if self.resolver is None:
+            # create_app/run_app builds the resolver unconditionally, even in degraded
+            # (CatalogUnavailable) mode — so this is only reachable if Resolver.build() itself
+            # raised (e.g. corrupt bundled suggestions data). Surface why, don't just bell.
             self.bell()
+            self.notify("Add-model unavailable — the model resolver failed to build.", severity="error")
             return
         target = self._current_target
         if target is None:
@@ -1601,12 +1698,25 @@ class OModelApp(App):
         def _accept(row) -> None:
             if row is None:
                 return
+            # A background `r` refresh completing while this modal was open replaces
+            # self.catalog/self.resolver with fresh objects — the modal computed row['warn']
+            # against the resolver/catalog it was constructed with, now stale (the same class of
+            # bug action_variant's restage guards against, but there's no index into a cleared
+            # cache to guard here — the row itself just needs re-validating). Recompute against
+            # the LIVE catalog rather than discarding the user's typed pick: same rule as
+            # _validate_row / _build_rows' off-chain row — [] (unknown, don't mislead) when
+            # catalog.connected is empty, else 'unavailable' iff no connected provider serves it.
+            warn = []
+            if self.catalog.connected and row["provider"] not in self.catalog.providers_for(
+                row["model"]
+            ):
+                warn.append("unavailable")
+            row["warn"] = warn
             # Persist the typed row in _custom_rows (durable across undo/redo) and invalidate the
             # per-target row cache so _build_rows re-merges it as a selectable candidate, then
-            # stage it.
+            # stage it (which re-renders via _refresh_right).
             self._custom_rows.setdefault(target, []).append(row)
             self._rows.pop(target, None)
-            self._render_candidates(target)
             self._stage_row(
                 target,
                 row,
@@ -1642,14 +1752,16 @@ class OModelApp(App):
             # ultrawork/compaction, so there's nothing to save until a model is staged into it.
             # It IS recorded in the undo history, though, so a mis-added sub-target can be
             # removed with `u` (its row vanishes again).
-            self._ensure_node(f"agent:{name}.{kind}")
-            self._populate_targets()
-            # Highlight the freshly added sub-target.
-            targets = self.query_one("#targets", OptionList)
-            try:
-                targets.highlighted = self._index_of_option(targets, f"agent:{name}.{kind}")
-            except Exception:
-                pass
+            sub_target = f"agent:{name}.{kind}"
+            self._ensure_node(sub_target)
+            # Repopulate the left pane straight onto the new sub-target (select=), then render
+            # the right pane synchronously — mirrors _restore_state: don't rely on the queued
+            # OptionHighlighted event the highlight move posts (which may be handled later, or
+            # not at all if some other change coalesces with it first), so the right pane can
+            # never show a stale target in the meantime.
+            self._populate_targets(select=sub_target)
+            self._current_target = sub_target
+            self._refresh_right(sub_target)
             self._record(f"add {kind} sub-target to {name}")
 
         # Single supported kind (non-Sisyphus → compaction only): no choice to make, so skip the
@@ -1752,42 +1864,56 @@ class OModelApp(App):
 
     def action_refresh(self) -> None:
         """`r` — force a live re-fetch + rebuild cache, OFF the UI thread. Doubles as the
-        CatalogUnavailable retry and the manual staleness refresh (DESIGN §CLI/refresh)."""
+        CatalogUnavailable retry and the manual staleness refresh (DESIGN §CLI/refresh).
+        Single-flight (`_refresh_inflight`): a second `r` while one is already running just
+        notifies rather than spawning a second worker — see the field's comment in __init__ for
+        why `@work(exclusive=True)` alone isn't enough."""
+        if self._refresh_inflight:
+            self.notify("Refresh already running…")
+            return
         self._refresh_catalog()
 
     @work(exclusive=True, group="refresh")
     async def _refresh_catalog(self) -> None:
         """Background worker: run `opencode models --refresh` (network, ~3s+) off the event
-        loop via catalog.refresh(), then rebuild the resolver and re-render. Exclusive so a
-        second `r` supersedes an in-flight refresh."""
-        self.query_one("#providers", Static).update("Refreshing models… (opencode --refresh)")
+        loop via catalog.refresh(), then rebuild the resolver and re-render. `exclusive=True`
+        cancels a prior in-flight ASYNCIO TASK, but action_refresh's `_refresh_inflight` check is
+        what actually stops a second `r` from spawning a second worker (and racing the opencode
+        subprocess underneath — see the field's __init__ comment); set here so it covers the
+        worker's entire body regardless of which branch returns."""
+        self._refresh_inflight = True
         try:
-            new_catalog = await asyncio.to_thread(catalog_mod.refresh)
-        except CatalogUnavailable as exc:
-            self.catalog_error = exc
+            self.query_one("#providers", Static).update("Refreshing models… (opencode --refresh)")
+            try:
+                new_catalog = await _to_thread_daemon(catalog_mod.refresh)
+            except CatalogUnavailable as exc:
+                self.catalog_error = exc
+                self._render_providers()
+                self.notify("Refresh failed — couldn't read models.", severity="error")
+                return
+            self.catalog = new_catalog
+            self.catalog_error = None
+            try:
+                self.resolver = Resolver.build(new_catalog, self.suggestions)
+            except Exception:
+                self.resolver = None
+            # Drop every per-session cache so the refreshed availability shows everywhere. Any
+            # in-flight detail fetch finishes on its own and resets _detail_fetching; bumping the
+            # generation makes it discard its (now stale) result rather than re-populating here.
+            # _custom_rows is dropped too (a typed model's stored availability ⚠ is now stale);
+            # also wipe the history's aux snapshots so undo/redo can't resurrect a pre-refresh
+            # typed row.
+            self._rows.clear()
+            self._custom_rows.clear()
+            self._history.clear_aux()
+            self._detail_cache.clear()
+            self._detail_generation += 1
             self._render_providers()
-            self.notify("Refresh failed — couldn't read models.", severity="error")
-            return
-        self.catalog = new_catalog
-        self.catalog_error = None
-        try:
-            self.resolver = Resolver.build(new_catalog, self.suggestions)
-        except Exception:
-            self.resolver = None
-        # Drop every per-session cache so the refreshed availability shows everywhere. Any
-        # in-flight detail fetch finishes on its own and resets _detail_fetching; bumping the
-        # generation makes it discard its (now stale) result rather than re-populating here.
-        # _custom_rows is dropped too (a typed model's stored availability ⚠ is now stale); also
-        # wipe the history's aux snapshots so undo/redo can't resurrect a pre-refresh typed row.
-        self._rows.clear()
-        self._custom_rows.clear()
-        self._history.clear_aux()
-        self._detail_cache.clear()
-        self._detail_generation += 1
-        self._render_providers()
-        if self._current_target is not None:
-            self._refresh_right(self._current_target)
-        self.notify(f"Refreshed — {len(new_catalog.connected)} providers.")
+            if self._current_target is not None:
+                self._refresh_right(self._current_target)
+            self.notify(f"Refreshed — {len(new_catalog.connected)} providers.")
+        finally:
+            self._refresh_inflight = False
 
     def action_quit_confirm(self) -> None:
         """`q` — quit; confirm if there are unsaved edits (`_is_dirty`: serialize(cfg) differs
@@ -1805,12 +1931,17 @@ class OModelApp(App):
         )
 
 
-def run_app(config_path: str = None) -> None:
-    """Build catalog / suggestions / resolver / config and run OModelApp().
-    Called by cli.main() for the default (no-subcommand) invocation.
+def create_app(config_path: str = None) -> OModelApp:
+    """Build catalog / suggestions / resolver / config and construct (but do NOT run) an
+    OModelApp — the production wiring, factored out of `run_app` so it's directly testable
+    without launching the Textual event loop.
 
     Degrades gracefully: on CatalogUnavailable the app still launches with a banner + `r`
-    retry and suggestions/add-model only (no resolver candidates until catalog is back)."""
+    retry and suggestions/add-model only (no resolver candidates until catalog is back). The
+    resolver is built UNCONDITIONALLY — over the real catalog, or over the empty degraded-mode
+    one on CatalogUnavailable — so add-model (the only route to a model while degraded) stays
+    live; only a genuine Resolver.build() failure (e.g. corrupt bundled suggestions data) leaves
+    it None."""
     suggestions = suggestions_mod.load()
     cfg, resolved_path = config_io.load_config(config_path)
 
@@ -1822,13 +1953,12 @@ def run_app(config_path: str = None) -> None:
         catalog = Catalog(available={}, connected=[])
 
     resolver: Optional[Resolver] = None
-    if catalog_error is None:
-        try:
-            resolver = Resolver.build(catalog, suggestions)
-        except Exception:
-            resolver = None
+    try:
+        resolver = Resolver.build(catalog, suggestions)
+    except Exception:
+        resolver = None
 
-    app = OModelApp(
+    return OModelApp(
         catalog=catalog,
         suggestions=suggestions,
         resolver=resolver,
@@ -1836,4 +1966,9 @@ def run_app(config_path: str = None) -> None:
         config_path=resolved_path,
         catalog_error=catalog_error,
     )
-    app.run()
+
+
+def run_app(config_path: str = None) -> None:
+    """Build and run OModelApp() for the default (no-subcommand) CLI invocation.
+    Called by cli.main(). See create_app() for the construction details."""
+    create_app(config_path).run()

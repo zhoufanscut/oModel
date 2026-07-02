@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 import pytest
-from omodel.suggestions import Family, Suggestions, load, normalize_model_id
+from omodel.suggestions import FAMILY_VENDOR, Family, Suggestions, load, normalize_model_id
 
 
 @pytest.fixture(scope="module")
@@ -180,6 +180,21 @@ class TestBundledSuggestionsLoad:
                 assert hasattr(fam.pattern, "search"), (
                     f"family '{fam.family}' pattern is not a compiled re.Pattern"
                 )
+
+
+# ---------------------------------------------------------------------------
+# FAMILY_VENDOR key-set pin (DESIGN §suggestions.py): a family rename/add/remove in a weekly
+# --refresh-omo data update must not silently drop (or orphan) a vendor mapping.
+# ---------------------------------------------------------------------------
+
+class TestFamilyVendorSync:
+
+    def test_family_vendor_keys_match_bundled_families(self, sugg):
+        bundled_families = {f.family for f in sugg.families}
+        assert set(FAMILY_VENDOR.keys()) == bundled_families, (
+            "FAMILY_VENDOR (suggestions.py) is out of sync with the bundled family list — "
+            "update FAMILY_VENDOR after a --refresh-omo family rename/add/remove."
+        )
 
 
 # ---------------------------------------------------------------------------

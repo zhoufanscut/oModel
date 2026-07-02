@@ -80,9 +80,48 @@ def normalize_model_id(s: str) -> str:
     return re.sub(r"\.(\d+)", r"-\1", s).lower()
 
 
+def _generated_at(data_str: str) -> str:
+    """meta.generatedAt from a suggestions JSON blob, or "" if the blob is unparseable, not a
+    JSON object, or missing/non-string generatedAt. "" sorts older than any real ISO-8601
+    timestamp, so a plain string comparison gives "missing/unparseable → oldest" for free."""
+    try:
+        parsed = json.loads(data_str)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    meta = parsed.get("meta")
+    generated = meta.get("generatedAt") if isinstance(meta, dict) else None
+    return generated if isinstance(generated, str) else ""
+
+
+def _newer_of_xdg_and_bundled() -> str:
+    """The newer of $XDG_DATA_HOME/omodel/omo-suggestions.json (written by a past
+    `--refresh-omo`) and the bundled resource, compared by meta.generatedAt (ISO-8601 string
+    compare — chronologically correct for this format). Ties, a missing/unparseable
+    generatedAt on either side, or an unreadable/corrupt XDG file all resolve to the bundled
+    resource — a stale XDG snapshot must never permanently shadow a newer bundled release
+    after an app upgrade."""
+    bundled_str = (files("omodel.data") / "omo-suggestions.json").read_text(encoding="utf-8")
+
+    xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    xdg_path = os.path.join(xdg_data, "omodel", "omo-suggestions.json")
+    try:
+        with open(xdg_path, "r", encoding="utf-8") as f:
+            xdg_str = f.read()
+    except (OSError, ValueError):
+        return bundled_str
+
+    return xdg_str if _generated_at(xdg_str) > _generated_at(bundled_str) else bundled_str
+
+
 def load(path: str = None) -> Suggestions:
-    """Load order: explicit `path` → $OMODEL_SUGGESTIONS → $XDG_DATA_HOME/omodel/omo-suggestions.json
-    → bundled importlib.resources.files('omodel.data')/'omo-suggestions.json'.
+    """Load order: explicit `path` → $OMODEL_SUGGESTIONS → the NEWER of
+    $XDG_DATA_HOME/omodel/omo-suggestions.json and the bundled
+    importlib.resources.files('omodel.data')/'omo-suggestions.json', compared by
+    meta.generatedAt (ISO-8601 string compare; missing/unparseable/unreadable → oldest; ties
+    → bundled) — so a stale XDG snapshot from an old `--refresh-omo` run can't permanently
+    shadow a newer bundled release after an app upgrade.
     Each Family.pattern is re.compile()d from the JSON `pattern` string (or None) at load."""
     data_str: "Optional[str]" = None
 
@@ -95,15 +134,7 @@ def load(path: str = None) -> Suggestions:
             with open(env_path, "r", encoding="utf-8") as f:
                 data_str = f.read()
         else:
-            xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-            xdg_path = os.path.join(xdg_data, "omodel", "omo-suggestions.json")
-            if os.path.isfile(xdg_path):
-                with open(xdg_path, "r", encoding="utf-8") as f:
-                    data_str = f.read()
-            else:
-                # Fall back to the bundled resource.
-                resource = files("omodel.data") / "omo-suggestions.json"
-                data_str = resource.read_text(encoding="utf-8")
+            data_str = _newer_of_xdg_and_bundled()
 
     raw = json.loads(data_str)
 

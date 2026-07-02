@@ -41,10 +41,13 @@ class Catalog:
         """Connected providers that serve `model_id`, in first-seen order."""
         return [p for p in self.connected if model_id in self.available.get(p, [])]
 
-    def detail(self, model_id: str, use_cache: bool = True):
-        """On-demand `opencode models <prov> --verbose` for the RESOLVED provider
-        (providers_for(model_id)[0]); brace-count + json.loads each record; pick the one
-        whose header == `<prov>/<model_id>`. Returns a DISPLAY-ONLY dict
+    def detail(self, model_id: str, use_cache: bool = True, provider: str = None):
+        """On-demand `opencode models <prov> --verbose` for `provider` — when given AND it
+        serves the model — else the RESOLVED provider (providers_for(model_id)[0]). The detail
+        pane passes the current assignment's provider so an `opencode/x` assignment shows the
+        gateway's record (its cost can differ), never silently the dedicated provider's.
+        Brace-count + json.loads each record; pick the one whose header == `<prov>/<model_id>`.
+        Returns a DISPLAY-ONLY dict
         {"context": int|None, "cost": {...}, "reasoning": bool, "image": bool} or None.
         Reads NEITHER `--verbose.variants` NOR `.family`: variants are sourced separately by
         variants_for (the decision #14 picker carve-out); `.family` is never read.
@@ -53,9 +56,12 @@ class Catalog:
         that provider) under cache key `verbose-<prov>`; `use_cache=False` forces a live call.
         Still a blocking call on a miss — app.py invokes it from a worker, never the UI thread."""
         providers = self.providers_for(model_id)
-        if not providers:
+        if provider is not None and provider in providers:
+            prov = provider
+        elif providers:
+            prov = providers[0]
+        else:
             return None
-        prov = providers[0]
 
         stdout = cache.read(f"verbose-{prov}") if use_cache else None
         if stdout is None:

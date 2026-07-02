@@ -53,8 +53,9 @@ python -m pytest tests/test_catalog_parse.py tests/test_resolve.py -v
 - `kimi-k2.5` → `moonshotai-cn` (dedicated wins)
 - `glm-5` → `zhipuai`; `deepseek-v4-pro` → `deepseek`
 - `glm+max` and absent model → `warn` includes `"variant"` / `"unavailable"` but row accepted
-- With openrouter also connected, a both-gateways-only model resolves via first-seen,
-  and `p` cycling reaches `openrouter/…`
+- With openrouter also connected, a both-gateways-only model resolves via first-seen, and the
+  `openrouter/…` row is offered as its own pickable candidate (one row per serving provider —
+  pick the row you want, no cycling key)
 
 **Real-config safety:** tests monkeypatch `subprocess.run`; no real `opencode` called.
 
@@ -172,8 +173,8 @@ tmp dir, and `test_app_pilot.py`'s autouse `_no_real_opencode` fixture stubs `su
 so the pilot never spawns the real `opencode` CLI (~320 MB/call; un-stubbed it can OOM the box).
 The full suite must show zero `opencode`/`bun` processes spawned.
 
-**Note:** This test is currently skipped (`OModelApp not yet implemented`). It must be
-green after TUI integration before this check is cleared.
+**Note:** `OModelApp` is fully implemented; this is a full pilot suite (~60 tests) and runs
+green. This check is cleared.
 
 ---
 
@@ -222,12 +223,13 @@ automated checks pass and the user explicitly chooses to run against it.
 python -m pytest tests/ -x -q
 ```
 
-Expected outcome before full integration:
-- `test_detect_family.py` — **PASS** (bundled data + heuristics fully implemented)
-- `test_catalog_parse.py` — **PASS** (catalog.py implemented)
-- `test_resolve.py` — **PASS** (resolve.py implemented)
-- `test_config_io.py` — **PASS** (config_io.py implemented)
-- `test_app_pilot.py` — **SKIP** (OModelApp stub; unblocked after TUI lands)
+Expected outcome:
+- `test_detect_family.py` — **PASS**
+- `test_catalog_parse.py` — **PASS**
+- `test_resolve.py` — **PASS**
+- `test_config_io.py` — **PASS**
+- `test_app_pilot.py` — **PASS** (full Textual pilot suite, ~60 tests)
+- `test_cache.py`, `test_cli.py`, `test_history.py` — **PASS**
 
-The Lead's gate is: all 5 test files pass (or are explicitly waived with documented reason),
+The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
 plus the 8 checks above run clean on the integration branch.

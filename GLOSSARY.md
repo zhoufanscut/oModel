@@ -47,7 +47,7 @@ line when a new one does.
   set). → catalog.py
 - **vendor** — the *company* behind a family (via `FAMILY_VENDOR`). Used **only** to classify
   providers. → suggestions.py `FAMILY_VENDOR`
-- **family** — a model line (14: gpt-5, claude-opus, glm, kimi…), via `detect_family` (a port of
+- **family** — a model line (15: gpt-5, claude-opus, glm, kimi…), via `detect_family` (a port of
   omo's heuristic). → suggestions.py `detect_family`
 - **gateway vs dedicated** — *gateway* = serves **≥2 vendors** (aggregator, e.g. `opencode`);
   *dedicated* = single-vendor (e.g. `openai`). Dedicated sorts **first** in the pick list.
@@ -55,8 +55,11 @@ line when a new one does.
 
 ## Flags & rules
 
-- **variant** — a model's reasoning-effort/mode (`max`, `high`, `thinking`…). Validity comes **only**
-  from the bundled family registry, *never* `opencode --verbose`. → DESIGN decision #14
+- **variant** — a model's reasoning-effort/mode (`max`, `high`, `thinking`…). Offerings come from
+  cached `opencode --verbose` (`Catalog.variants_for`) — the source of truth for the pickers; the
+  bundled family registry is now only the fallback for the omo-suggestion `⚠` warn when opencode
+  reports nothing for that model. Family *detection* itself stays heuristic-only — `--verbose.family`
+  is never read. → DESIGN decision #14
 - **warn-but-allow (⚠)** — oModel flags but never blocks you (bad variant, unavailable add). One hard
   exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, app.py `_GPT_ONLY_AGENTS`
 

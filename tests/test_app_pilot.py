@@ -20,16 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import glob
-import json
 import os
 import subprocess
+import threading
 import time
 import types
 
 import pytest
 from textual.widgets import Input, OptionList, Static
 
-from omodel.app import OModelApp
+from omodel.app import OModelApp, _to_thread_daemon
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
 from omodel.resolve import Resolver
@@ -100,23 +100,8 @@ def _build_app_with(cfg_path: str, catalog: Catalog) -> OModelApp:
     )
 
 
-def _seed_verbose(provider: str, records: dict) -> None:
-    """Seed a cached `verbose-<provider>` entry so Catalog.variants_for() reads it without a
-    subprocess (the suite stubs opencode + isolates the cache to a tmp dir via conftest). `records`
-    maps model_id -> [variant, ...]; this mirrors `opencode models <prov> --verbose`: a
-    `provider/model` header line followed by a JSON block whose `variants` is an OBJECT keyed by
-    variant name. An empty list → `variants: {}` — opencode's 'no variants' shape (e.g. kimi)."""
-    from omodel import cache
-
-    parts = []
-    for model, variants in records.items():
-        parts.append(f"{provider}/{model}")
-        parts.append(json.dumps({"id": model, "variants": {v: {} for v in variants}}))
-    cache.write(
-        f"verbose-{provider}",
-        "\n".join(parts) + "\n",
-        ["opencode", "models", provider, "--verbose"],
-    )
+# Canonical fake-verbose cache seeder — shared across test files (tests/_helpers.py).
+from _helpers import seed_verbose as _seed_verbose  # noqa: E402
 
 
 async def _select_target(pilot, option_id: str) -> None:
@@ -446,11 +431,10 @@ def test_pilot_sub_target_inherits_parent_chain(pilot_config):
                 targets.get_option_at_index(i).id == "agent:sisyphus.ultrawork"
                 for i in range(targets.option_count)
             )
-            if not uw_present:
-                pytest.skip(
-                    "agent:sisyphus.ultrawork not present after 'a' press — "
-                    "sub-target inheritance not yet wired"
-                )
+            assert uw_present, (
+                "agent:sisyphus.ultrawork must be present after 'a' + 'u' — the sub-target "
+                "chooser is fully wired, so this is a real regression, not a pending feature"
+            )
 
             # Sub-target's pick list must equal the parent's (same chain, same rows).
             await _select_target(pilot, "agent:sisyphus.ultrawork")
@@ -2193,7 +2177,10 @@ def test_addmodal_gpt_filter_fuzzy_rows():
 def test_pilot_addmodal_empty_catalog(pilot_config):
     """Empty catalog (available={}, connected=[]): browse mode shows an empty list with no
     exception and nothing staged; Tab on the empty list is a no-op (input untouched); typing a
-    full provider/model still stages a synthetic row warned 'unavailable', and Enter adds it."""
+    full provider/model still stages a synthetic row — WITHOUT an 'unavailable' warn, since an
+    empty catalog.connected means availability is UNKNOWN (degraded mode: opencode missing / a
+    CatalogUnavailable launch), not a confirmed miss — mirrors _build_rows' identical reasoning
+    for the off-chain current-assignment row — and Enter still adds it."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2212,12 +2199,13 @@ def test_pilot_addmodal_empty_catalog(pilot_config):
             assert inp.value == ""
             assert pilot.app.focused is inp, "Tab on empty list keeps focus on the input"
 
-            # A typed full id for a model nobody serves still stages a (warned) row.
+            # A typed full id still stages a row — warn-free, since with catalog.connected empty
+            # there is no readable catalog to confirm it's actually unavailable.
             inp.value = "openrouter/zzz-custom"
             await pilot.pause()
             assert cands.option_count == 1, _add_candidate_labels(pilot)
-            assert "unavailable" in _add_candidate_labels(pilot)[0]
-            assert scr._staged is not None and scr._staged["warn"] == ["unavailable"]
+            assert "unavailable" not in _add_candidate_labels(pilot)[0]
+            assert scr._staged is not None and scr._staged["warn"] == []
 
             await pilot.press("enter")  # family-less → no variant phase → immediate add
             await pilot.pause()
@@ -2537,5 +2525,341 @@ def test_pilot_addmodal_trailing_slash_uses_fuzzy(pilot_config):
             assert (scr._staged["provider"], scr._staged["model"]) == ("zhipuai", "glm-5"), (
                 "trailing slash: the fuzzy hit is staged, not the incomplete typed text"
             )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: _ensure_node coerces a hand-edited non-dict value back to {}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw_cfg",
+    [
+        '{ "agents": null }',
+        '{ "agents": { "sisyphus": null } }',
+    ],
+    ids=["agents-map-null", "agent-object-null"],
+)
+def test_pilot_ensure_node_coerces_non_dict_value(tmp_path, raw_cfg):
+    """A hand-edited config with a non-dict value at the `agents` map itself, OR at an individual
+    agent object, must not crash when setting a model: _ensure_node coerces the non-dict value
+    back to `{}` (mirroring _node_for's defensive isinstance reads) instead of AttributeError'ing
+    on `setdefault` (agents == null: setdefault sees the key present and returns None as-is) or
+    handing back None for the caller's `node['model'] = ...` (sisyphus == null: same reason, one
+    level down)."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(raw_cfg)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            found_id = await _select_candidate(pilot, "zhipuai/glm-5")
+            assert found_id is not None, "zhipuai/glm-5 must appear as a sisyphus candidate"
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run())  # must not raise (AttributeError / TypeError pre-fix)
+
+    import json5
+
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json5.load(f)
+    assert saved["agents"]["sisyphus"]["model"] == "zhipuai/glm-5", saved
+
+
+# ---------------------------------------------------------------------------
+# Unit test: _to_thread_daemon (quit-hang fix — daemon thread, not to_thread's executor)
+# ---------------------------------------------------------------------------
+
+def test_to_thread_daemon_returns_result():
+    """The awaited result is the callable's return value."""
+    async def _run():
+        return await _to_thread_daemon(lambda: 42)
+
+    assert asyncio.run(_run()) == 42
+
+
+def test_to_thread_daemon_propagates_exception():
+    """An exception raised in the callable propagates to the awaiter, like asyncio.to_thread."""
+    def _boom():
+        raise ValueError("boom")
+
+    async def _run():
+        await _to_thread_daemon(_boom)
+
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(_run())
+
+
+def test_to_thread_daemon_runs_on_daemon_thread():
+    """The callable runs off the main thread, on a thread with daemon=True — so it can never
+    block process exit (unlike asyncio.to_thread's non-daemon executor threads, which are
+    joined at interpreter shutdown)."""
+    captured = {}
+
+    def _record():
+        captured["daemon"] = threading.current_thread().daemon
+        captured["is_main"] = threading.current_thread() is threading.main_thread()
+        return "ok"
+
+    async def _run():
+        return await _to_thread_daemon(_record)
+
+    assert asyncio.run(_run()) == "ok"
+    assert captured["daemon"] is True, "the callable must run on a daemon thread"
+    assert captured["is_main"] is False, "the callable must run off the main thread"
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: double-`r` is single-flight (no concurrent refresh calls)
+# ---------------------------------------------------------------------------
+
+def test_pilot_refresh_double_r_is_single_flight(pilot_config, monkeypatch):
+    """Pressing `r` twice while a refresh is already in flight must NOT spawn a second
+    `opencode models --refresh` call: @work(exclusive=True) only cancels the first refresh's
+    ASYNCIO TASK, not the underlying subprocess/thread it's awaiting (which can't be killed), so
+    without a single-flight guard two concurrent calls would race cache.clear()/cache.write().
+    The second press is a no-op that just notifies."""
+    cfg_path, _ = pilot_config
+    from omodel import app as app_mod
+
+    call_count = {"n": 0}
+    entered = threading.Event()
+    proceed = threading.Event()
+    notifications = []
+
+    def _slow_refresh(*_a, **_k):
+        call_count["n"] += 1
+        entered.set()
+        proceed.wait(timeout=5)
+        return Catalog(available={"opencode": ["claude-opus-4-7"]}, connected=["opencode"])
+
+    monkeypatch.setattr(app_mod.catalog_mod, "refresh", _slow_refresh)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        app.notify = lambda message, **kwargs: notifications.append(message)
+        async with app.run_test() as pilot:
+            await pilot.press("r")
+            await pilot.pause()
+            # Wait (off the event loop thread, so the loop keeps spinning and the already
+            # scheduled refresh worker actually runs) for the first refresh to enter the stub —
+            # pins _refresh_inflight True before the second `r` fires, hitting the race window
+            # deterministically rather than depending on scheduling luck.
+            await asyncio.to_thread(entered.wait, 5)
+            assert call_count["n"] == 1
+            await pilot.press("r")
+            await pilot.pause()
+            proceed.set()
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+    assert call_count["n"] == 1, (
+        f"a second `r` while one is in flight must not spawn a second refresh call: "
+        f"{call_count['n']} calls made"
+    )
+    assert any("already running" in m for m in notifications), (
+        f"the second `r` must notify that a refresh is already running: {notifications}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: degraded mode (CatalogUnavailable) still gets a working add-model modal
+# ---------------------------------------------------------------------------
+
+def test_create_app_degraded_mode_add_model_still_works(pilot_config, monkeypatch):
+    """create_app(), when `opencode models` raises CatalogUnavailable, still builds a resolver
+    (over the empty degraded Catalog) — so add-model, the ONLY route to a model while degraded,
+    stays live: the providers banner shows the retry hint, the candidates pane has no chain rows
+    but still offers '+ add model…', and `a` opens AddModelModal rather than bell-ing as a no-op.
+    In that modal, a typed pair's availability warn is suppressed (catalog.connected is empty, so
+    availability is UNKNOWN — an unqualified ⚠ would mislead)."""
+    from omodel.app import AddModelModal
+
+    cfg_path, _ = pilot_config
+    from omodel import app as app_mod
+
+    def _raise(*_a, **_k):
+        raise app_mod.CatalogUnavailable("`opencode models` exited with code 1")
+
+    monkeypatch.setattr(app_mod.catalog_mod, "load", _raise)
+
+    app = app_mod.create_app(cfg_path)
+    assert app.resolver is not None, "create_app must build a resolver even in degraded mode"
+
+    async def _run():
+        async with app.run_test() as pilot:
+            providers = pilot.app.query_one("#providers", Static)
+            assert "couldn't read models" in str(providers.content), str(providers.content)
+
+            await _select_target(pilot, "agent:sisyphus")
+            cands = pilot.app.query_one("#candidates", OptionList)
+            ids = [cands.get_option_at_index(i).id for i in range(cands.option_count)]
+            # No CHAIN ('omo'-sourced) rows in degraded mode; the pilot config's own preset
+            # assignment (opencode/claude-opus-4-7) still surfaces as its own off-chain 'add' row
+            # (see _build_rows), alongside the ever-present '+ add model…'.
+            assert ids == ["cand:0", "cand:add"], ids
+            rows = pilot.app._build_rows("agent:sisyphus")
+            assert all(r["source"] != "omo" for r in rows), (
+                f"degraded mode must show no chain (omo) rows: {rows}"
+            )
+
+            cands.focus()
+            cands.highlighted = 0
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, (
+                "`a` must open AddModelModal in degraded mode, not bell as a no-op"
+            )
+            scr = pilot.app.screen
+            assert isinstance(scr, AddModelModal)
+
+            row, _preview, ok = scr._build_row("openai/gpt-99")
+            assert ok and row is not None, (row, ok)
+            assert row["warn"] == [], (
+                f"degraded mode (empty catalog.connected): the unavailable warn must be "
+                f"suppressed, not misleadingly flagged: {row}"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: a transient catalog.detail() failure is not cached forever
+# ---------------------------------------------------------------------------
+
+def test_pilot_detail_fetch_failure_not_cached_forever(pilot_config):
+    """A TRANSIENT catalog.detail() failure (raises) must NOT be cached — the next render
+    retries — unlike a genuine `None` RETURN (no record / no providers), which stays cached as
+    'known-empty'. Regression: _fetch_detail unconditionally cached info=None even on the
+    except-Exception path, permanently blanking the detail line for the rest of the session."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        calls = {"n": 0}
+
+        def _flaky_detail(model_id, use_cache=True, provider=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient failure")
+            return {"context": 128000, "cost": None, "reasoning": False, "image": False}
+
+        app.catalog.detail = _flaky_detail
+
+        async with app.run_test() as pilot:
+            # pilot_config's sisyphus is assigned opencode/claude-opus-4-7 → the detail cache
+            # keys the (provider, model) pair as 'opencode/claude-opus-4-7' (_detail_key).
+            # Drive the background worker directly — bypassing the ~0.2s debounce timer, which
+            # isn't what this fix is about — for a deterministic, fast test (this is exactly
+            # how _schedule_detail_fetch's timer callback invokes it).
+            key = "opencode/claude-opus-4-7"
+            pilot.app._current_target = "agent:sisyphus"
+            pilot.app._fetch_detail("agent:sisyphus", "opencode", "claude-opus-4-7")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert calls["n"] == 1, f"the first (failing) fetch must have run: {calls}"
+            assert key not in pilot.app._detail_cache, (
+                "a transient failure must NOT be cached, so the next fetch retries"
+            )
+
+            # Retry: still uncached, so a fresh call is not gated by _detail_fetching/cache
+            # checks — this time it succeeds.
+            pilot.app._fetch_detail("agent:sisyphus", "opencode", "claude-opus-4-7")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert calls["n"] == 2, f"the retry must have run: {calls}"
+            assert pilot.app._detail_cache.get(key) is not None, (
+                "the successful retry's result must now be cached"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: add-modal accept recomputes warn against the LIVE catalog
+# ---------------------------------------------------------------------------
+
+def test_pilot_addmodal_accept_recomputes_warn_against_live_catalog(pilot_config):
+    """A background `r` refresh completing while the add-model modal is open replaces
+    self.catalog/self.resolver — the modal's staged row.warn reflects the STALE (pre-refresh)
+    catalog it was built against. _accept must recompute warn against the LIVE catalog before
+    staging (not just re-add the modal's stale warn), so an id that became available (or
+    unavailable) during the refresh is reported correctly."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "openrouter/zzz-custom"
+            await pilot.pause()
+            scr = pilot.app.screen
+            assert scr._staged is not None
+            assert scr._staged["warn"] == ["unavailable"], (
+                "openrouter serves nothing in the initial catalog: must warn unavailable"
+            )
+
+            # Simulate a background `r` refresh completing while the modal is still open:
+            # openrouter now serves zzz-custom. The modal keeps its OWN (stale) resolver/catalog
+            # reference — only app.catalog (what _accept must consult) is swapped, exactly as
+            # _refresh_catalog does.
+            fresh_catalog = Catalog(available={"openrouter": ["zzz-custom"]}, connected=["openrouter"])
+            pilot.app.catalog = fresh_catalog
+
+            await pilot.press("enter")  # family-less id → immediate accept, no variant phase
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "modal must close on accept"
+
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openrouter/zzz-custom", node
+
+            staged = pilot.app._custom_rows["agent:sisyphus"][-1]
+            assert staged["warn"] == [], (
+                f"warn must be recomputed against the LIVE (post-refresh) catalog: {staged}"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot test: adding a sub-target renders synchronously (no stale queued render)
+# ---------------------------------------------------------------------------
+
+def test_pilot_add_sub_renders_synchronously_no_stale_target(pilot_config):
+    """Adding a sub-target (`a` on a single-sub-kind agent — every non-Sisyphus agent adds
+    `compaction` directly, no chooser) must update _current_target and render the right pane for
+    the NEW sub-target SYNCHRONOUSLY, mirroring _restore_state — not rely on the queued
+    OptionHighlighted event the highlight move posts (which _target_highlighted would otherwise
+    handle later). Calling _add_sub() directly (a plain method — no pilot.press, no intervening
+    await) and checking state IMMEDIATELY afterward proves the render already happened without
+    that queued event ever being processed."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:oracle")
+            assert pilot.app._current_target == "agent:oracle"
+
+            # _add_sub() is a plain (non-async) method: this call runs to completion with NO
+            # intervening await, so the highlight move's OptionHighlighted event is only POSTED
+            # here — not yet processed (that needs the event loop to run, which we deliberately
+            # don't give it before asserting below).
+            pilot.app._add_sub()
+
+            assert pilot.app._current_target == "agent:oracle.compaction", (
+                "the right pane's notion of the current target must update synchronously, "
+                "before the queued OptionHighlighted event is even processed"
+            )
+            detail = pilot.app.query_one("#detail", Static)
+            assert "oracle.compaction" in str(detail.content), str(detail.content)
 
     asyncio.run(_run())

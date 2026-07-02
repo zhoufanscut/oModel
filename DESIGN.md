@@ -121,6 +121,13 @@ omodel --refresh-models         # force `opencode models --refresh` + rebuild th
 omodel --version
 ```
 
+CLI error behavior: a malformed (unparseable) config makes the TUI launch and `--print` exit 1 with
+a one-line friendly message + a "fix the file or `omodel --restore`" hint (`ConfigParseError` from
+`config_io.load_config`) — never a raw json5 traceback. (`--check` never parses the config, so it
+stays exit-0/CI-safe regardless.) `--restore`'s interactive prompt treats Ctrl-D/Ctrl-C as
+"Cancelled." (exit 1) rather than crashing. `--config` accepts a bare relative filename (scaffold
+resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `makedirs`).
+
 ## Layout (approved)
 
 ```
@@ -221,12 +228,16 @@ oModel/
   a set). Per the §Data sources error rule: exit code ≠ 0 **or** zero `provider/model` lines parsed →
   raise `CatalogUnavailable` (UI shows banner + retry); `opencode` not on `PATH` → empty + banner.
 - `providers_for(model_id)` → connected providers that have it, in first-seen order.
-- `detail(model_id)`: query `<provider>` = the model's **resolved** provider (first of
-  `providers_for(model_id)`); run `opencode models <provider> --verbose`; split records on header
+- `detail(model_id, provider=None)`: query `<provider>` = the requested `provider` when it serves
+  the model — the detail pane passes the current assignment's provider, so an `opencode/x`
+  assignment shows the **gateway's** record (cost can differ per provider), never silently the
+  dedicated provider's — else the model's **resolved** provider (first of `providers_for(model_id)`);
+  run `opencode models <provider> --verbose`; split records on header
   lines `^(?P<prov>[a-z0-9_-]+)/(?P<model>\S+)$` (col 0), brace-count each block, `json.loads`, and
   pick the record whose header == `<provider>/<model_id>` → `{context, cost, reasoning, image}` for
   the detail pane (display only). This is a ~3s subprocess, so `app.py` calls it from a background
-  worker (cached per model, debounced) — never on the UI thread (see §Textual two-pane contract).
+  worker (cached per `(provider, model)`, debounced) — never on the UI thread (see §Textual two-pane
+  contract).
 
 ### `cache.py` — on-disk opencode cache
 - Both opencode subprocesses (`opencode models` ~3s, and `opencode models <prov> --verbose` ~3s /
@@ -242,16 +253,28 @@ oModel/
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
   worker (off the UI thread); the `Providers:` header shows cache age (`cached 3h ago · r to refresh`).
-- **Memory safety (load-bearing):** `asyncio.to_thread` threads can't be killed, so the detail fetch is
-  **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
+- **Memory safety (load-bearing):** a spawned opencode subprocess can't be killed, so the detail fetch
+  is **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
   *current* target, which schedules the next — "chase the cursor"). Uncapped/un-stubbed, stacked
   ~320 MB `--verbose` processes OOM'd a machine; a refresh bumps a generation counter so an in-flight
   fetch discards its now-stale result. Tests stub `subprocess.run` and isolate the cache dir
   (`tests/conftest.py` → `$OMODEL_CACHE_DIR`).
+- **Quit never blocks on a subprocess:** both the detail fetch and the `r` refresh run their blocking
+  call via `_to_thread_daemon` (app.py) — a **daemon**-thread analogue of `asyncio.to_thread`.
+  `to_thread`'s non-daemon executor threads are joined at interpreter shutdown, which made `q` hang
+  until the in-flight call finished (up to its 20s/90s timeout); a daemon thread lets the process
+  exit immediately, and the orphaned opencode child just finishes on its own (nothing awaits it).
+  `r` is additionally **single-flight** (`_refresh_inflight`): a second press notifies "already
+  running" instead of spawning a second worker — `@work(exclusive=True)` only cancels the prior
+  asyncio *task*, not the subprocess, so two live `--refresh` runs would race `cache.clear()`/
+  `write()` (last finisher wins).
 
 ### `suggestions.py` — bundled omo data
-- Load order: `$OMODEL_SUGGESTIONS` → `$XDG_DATA_HOME/omodel/omo-suggestions.json` (from `--refresh-omo`)
-  → bundled `importlib.resources.files("omodel.data")/"omo-suggestions.json"`.
+- Load order: explicit `path` arg → `$OMODEL_SUGGESTIONS` (both unconditional) → the **newer** of
+  `$XDG_DATA_HOME/omodel/omo-suggestions.json` (from a past `--refresh-omo`) and the bundled
+  `importlib.resources.files("omodel.data")/"omo-suggestions.json"`, compared by `meta.generatedAt`
+  (ISO-8601 string compare; missing/unparseable/unreadable → oldest; ties → bundled) — so a stale
+  user-local snapshot can never shadow newer bundled data after an app upgrade.
 - `detect_family(model_id)` — faithful port of `detectHeuristicModelFamily`: **ordered** iteration of
   `families`, `pattern` tested before `includes` within each entry, first match wins; run
   `normalize_model_id` first (`re.sub(r"\.(\d+)", r"-\1", s).lower()` → `kimi-k2.7`→`kimi-k2-7`).
@@ -452,9 +475,15 @@ oModel/
 ### `refresh.py` — `omodel --refresh-omo`
 - Locate omo src: `--omo-src` | `$OMO_SRC` | `~/source/oh-my-openagent` (needs
   `packages/model-core/src`). Runner: **bun only** (no node fallback — verified broken).
-- Run bundled `tools/snapshot_omo.ts` → JSON (RegExp→`.source`, Set→array, + `meta`).
-- Write target: writable repo checkout (`src/omodel/data/`) → write there (maintainer commits);
-  else `$XDG_DATA_HOME/omodel/omo-suggestions.json` (user override).
+- Run bundled `tools/snapshot_omo.ts` → JSON (RegExp→`.source`, Set→array, + `meta`). The bun run
+  carries a **300s timeout** (non-fatal on expiry — every subprocess call in the repo carries one);
+  a temp-materialized copy of the `.ts` (frozen/zipimport case) is removed afterwards.
+- Write target: **frozen (PyInstaller) build → always `$XDG_DATA_HOME/omodel/omo-suggestions.json`**
+  (under `--onefile`, `__file__`'s sibling `data/` dir lives in the ephemeral `_MEIPASS` extraction
+  tempdir — writable but deleted on exit, so writing "to the checkout" there silently loses the
+  output; `sys.frozen` gates the branch); else writable repo checkout (`src/omodel/data/`) → write
+  there (maintainer commits); else `$XDG_DATA_HOME/omodel/omo-suggestions.json` (user override —
+  read back by `suggestions.load()`'s newest-wins rule, §suggestions.py).
 - Missing omo src or bun → **non-fatal**: print current bundled `meta`, keep bundled data.
 
 ### `tools/snapshot_omo.ts` — the extractor (bun, maintainer-time)
@@ -551,7 +580,10 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `provider/model` → used **verbatim** (split on the *first* `/`); a bare id → auto-prefixed via
   `resolve_prefix` **if available**, else `⚠ unknown — add a provider/` and `enter` is **blocked**; a
   typed full id that **fuzzy-matches nothing** appears as a synthetic **"use as typed"** row (so
-  custom / `⚠ unavailable` ids still work — warn-but-allow, decision #5). A half-typed fragment that
+  custom / `⚠ unavailable` ids still work — warn-but-allow, decision #5; the `unavailable` warn is
+  **suppressed in degraded mode** — empty `connected`, availability unknown — mirroring the
+  off-chain row's rule, and recomputed against the **live** catalog on accept in case an `r`
+  refresh landed while the modal was open). A half-typed fragment that
   *still* fuzzy-matches (e.g. a Tab-filled id after a backspace — `zhipuai/glm-` ⊂ `zhipuai/glm-5`)
   falls back to those matches rather than leading with that ⚠-unavailable synth row. *(Trade-off:
   the synth row is offered **only** when nothing fuzzy-matches, so the rare custom id that is itself a
@@ -595,12 +627,21 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Primary — standalone binary + installer (GitHub Releases):** PyInstaller **one-file** build,
   `pyinstaller --onefile --name omodel --collect-data omodel src/omodel/__main__.py` (bundles
   `data/` + `tools/`; `importlib.resources` reads them from the frozen package). CI `release.yml`
-  builds on tag push (matrix: **linux-x64** `ubuntu-latest`, **darwin-arm64** `macos-latest`)
-  and attaches `omodel-<os>-<arch>` (+ `.tar.gz`) to the Release. (Intel-mac `macos-13` was
-  dropped — GitHub is retiring those runners and they queue for hours; Intel macs install via
-  pipx.) `install.sh` detects OS/arch (`linux-x64`, `darwin-arm64`), downloads the matching
-  asset, installs `omodel` to `~/.local/bin`:
+  builds on tag push (matrix: **linux-x64** `ubuntu-latest`, **darwin-arm64** `macos-latest`),
+  gated by: a **tag↔version check** (tag must equal `__init__.__version__` and pyproject's
+  `version`), the **full pytest suite**, and a smoke test running `--version` **and `--check`**
+  (`--check` imports the data-loading path, so a broken `--collect-data` bundle fails the release
+  — `--version` alone returns before touching bundled data and can't catch it). It attaches
+  `omodel-<os>-<arch>` (bare binary), `omodel-<os>-<arch>.tar.gz` (**binary + LICENSE + NOTICE**
+  — the tarball is the canonical asset; NOTICE must ship with the omo-derived bundled data), and
+  `….tar.gz.sha256` to the Release. (Intel-mac `macos-13` was dropped — GitHub is retiring those
+  runners and they queue for hours; Intel macs install via pipx.) `install.sh` detects OS/arch
+  (`linux-x64`, `darwin-arm64`), downloads the **tarball**, verifies the published sha256 when
+  present (hard-fails on mismatch; warns-and-continues when absent, e.g. an older release),
+  extracts, and installs `omodel` to `~/.local/bin`:
   `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh`.
+  The linux binary needs a glibc ≥ the `ubuntu-latest` builder's (documented in README; older
+  distros → pipx/uvx path).
 - **Secondary — pip/pipx/uvx straight from GitHub (no PyPI):**
   `pipx install git+https://github.com/<you>/oModel` ·
   `uvx --from git+https://github.com/<you>/oModel omodel` ·
@@ -608,9 +649,12 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Maintainer:** `git clone … && uv pip install -e .`; refresh data with
   `OMO_SRC=~/source/oh-my-openagent omodel --refresh-omo`, commit `src/omodel/data/omo-suggestions.json`;
   `git tag vX.Y.Z && git push --tags` → `release.yml` builds and publishes the binary.
-- ⚠ **Licensing:** the bundled `omo-suggestions.json` is **data derived from omo source**, redistributed
-  in both the repo and the binary. Confirm omo's `LICENSE.md`/`CLA.md`/`THIRD-PARTY-NOTICES.md` permit
-  it and add attribution in `NOTICE`. `default-config.jsonc` is oModel's own (not copied) to avoid this.
+- ⚠ **Licensing:** the bundled `omo-suggestions.json` is **data derived from omo source** (Sustainable
+  Use License — satisfied while oModel stays free/non-commercial), redistributed in the repo, the
+  wheel, and the binary. Attribution lives in `NOTICE`; the wheel carries it via hatchling's
+  `dist-info/licenses/`, and each release **tarball ships `LICENSE` + `NOTICE` next to the binary**
+  (the bare-binary asset alone carries none — the tarball is the compliant artifact). Keep `NOTICE`
+  intact when redistributing. `default-config.jsonc` is oModel's own (not copied) to avoid this.
 
 ## Verification (fixtures use REAL omo suggestion IDs)
 
