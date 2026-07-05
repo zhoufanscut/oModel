@@ -59,7 +59,9 @@ line when a new one does.
   cached `opencode --verbose` (`Catalog.variants_for`) — the source of truth for the pickers; the
   bundled family registry is now only the fallback for the omo-suggestion `⚠` warn when opencode
   reports nothing for that model. Family *detection* itself stays heuristic-only — `--verbose.family`
-  is never read. → DESIGN decision #14
+  is never read. A `none` variant is treated as **no variant**: identical to the synthetic `(none)`
+  clear row, so the pickers never offer it and saving drops the `variant` key (`_is_no_variant`).
+  → DESIGN decision #14
 - **warn-but-allow (⚠)** — oModel flags but never blocks you (bad variant, unavailable add). One hard
   exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, app.py `_GPT_ONLY_AGENTS`
 

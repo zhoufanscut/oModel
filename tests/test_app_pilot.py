@@ -1931,6 +1931,120 @@ def test_pilot_vkey_lists_opencode_reported_variants(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_addmodal_drops_none_variant(pilot_config):
+    """A "none" variant opencode lists is dropped as a duplicate of the synthetic "(none)" clear
+    row — the add-model variant list must show the REAL variants + var:__none__ only, never a
+    var:none. Picking (none) then writes NO variant key ("none" ≡ (none) ≡ unset)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        # opencode reports "none" alongside the real variants (a GPT/reasoning model shape).
+        _seed_verbose("openai", {"gpt-5.5": ["none", "low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "openai/gpt-5.5"
+            await pilot.pause()
+            await pilot.press("enter")  # choose openai/gpt-5.5 → variant phase
+            await pilot.pause()
+
+            variants = pilot.app.screen.query_one("#add-variants", OptionList)
+            vids = [variants.get_option_at_index(i).id for i in range(variants.option_count)]
+            assert vids == ["var:low", "var:medium", "var:high", "var:__none__"], vids
+            assert "var:none" not in vids, "the literal 'none' must be dropped, not offered"
+
+            variants.highlighted = vids.index("var:__none__")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openai/gpt-5.5", node
+            assert "variant" not in node, f"(none) must remove the variant key: {node}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_addmodal_only_none_variant_skips_phase(pilot_config):
+    """A model whose ONLY opencode-reported variant is "none" has nothing real to pick once the
+    duplicate is dropped — so the add-model flow skips the variant phase entirely and adds it
+    immediately with no variant key (same path as kimi/glm-5)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["none"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            inp = await _open_add_modal(pilot)
+            inp.value = "openai/gpt-5.5"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "a 'none'-only model must skip the variant phase"
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "openai/gpt-5.5", node
+            assert "variant" not in node, f"must be added with no variant: {node}"
+
+    asyncio.run(_run())
+
+
+def test_pilot_vkey_drops_none_variant(pilot_config):
+    """`v` likewise drops a "none" opencode lists — the VariantModal shows the real variants +
+    var:__none__ only (the synthetic "(none)" already clears the variant)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["none", "low", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            oid = await _highlight_candidate(pilot, "openai/gpt-5.5")
+            assert oid is not None, "openai/gpt-5.5 must be a sisyphus candidate"
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 2, "v must open the VariantModal"
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            assert vids == ["var:low", "var:high", "var:__none__"], vids
+            assert "var:none" not in vids, "the literal 'none' must be dropped, not offered"
+
+    asyncio.run(_run())
+
+
+def test_pilot_repick_offchain_clears_stale_none_variant(tmp_path):
+    """A pre-existing on-disk `variant: "none"` (e.g. hand-edited, or written by an older omodel)
+    rides along on the synthesized off-chain candidate row. Re-picking that row with Enter must
+    DROP the stale key ("none" ≡ (none) ≡ no variant) rather than round-trip `variant: "none"`."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        # deepseek/deepseek-v4-pro is available but OFF sisyphus's chain → it surfaces as the
+        # synthesized current-assignment row, which carries the cfg variant verbatim.
+        f.write(
+            '{\n'
+            '  "agents": {\n'
+            '    "sisyphus": {"model": "deepseek/deepseek-v4-pro", "variant": "none"}\n'
+            '  },\n'
+            '  "categories": {}\n'
+            '}\n'
+        )
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            # sanity: the stale "none" is what's loaded before we touch it
+            assert app.cfg["agents"]["sisyphus"].get("variant") == "none"
+            oid = await _highlight_candidate(pilot, "deepseek/deepseek-v4-pro")
+            assert oid is not None, "the off-chain current assignment must be a pickable row"
+            await pilot.press("enter")  # re-pick the same model → _stage_row normalizes
+            await pilot.pause()
+            node = app.cfg["agents"]["sisyphus"]
+            assert node["model"] == "deepseek/deepseek-v4-pro", node
+            assert "variant" not in node, f"re-picking must clear the stale 'none': {node}"
+
+    asyncio.run(_run())
+
+
 def test_pilot_vkey_no_variants_bells(pilot_config):
     """`v` on a model opencode reports no variants for (kimi) opens NO modal — the old
     `known_variants` 'always offer something' fallback is gone; variant validity is opencode's,
