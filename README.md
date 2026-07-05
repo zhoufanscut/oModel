@@ -1,6 +1,6 @@
 # oModel
 
-> A TUI to quickly set **OMO** (`oh-my-openagent`) models — command `omodel`.
+> A small TUI to help set **OMO** (`oh-my-openagent`) models — command `omodel`.
 
 **what omo suggests + what you already have → pick one → save a clean config.**
 

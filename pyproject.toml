@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 [project]
 name = "omodel"
 version = "0.2.0"
-description = "A TUI to quickly set OMO (oh-my-openagent) models"
+description = "A small TUI to help set OMO (oh-my-openagent) models"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
