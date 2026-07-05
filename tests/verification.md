@@ -192,8 +192,9 @@ opencode models | head -5    # confirm models visible
 python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
-#   1. Verify Providers: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
-#   2. Verify the bottom hint bar is exactly "s save · ? help · q quit"; press '?' — the key
+#   1. Verify oModel: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
+#   2. Verify the bottom hint bar shows "s save · ? help · q quit" (left) with the version "v<version>"
+#      right-aligned at the far right; press '?' — the key
 #      overlay opens (Navigate/Edit/Undo/Models/dialogs); '?'/esc/q closes it
 #   3. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
 #   4. Pick a model from the candidate list

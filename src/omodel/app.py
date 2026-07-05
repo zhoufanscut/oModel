@@ -7,7 +7,7 @@ construction half, building catalog/suggestions/resolver/cfg without launching t
 event loop).
 
 STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do not rename):
-  * Static#providers      — "Providers: <id · id · …>" from catalog.connected (first-seen);
+  * Static#providers      — "oModel: <id · id · …>" from catalog.connected (first-seen);
                             on CatalogUnavailable shows the banner + `r` retry instead.
   * OptionList#targets     — AGENTS then CATEGORIES. Option IDs: 'agent:<name>',
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
@@ -24,9 +24,12 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             and re-selectable. The highlighted (cursor) row is remembered per
                             target by model identity and restored on re-render, so it survives a
                             target switch and `r` refresh (see _cand_choice / _restore_cand_highlight).
-  * Static#hints           — minimal, STATIC key hint bar (bottom row): `s save · ? help · q quit`
+  * Static#hints           — minimal, STATIC key hint bar (LEFT of the bottom row): `s save · ? help · q quit`
                             (see _HINT_BAR). Every other key lives in the `?` help overlay
                             (HelpModal); modals carry their own one-line hint instead.
+  * Static#hints-version   — app version `v<version>`, right-aligned at the tail of the bottom row (its
+                            own Static in the #hints-bar Horizontal; #hints is width:1fr so it pushes
+                            this Static to the right edge).
 
 Each pane is a bordered card; the focused pane (`#targets`/`#candidates`) brightens its border
 to `$primary`, while blurred panes and the never-focused `#detail` use a muted `$surface-lighten-3`
@@ -90,6 +93,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+from . import __version__
 from . import catalog as catalog_mod
 from . import config_io
 from . import suggestions as suggestions_mod
@@ -1023,9 +1027,17 @@ class OModelApp(App):
     #targets:focus, #candidates:focus {
         border: solid $primary;
     }
-    #hints {
+    #hints-bar {
         height: 1;
         background: $surface-lighten-1;  /* neutral bar fill — theme token, deliberately not the blue-gray $panel (the "90s DOS status bar" tint) */
+    }
+    #hints {
+        width: 1fr;                      /* keys, left — grows to fill so the version is pushed to the tail (right edge) */
+        color: $text-muted;
+        padding: 0 1;
+    }
+    #hints-version {
+        width: auto;                     /* app version, right-aligned at the tail of the bar */
         color: $text-muted;
         padding: 0 1;
     }
@@ -1121,7 +1133,9 @@ class OModelApp(App):
             with Vertical(id="right"):
                 yield Static("", id="detail")
                 yield VimOptionList(id="candidates")
-        yield Static("", id="hints")
+        with Horizontal(id="hints-bar"):
+            yield Static("", id="hints")
+            yield Static(f"v{__version__}", id="hints-version")
 
     def on_mount(self) -> None:
         self._render_providers()
@@ -1140,9 +1154,9 @@ class OModelApp(App):
         if self.catalog_error is not None:
             header.update("⚠ couldn't read models — press r to retry")
         elif self.catalog.connected:
-            header.update("Providers: " + " · ".join(self.catalog.connected))
+            header.update("oModel: " + " · ".join(self.catalog.connected))
         else:
-            header.update("Providers: (none — opencode not found; suggestions/add only)")
+            header.update("oModel: (none — opencode not found; suggestions/add only)")
 
     # ----- left pane: targets ----------------------------------------------------------
 

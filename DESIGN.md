@@ -72,7 +72,7 @@ prefix and a valid variant, and saves a clean config.
   `moonshotai-cn`) wrapped in box-drawing/ANSI with **no `--json`/plain flag** (verified) — fragile,
   and would need a name→ID map. `opencode models` already yields the usable provider set as clean IDs
   in one call (a provider appears only if it can serve models = exactly "usable"). oModel **never
-  calls `auth list`**; `connected` (above) *is* the logged-in/usable set, shown as a `Providers:`
+  calls `auth list`**; `connected` (above) *is* the logged-in/usable set, shown as an `oModel:`
   header line. (`auth list`'s only extra info — api/oauth method, and providers logged-in-but-serving-
   zero-models — isn't needed for resolution or flags.)
 - **Per-model detail (on demand):** `opencode models <provider> --verbose` emits, **per model**, a
@@ -131,7 +131,7 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 ## Layout (approved)
 
 ```
- Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai
+ oModel: opencode · deepseek · moonshotai-cn · openai · zhipuai
 ┌────────────────────┐┌────────────────────────────────────────────┐
 │ AGENTS             ││ sisyphus                                   │
 │ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
@@ -144,13 +144,13 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- s save · ? help · q quit
+ s save · ? help · q quit                                     v0.1.0
 ```
 
 Each region is a bordered card; the **focused** pane's border brightens to `$primary`, while blurred
 panes use a muted `$surface-lighten-3` border — a theme token (not a literal), chosen over
 `$border-blurred`, which the default textual-dark theme renders near-black on a dark terminal.
-`Static#providers` / `Static#hints` are full-width bars (not cards) with a neutral `$surface-lighten-1`
+`Static#providers` / `Static#hints-bar` are full-width bars (not cards) with a neutral `$surface-lighten-1`
 fill (deliberately not the blue-gray `$panel`), and `Static#detail` is display-only — it shows the
 frame but never the focus highlight (Statics never receive focus; only `#targets` and `#candidates` do).
 
@@ -160,7 +160,8 @@ before `app` imports Textual) so the palette is consistent across terminals — 
 collapses to its ANSI slots, looking nothing like a `xterm-256color` session. Overridable:
 `TEXTUAL_COLOR_SYSTEM=truecolor` for 24-bit, `=auto` to restore Textual's own detection.
 
-The bottom hint bar (`Static#hints`) is **minimal and static**: `s save · ? help · q quit` — the
+The bottom hint bar (`Static#hints-bar`) is **minimal and static**: the keys `s save · ? help · q quit` sit
+at the left, the app version (`v<version>`, a right-aligned `Static#hints-version`) at the tail — the
 three keys you won't discover by convention and that act regardless of focus. It never tracks
 pane / row / undo state. **Every other key lives in the `?` help overlay** (`HelpModal`), a
 scrollable full-reference modal. See §Textual contract.
@@ -253,7 +254,7 @@ oModel/
   fallback. A live, successful run rewrites the cache; every opencode call carries a `timeout=`.
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
-  worker (off the UI thread); `r` is documented in the `?` help overlay (the `Providers:` header shows
+  worker (off the UI thread); `r` is documented in the `?` help overlay (the `oModel:` header shows
   only the connected list — no cache-age suffix).
 - **Memory safety (load-bearing):** a spawned opencode subprocess can't be killed, so the detail fetch
   is **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
@@ -499,7 +500,7 @@ and prints JSON matching the §Data sources "what omo suggests" schema: each Reg
 runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 
 ### Textual two-pane contract (`app.py`)
-- **Header** `Static#providers`: one line `Providers: <id · id · …>` from `catalog.connected` in its
+- **Header** `Static#providers`: one line `oModel: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the
   ⚠-unavailable explainer ("no listed provider serves this"). Just the connected list — **no cache-age
@@ -527,7 +528,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.
-- **Hint bar** `Static#hints` (bottom row): **minimal and static** — `s save · ? help · q quit`
+- **Hint bar** `Static#hints-bar` (bottom row): **minimal and static** — keys `s save · ? help · q quit` at
+  the left, app version `v<version>` (`Static#hints-version`) right-aligned at the tail
   (the `_HINT_BAR` constant), set once in `on_mount` and never re-rendered. It advertises only the
   must-have keys: `s` (the app's whole point), `?` (the overlay that documents everything else),
   and `q`. All the pane/row-contextual keys (`enter`, `v`, `x`, `a`) and `u`/`⌃r` undo/redo and `r`

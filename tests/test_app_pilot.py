@@ -29,6 +29,7 @@ import types
 import pytest
 from textual.widgets import Input, OptionList, Static
 
+import omodel
 from omodel.app import HelpModal, OModelApp, _to_thread_daemon
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
@@ -333,7 +334,7 @@ def test_pilot_non_model_sections_unchanged(pilot_config):
 # ---------------------------------------------------------------------------
 
 def test_pilot_providers_header_visible(pilot_config):
-    """Static#providers renders 'Providers: <id · id · …>' from catalog.connected."""
+    """Static#providers renders 'oModel: <id · id · …>' from catalog.connected."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -343,7 +344,7 @@ def test_pilot_providers_header_visible(pilot_config):
             providers_widget = pilot.app.query_one("#providers", Static)
             # Static.content is the canonical way to read the current display value
             text = str(providers_widget.content)
-            assert "Providers:" in text, f"Missing 'Providers:' in header: {text!r}"
+            assert "oModel:" in text, f"Missing 'oModel:' in header: {text!r}"
             # Test catalog has opencode as the first connected provider
             assert "opencode" in text, f"opencode missing from providers header: {text!r}"
             # deepseek is also in connected
@@ -990,9 +991,10 @@ def test_addmodal_gpt_only_gating():
 # ---------------------------------------------------------------------------
 
 def test_pilot_hint_bar_minimal_and_help(pilot_config):
-    """Static#hints is minimal and STATIC (`s save · ? help · q quit`) regardless of pane or
-    highlighted row; `?` opens the full-reference HelpModal (which documents the keys the bar no
-    longer shows) and toggles it closed; ←/→ still cross panes."""
+    """Static#hints is minimal and STATIC (`s save · ? help · q quit`, keys left) with the app
+    version (`#hints-version`, right-aligned at the tail) regardless of pane or highlighted row; `?`
+    opens the full-reference HelpModal (which documents the keys the bar no longer shows) and toggles
+    it closed; ←/→ still cross panes."""
     cfg_path, _ = pilot_config
     EXPECTED = "s save · ? help · q quit"
     # Keys that used to live in the pane-aware bar and now belong only in the `?` overlay.
@@ -1008,6 +1010,18 @@ def test_pilot_hint_bar_minimal_and_help(pilot_config):
             # Left pane, an AGENT highlighted → the minimal bar, none of the moved-out keys.
             await _select_target(pilot, "agent:sisyphus")
             assert EXPECTED in bar(), f"hint bar must be the minimal static line: {bar()!r}"
+            version = str(pilot.app.query_one("#hints-version", Static).content)
+            assert f"v{omodel.__version__}" in version, (
+                f"version must show at the tail (#hints-version): {version!r}"
+            )
+            # …and it is RIGHT-ALIGNED: keys on the left, version flush to the bar's right edge.
+            bar_region = pilot.app.query_one("#hints-bar").region
+            keys_region = pilot.app.query_one("#hints", Static).region
+            ver_region = pilot.app.query_one("#hints-version", Static).region
+            assert keys_region.x < ver_region.x, f"keys must sit left of the version: {keys_region} vs {ver_region}"
+            assert ver_region.right == bar_region.right, (
+                f"version must be flush to the tail (right edge): ver={ver_region} bar={bar_region}"
+            )
             for gone in MOVED_OUT:
                 assert gone not in bar(), f"{gone!r} must not be in the minimal bar: {bar()!r}"
 
