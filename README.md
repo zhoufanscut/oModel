@@ -12,7 +12,7 @@ clean — everything else in the file, including comments and commented-out conf
 verbatim (timestamped backups each save).
 
 ```
- Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai    (cached 3h ago · r)
+ oModel: opencode · deepseek · moonshotai-cn · openai · zhipuai
 ┌────────────────────┐┌────────────────────────────────────────────┐
 │ AGENTS             ││ sisyphus                                   │
 │ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
@@ -25,7 +25,7 @@ verbatim (timestamped backups each save).
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- ↑↓ move · ←→ panes · enter set · v variant · x clear · a edit/sub · u undo · s save · q quit
+ s save · ? help · q quit                                     v0.2.0
 ```
 
 ## Requirements
