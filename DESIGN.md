@@ -147,11 +147,12 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
  s save · ? help · q quit
 ```
 
-Each region is a bordered card; the **focused** pane's border brightens to `$primary`, blurred
-panes use a muted gray (`#808080`, a literal — `$border-blurred` renders near-black on a dark
-terminal). `Static#providers` / `Static#hints` are full-width bars (not cards), and
-`Static#detail` is display-only — it shows the frame but never the focus highlight (Statics
-never receive focus; only `#targets` and `#candidates` do).
+Each region is a bordered card; the **focused** pane's border brightens to `$primary`, while blurred
+panes use a muted `$surface-lighten-3` border — a theme token (not a literal), chosen over
+`$border-blurred`, which the default textual-dark theme renders near-black on a dark terminal.
+`Static#providers` / `Static#hints` are full-width bars (not cards) with a neutral `$surface-lighten-1`
+fill (deliberately not the blue-gray `$panel`), and `Static#detail` is display-only — it shows the
+frame but never the focus highlight (Statics never receive focus; only `#targets` and `#candidates` do).
 
 **Color depth:** the CLI pins `TEXTUAL_COLOR_SYSTEM=256` (in `cli._default_color_system`, set
 before `app` imports Textual) so the palette is consistent across terminals — a terminal with no

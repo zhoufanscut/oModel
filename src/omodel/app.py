@@ -29,8 +29,9 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             (HelpModal); modals carry their own one-line hint instead.
 
 Each pane is a bordered card; the focused pane (`#targets`/`#candidates`) brightens its border
-to `$primary`, while blurred panes and the never-focused `#detail` use a muted gray (`#808080`,
-a literal — `$border-blurred` renders near-black on a dark terminal background).
+to `$primary`, while blurred panes and the never-focused `#detail` use a muted `$surface-lighten-3`
+border — a theme token, so it tracks the active theme. (Deliberately NOT `$border-blurred`: the
+default textual-dark theme resolves that to ~`#191919`, invisible against the `#1E1E1E` surface.)
 `#providers`/`#hints`/`#detail` don't focus.
 
 KEYS: ↑↓ (or vim j/k) move within the focused pane · ←/→ (or vim h/l) focus
@@ -995,7 +996,7 @@ class OModelApp(App):
     CSS = """
     #providers {
         height: 1;
-        background: $panel;
+        background: $surface-lighten-1;  /* neutral bar fill — theme token, deliberately not the blue-gray $panel (the "90s DOS status bar" tint) */
         color: $text;
         padding: 0 1;
     }
@@ -1004,7 +1005,7 @@ class OModelApp(App):
     }
     #targets {
         width: 32;
-        border: solid #808080;
+        border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
     }
     #right {
         width: 1fr;
@@ -1013,18 +1014,18 @@ class OModelApp(App):
         height: auto;
         min-height: 4;
         padding: 0 1;
-        border: solid #808080;
+        border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
     }
     #candidates {
         height: 1fr;
-        border: solid #808080;
+        border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
     }
     #targets:focus, #candidates:focus {
         border: solid $primary;
     }
     #hints {
         height: 1;
-        background: $panel;
+        background: $surface-lighten-1;  /* neutral bar fill — theme token, deliberately not the blue-gray $panel (the "90s DOS status bar" tint) */
         color: $text-muted;
         padding: 0 1;
     }
