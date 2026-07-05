@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-04
+
 ### Added
 - Press `?` for a full key-reference overlay — every keybinding, grouped (Navigate / Edit / Undo /
   Models & file / In dialogs) — so the on-screen hint bar can stay minimal.
