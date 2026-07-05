@@ -29,7 +29,7 @@ import types
 import pytest
 from textual.widgets import Input, OptionList, Static
 
-from omodel.app import OModelApp, _to_thread_daemon
+from omodel.app import HelpModal, OModelApp, _to_thread_daemon
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
 from omodel.resolve import Resolver
@@ -986,65 +986,59 @@ def test_addmodal_gpt_only_gating():
 
 
 # ---------------------------------------------------------------------------
-# Pilot test 9: pane-aware hint bar + ←/→ pane crossing
+# Pilot test 9: minimal static hint bar + `?` help overlay + ←/→ pane crossing
 # ---------------------------------------------------------------------------
 
-def test_pilot_hint_bar_pane_aware(pilot_config):
-    """Static#hints shows only the keys valid for the focused pane + highlighted row, and
-    ←/→ move focus between the targets and candidates panes."""
+def test_pilot_hint_bar_minimal_and_help(pilot_config):
+    """Static#hints is minimal and STATIC (`s save · ? help · q quit`) regardless of pane or
+    highlighted row; `?` opens the full-reference HelpModal (which documents the keys the bar no
+    longer shows) and toggles it closed; ←/→ still cross panes."""
     cfg_path, _ = pilot_config
+    EXPECTED = "s save · ? help · q quit"
+    # Keys that used to live in the pane-aware bar and now belong only in the `?` overlay.
+    MOVED_OUT = ("enter set", "enter add", "v variant", "x clear", "x delete",
+                 "a sub", "a edit", "u undo", "⌃r redo", "→ candidates", "← targets")
 
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            # Left pane, an AGENT highlighted → 'a sub' + '→ candidates', no candidate-only keys.
-            await _select_target(pilot, "agent:sisyphus")
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "→ candidates" in txt, f"left-pane hints must point right: {txt!r}"
-            assert "a sub" in txt, f"agent row must advertise 'a sub': {txt!r}"
-            assert "enter set" not in txt, f"candidate-only key shown on left pane: {txt!r}"
+            def bar():
+                return str(pilot.app.query_one("#hints", Static).content)
 
-            # → crosses to the candidates pane.
+            # Left pane, an AGENT highlighted → the minimal bar, none of the moved-out keys.
+            await _select_target(pilot, "agent:sisyphus")
+            assert EXPECTED in bar(), f"hint bar must be the minimal static line: {bar()!r}"
+            for gone in MOVED_OUT:
+                assert gone not in bar(), f"{gone!r} must not be in the minimal bar: {bar()!r}"
+
+            # → crosses to the candidates pane; the bar is unchanged (it no longer tracks focus).
             await pilot.press("right")
             await pilot.pause()
             cands = pilot.app.query_one("#candidates", OptionList)
             assert pilot.app.focused is cands, "→ must move focus to the candidates pane"
-
-            # ↓ highlights a real candidate row → real-row hints. Asserting *after* a real row
-            # is highlighted (not via the highlighted-is-None fallback) proves the real branch.
             await pilot.press("down")
             await pilot.pause()
-            assert cands.highlighted is not None
-            assert cands.get_option_at_index(cands.highlighted).id != "cand:add"
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "← targets" in txt, f"right-pane hints must point left: {txt!r}"
-            assert "enter set" in txt and "v variant" in txt, f"real-row keys missing: {txt!r}"
+            assert EXPECTED in bar(), f"bar must not change when focus/row changes: {bar()!r}"
 
-            # The '+ add model…' row repurposes enter and drops the model-only keys — this
-            # exercises _candidate_highlighted + the cand:add branch of _render_hints.
-            cands.highlighted = cands.option_count - 1
-            await pilot.pause()
-            assert cands.get_option_at_index(cands.highlighted).id == "cand:add"
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "enter add" in txt, f"add-model row must show 'enter add': {txt!r}"
-            assert "v variant" not in txt and "x clear" not in txt, (
-                f"add-model row must drop candidate-only keys: {txt!r}"
-            )
-
-            # ← crosses back to targets.
+            # ← crosses back to targets (focus crossing still works even though the bar is static).
             await pilot.press("left")
             await pilot.pause()
             assert pilot.app.focused is pilot.app.query_one("#targets", OptionList), (
                 "← must move focus back to the targets pane"
             )
 
-            # A CATEGORY row swaps 'a sub' for 'a edit' — no sub-targets, so `a` opens the model modal.
-            cat_name = next(iter(pilot.app.suggestions.categories.keys()))
-            await _select_target(pilot, f"cat:{cat_name}")
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "→ candidates" in txt, f"category hints must still point right: {txt!r}"
-            assert "a sub" not in txt, f"category row must not advertise 'a sub': {txt!r}"
-            assert "a edit" in txt, f"category row must advertise 'a edit': {txt!r}"
+            # `?` opens the help overlay, which documents the keys the bar dropped.
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, HelpModal), "`?` must open the HelpModal overlay"
+            body = str(pilot.app.screen.query_one("#help-body-text", Static).content)
+            for key in ("enter", "variant", "undo", "redo", "refresh"):
+                assert key in body, f"help overlay must document {key!r}: {body!r}"
+
+            # `?` again toggles it closed, back to the base screen.
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert not isinstance(pilot.app.screen, HelpModal), "`?` must toggle the overlay closed"
 
     asyncio.run(_run())
 
@@ -1495,26 +1489,42 @@ def test_pilot_undo_restores_clean_state(pilot_config):
     asyncio.run(_run())
 
 
-def test_pilot_undo_hint_appears_after_edit(pilot_config):
-    """`u undo` is absent from the hint bar until there's something to undo; `⌃r redo` shows
-    only after an undo opens a redo. (Keeps the one-line bar minimal — DESIGN §Layout.)"""
+def test_pilot_undo_redo_absent_from_bar_documented_in_help(pilot_config):
+    """Undo/redo never appear in the (now static) hint bar — the bar stays
+    `s save · ? help · q quit` before and after an edit + undo — but they ARE documented in the
+    `?` overlay. (The bar is minimal by design; `?` carries the full reference — DESIGN §Layout.)"""
     cfg_path, _ = pilot_config
+    EXPECTED = "s save · ? help · q quit"
 
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
+            def bar():
+                return str(pilot.app.query_one("#hints", Static).content)
+
             await _select_target(pilot, "agent:sisyphus")
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "u undo" not in txt, f"no edits yet → no undo hint: {txt!r}"
+            assert EXPECTED in bar() and "u undo" not in bar(), f"no undo hint expected: {bar()!r}"
 
+            # An edit populates the undo history, but the bar must not grow an `u undo` token.
             await _select_candidate(pilot, "zhipuai/glm-5")
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "u undo" in txt, f"after an edit the undo hint must show: {txt!r}"
+            assert pilot.app._history.can_undo, "the edit should be undoable"
+            assert EXPECTED in bar() and "u undo" not in bar(), (
+                f"bar must stay minimal after an edit: {bar()!r}"
+            )
 
+            # Undo opens a redo, but again no `⌃r redo` token leaks into the bar.
             await pilot.press("u")
             await pilot.pause()
-            txt = str(pilot.app.query_one("#hints", Static).content)
-            assert "⌃r redo" in txt, f"after an undo the redo hint must show: {txt!r}"
+            assert pilot.app._history.can_redo, "undo should open a redo"
+            assert EXPECTED in bar() and "⌃r redo" not in bar(), (
+                f"bar must stay minimal after an undo: {bar()!r}"
+            )
+
+            # Both keys are documented in the `?` overlay instead.
+            await pilot.press("question_mark")
+            await pilot.pause()
+            body = str(pilot.app.screen.query_one("#help-body-text", Static).content)
+            assert "undo" in body and "redo" in body, f"help must document undo/redo: {body!r}"
 
     asyncio.run(_run())
 

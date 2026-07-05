@@ -24,9 +24,9 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
                             and re-selectable. The highlighted (cursor) row is remembered per
                             target by model identity and restored on re-render, so it survives a
                             target switch and `r` refresh (see _cand_choice / _restore_cand_highlight).
-  * Static#hints           — pane-aware key hint bar (bottom row). Content switches on focus
-                            + highlighted row (see _render_hints); modals carry their own
-                            one-line hint instead.
+  * Static#hints           — minimal, STATIC key hint bar (bottom row): `s save · ? help · q quit`
+                            (see _HINT_BAR). Every other key lives in the `?` help overlay
+                            (HelpModal); modals carry their own one-line hint instead.
 
 Each pane is a bordered card; the focused pane (`#targets`/`#candidates`) brightens its border
 to `$primary`, while blurred panes and the never-focused `#detail` use a muted gray (`#808080`,
@@ -42,9 +42,10 @@ rows → add/edit-model modal; targets agent rows → add sub-target chooser) ·
 (in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
-CatalogUnavailable) · q quit (confirm if dirty). The pane keys are shown in Static#hints (and
-per-modal hint lines); undo/redo appear there only when available; r is advertised in the
-Static#providers header instead, not the hint bar.
+CatalogUnavailable) · ? help (open HelpModal — the full key reference; base-screen-only) ·
+q quit (confirm if dirty). The hint bar (Static#hints) is minimal and static — only
+`s save · ? help · q quit`; every other key is documented in the `?` overlay (HelpModal) and,
+where relevant, in per-modal hint lines. (r is also advertised in the Static#providers header.)
 
 Every cfg mutation routes through `_record` (snapshots into `_history`) and dirtiness is computed
 by `_is_dirty` (serialize(cfg) vs `_saved_text`, the last-saved/loaded text) rather than a flag —
@@ -88,7 +89,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import cache as cache_mod
 from . import catalog as catalog_mod
 from . import config_io
 from . import suggestions as suggestions_mod
@@ -875,6 +875,117 @@ class AddSubModal(ModalScreen):
         self.dismiss(None)
 
 
+# The bottom hint bar (Static#hints) is deliberately MINIMAL and STATIC: only the three keys you
+# won't discover by convention and that act regardless of focus — `s` save (the app's whole point),
+# the `?` help overlay (which documents everything else), and `q` quit. Every other key lives in
+# HelpModal, so the bar never grows past one line and never has to track pane / row / undo state.
+# Keep this in sync with HelpModal._BODY (the two are the only places keys are advertised).
+_HINT_BAR = "s save · ? help · q quit"
+
+
+class HelpModal(ModalScreen):
+    """`?` — the full key reference. The hint bar shows only `s save · ? help · q quit`, so every
+    other key is documented here. Read-only and scrollable (same body pattern as ConfirmModal, in
+    case the list outgrows a short terminal); closes with `?`, `esc`, or `q`."""
+
+    BINDINGS = [
+        Binding("question_mark", "close", "Close", show=False),
+        Binding("escape", "close", "Close", show=False),
+        Binding("q", "close", "Close", show=False),
+        Binding("up", "scroll(-1)", "Scroll up", show=False),
+        Binding("k", "scroll(-1)", "Scroll up", show=False),
+        Binding("down", "scroll(1)", "Scroll down", show=False),
+        Binding("j", "scroll(1)", "Scroll down", show=False),
+        Binding("pageup", "scroll_page(-1)", "Page up", show=False),
+        Binding("pagedown", "scroll_page(1)", "Page down", show=False),
+        Binding("home", "scroll_ends(-1)", "Top", show=False),
+        Binding("end", "scroll_ends(1)", "Bottom", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    HelpModal {
+        align: center middle;
+    }
+    HelpModal > Vertical {
+        width: 62;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    HelpModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    # One grouped reference for every key. Descriptions start at a fixed column so the keys line up.
+    # Mirror any change here in the module KEYS docstring and DESIGN §Layout / §Textual contract.
+    _BODY = "\n".join(
+        [
+            "Navigate",
+            "  ↑↓  jk         move within a list",
+            "  ←→  hl         switch panes",
+            "",
+            "Edit",
+            "  enter          set the highlighted model",
+            "  v              choose a variant",
+            "  a              edit / add a model",
+            "                 (on an agent row: adds a sub-target)",
+            "  x              clear  (↳ sub-target row: delete it)",
+            "",
+            "Undo",
+            "  u              undo the last edit",
+            "  ⌃r             redo",
+            "",
+            "Models & file",
+            "  r              refresh models from opencode",
+            "  s              save",
+            "  q              quit",
+            "",
+            "In dialogs",
+            "  enter          choose / confirm",
+            "  esc            back / cancel",
+            "  y  n           yes / no",
+            "  tab            fill the highlighted model",
+            "  ⌃p  ⌃n         move the list",
+            "  u  c           pick ultrawork / compaction (add-sub)",
+        ]
+    )
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Keys")
+            with VerticalScroll(id="help-body") as body:
+                # Non-focusable so this screen's own scroll bindings drive it (mirrors ConfirmModal);
+                # the overlay is a read-only reference, so nothing inside needs focus.
+                body.can_focus = False
+                yield Static(self._BODY, id="help-body-text")
+            yield Static("↑↓/jk scroll · ?/esc/q close", id="help-hints", classes="modal-hints")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def _body_scroll(self) -> VerticalScroll:
+        return self.query_one("#help-body", VerticalScroll)
+
+    def action_scroll(self, direction: int) -> None:
+        """↑/k, ↓/j — scroll one line (no-op when the reference already fits)."""
+        body = self._body_scroll()
+        (body.scroll_down if direction > 0 else body.scroll_up)(animate=False)
+
+    def action_scroll_page(self, direction: int) -> None:
+        """PageUp / PageDown — scroll one page."""
+        body = self._body_scroll()
+        (body.scroll_page_down if direction > 0 else body.scroll_page_up)(animate=False)
+
+    def action_scroll_ends(self, direction: int) -> None:
+        """Home / End — jump to top / bottom (instant, no animation)."""
+        body = self._body_scroll()
+        (body.scroll_end if direction > 0 else body.scroll_home)(animate=False)
+
+
 class OModelApp(App):
     """Two-pane list-detail TUI to set OMO models.  See module docstring for the stable
     widget/option IDs the pilot tests depend on."""
@@ -931,6 +1042,7 @@ class OModelApp(App):
         Binding("ctrl+r", "redo", "redo"),
         Binding("s", "save", "save"),
         Binding("r", "refresh", "refresh"),
+        Binding("question_mark", "help", "help", show=False),
         Binding("q", "quit_confirm", "quit"),
     ]
 
@@ -1013,40 +1125,23 @@ class OModelApp(App):
     def on_mount(self) -> None:
         self._render_providers()
         self._populate_targets()
-        self._render_hints()
-
-    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        """Re-render the hint bar whenever focus crosses panes (Tab / ←→ / click) so it
-        reflects the now-focused pane."""
-        self._render_hints()
+        # The hint bar is static (see _HINT_BAR) — set it once. Everything it used to advertise
+        # pane-by-pane now lives in the `?` help overlay (HelpModal).
+        self.query_one("#hints", Static).update(_HINT_BAR)
 
     # ----- header ----------------------------------------------------------------------
 
     def _render_providers(self) -> None:
+        # Just the connected list — no cache-age / "r to refresh" suffix. Refresh (`r`) is
+        # documented in the `?` help overlay, and the bare list reads cleaner (decision: keep the
+        # header aesthetic and uncluttered; staleness isn't worth a permanent suffix).
         header = self.query_one("#providers", Static)
         if self.catalog_error is not None:
             header.update("⚠ couldn't read models — press r to retry")
         elif self.catalog.connected:
-            line = "Providers: " + " · ".join(self.catalog.connected)
-            # Surface cache staleness so `r` (refresh) is discoverable. No suffix when the
-            # list wasn't served from cache (e.g. the in-memory test catalog).
-            age = cache_mod.age_seconds("models")
-            if age is not None:
-                line += f"   (cached {self._fmt_age(age)} · r to refresh)"
-            header.update(line)
+            header.update("Providers: " + " · ".join(self.catalog.connected))
         else:
             header.update("Providers: (none — opencode not found; suggestions/add only)")
-
-    @staticmethod
-    def _fmt_age(seconds: float) -> str:
-        """Coarse 'cached X ago' label for the providers header."""
-        if seconds < 90:
-            return "just now"
-        if seconds < 3600:
-            return f"{int(seconds // 60)}m ago"
-        if seconds < 86400:
-            return f"{int(seconds // 3600)}h ago"
-        return f"{int(seconds // 86400)}d ago"
 
     # ----- left pane: targets ----------------------------------------------------------
 
@@ -1391,59 +1486,12 @@ class OModelApp(App):
         self._current_target = target
         self._render_detail(target)
         self._render_candidates(target)
-        self._render_hints()
 
-    def _render_hints(self) -> None:
-        """Update Static#hints to the keys valid for the focused pane + highlighted row
-        (DESIGN §Layout — pane-aware so the bar stays one line and only advertises keys that
-        do something right now). Modals carry their own hint line, so skip while one is up."""
-        if len(self.screen_stack) > 1:
-            return
-        hints = self.query_one("#hints", Static)
-        # Global tail (both panes): undo/redo are shown ONLY when there's something to
-        # undo/redo, keeping the one-line bar minimal until the keys actually do something
-        # (same philosophy as the pane-aware keys); then the always-present save/quit.
-        tail = []
-        if self._history.can_undo:
-            tail.append("u undo")
-        if self._history.can_redo:
-            tail.append("⌃r redo")
-        tail += ["s save", "q quit"]
-        tail_text = " · ".join(tail)
-        cands = self.query_one("#candidates", OptionList)
-        # A sub-target row (agent:<name>.<kind>) deletes with `x` (clear == delete there);
-        # base agent/category rows clear the model. The label/hint follows so it's never
-        # misleading — and so the delete capability is discoverable on the left pane.
-        target = self._current_target or ""
-        is_sub = target.startswith("agent:") and "." in target[len("agent:"):]
-        if self.focused is cands:
-            # Right pane: the '+ add model…' row repurposes enter and drops v/x.
-            hi = cands.highlighted
-            on_add = False
-            if hi is not None:
-                try:
-                    on_add = cands.get_option_at_index(hi).id == "cand:add"
-                except Exception:
-                    on_add = False
-            if on_add:
-                text = f"↑↓ move · ← targets · enter add · {tail_text}"
-            else:
-                x_label = "x delete" if is_sub else "x clear"
-                text = ("↑↓ move · ← targets · enter set · v variant · a edit · "
-                        f"{x_label} · {tail_text}")
-        else:
-            # Left pane (targets): `a` is `sub` on an agent row, `edit` on a category row
-            # (categories have no sub-targets, so `a` opens the add/edit-model modal there); a
-            # sub-target row also advertises `x delete`.
-            if target.startswith("agent:"):
-                a_hint = "a sub · "
-            elif target.startswith("cat:"):
-                a_hint = "a edit · "
-            else:
-                a_hint = ""
-            x_hint = "x delete · " if is_sub else ""
-            text = f"↑↓ move · → candidates · {a_hint}{x_hint}{tail_text}"
-        hints.update(text)
+    def action_help(self) -> None:
+        """`?` — open the full key reference overlay. Base-screen-only (gated in check_action):
+        a modal already carries its own hint line, and `esc` closes it first. The hint bar
+        advertises only save/help/quit, so this overlay is where every other key is documented."""
+        self.push_screen(HelpModal())
 
     # ----- events ----------------------------------------------------------------------
 
@@ -1456,9 +1504,7 @@ class OModelApp(App):
 
     @on(OptionList.OptionHighlighted, "#candidates")
     def _candidate_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        """Right-pane ↑↓ doesn't change focus, but moving onto/off the '+ add model…' row
-        changes which keys apply (enter set vs enter add, v/x relevance) — refresh hints.
-        Also remember this target's highlighted candidate so it survives a re-render / refresh
+        """Remember this target's highlighted candidate so it survives a re-render / refresh
         (see _restore_cand_highlight)."""
         cands = self.query_one("#candidates", OptionList)
         target = self._current_target
@@ -1474,7 +1520,6 @@ class OModelApp(App):
             ident = self._cand_identity(self._build_rows(target), event.option_id)
             if ident is not None:
                 self._cand_choice[target] = ident
-        self._render_hints()
 
     @on(OptionList.OptionSelected, "#candidates")
     def _candidate_selected(self, event: OptionList.OptionSelected) -> None:
@@ -1526,13 +1571,11 @@ class OModelApp(App):
 
     def _record(self, label: str) -> None:
         """Snapshot the current cfg into the undo history under `label` (a no-op if nothing
-        actually changed) and refresh the hint bar so `u undo` appears. Call after ANY cfg
-        mutation — this single chokepoint is what makes every operation undoable. The current
-        `_custom_rows` (off-chain typed models) rides along as the entry's `aux` so a restore
-        moves typed rows in lockstep with cfg — undoing an add-model drops its row, not just its
-        assignment."""
-        if self._history.push(self.cfg, label, aux=self._custom_rows):
-            self._render_hints()
+        actually changed). Call after ANY cfg mutation — this single chokepoint is what makes
+        every operation undoable. The current `_custom_rows` (off-chain typed models) rides along
+        as the entry's `aux` so a restore moves typed rows in lockstep with cfg — undoing an
+        add-model drops its row, not just its assignment."""
+        self._history.push(self.cfg, label, aux=self._custom_rows)
 
     def _stage_row(self, target: str, row: dict, label: str) -> None:
         """Write the chosen candidate row into the cfg node, re-render, and record an undo
@@ -1577,23 +1620,24 @@ class OModelApp(App):
         self.query_one("#candidates", OptionList).focus()
 
     def check_action(self, action: str, parameters) -> bool:
-        """Gate the pane-crossing keys (`←`/`→` and their vim aliases `h`/`l`, all bound to
-        these two actions) to the base screen: a ModalScreen manages its own focus, and `←`
-        inside e.g. the variant modal must not reach down to the (hidden)
-        #targets list. (Defense-in-depth: Textual already truncates the binding chain at a
-        modal, so these app bindings can't fire while one is up — and the add-model Input's own
-        ←/→ cursor bindings take precedence regardless.) All other actions stay enabled."""
+        """Gate the base-screen-only keys — pane-crossing (`←`/`→` + vim `h`/`l`), undo/redo, and
+        the `?` help overlay — to the base screen: a ModalScreen manages its own focus and keys, so
+        e.g. `←` inside the variant modal must not reach down to the (hidden) #targets list. (Defense-
+        in-depth: Textual already truncates the binding chain at a modal, so these app bindings can't
+        fire while one is up — and the add-model Input's own ←/→ cursor bindings take precedence
+        regardless.) All other actions stay enabled."""
         if action == "command_palette" and isinstance(self.screen, AddModelModal):
             # Ctrl-P drives the add-model fuzzy list (up) while that modal is open, so suppress the
             # App's *priority* command-palette binding there (a priority binding is checked from the
             # App down, before the key reaches the modal — only check_action can gate it). The
             # palette stays available everywhere else; Ctrl-N is not an app binding.
             return False
-        if action in ("focus_targets", "focus_candidates", "undo", "redo"):
-            # Pane-crossing focus AND undo/redo are base-screen-only: a ModalScreen manages its
-            # own focus and keys (e.g. AddSubModal binds `u` to pick ultrawork), so the app's
-            # `u`/`ctrl+r` must not reach down through a modal. (Textual already truncates the
-            # binding chain at a modal; this is the explicit, matching guard.)
+        if action in ("focus_targets", "focus_candidates", "undo", "redo", "help"):
+            # Pane-crossing focus, undo/redo, AND the `?` help overlay are base-screen-only: a
+            # ModalScreen manages its own focus and keys (e.g. AddSubModal binds `u` to pick
+            # ultrawork), so the app's `u`/`ctrl+r` must not reach down through a modal; and `?`
+            # over a modal is pointless (esc closes the modal first). (Textual already truncates
+            # the binding chain at a modal; this is the explicit, matching guard.)
             return len(self.screen_stack) <= 1
         return True
 
@@ -1696,7 +1740,7 @@ class OModelApp(App):
         self.push_screen(VariantModal(variants), _apply)
 
     def action_edit_or_sub(self) -> None:
-        """`a` — pane-contextual, one key (see _render_hints / DESIGN §Textual contract). Only a
+        """`a` — pane-contextual, one key (see HelpModal / DESIGN §Textual contract). Only a
         #targets *agent* row does "sub" (add an ultrawork/compaction sub-target); everywhere else
         — #candidates, or a #targets *category* row (categories have no sub-targets) — `a` opens
         the add/edit-model modal ("edit")."""
@@ -1848,8 +1892,6 @@ class OModelApp(App):
         self._current_target = target
         if target is not None:
             self._refresh_right(target)
-        else:
-            self._render_hints()
 
     def action_save(self) -> None:
         """`s` — diff + confirm modal (incl. first-save palette-loss warning) → config_io.save."""

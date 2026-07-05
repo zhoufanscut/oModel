@@ -131,7 +131,7 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 ## Layout (approved)
 
 ```
- Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai    (cached 3h ago · r)
+ Providers: opencode · deepseek · moonshotai-cn · openai · zhipuai
 ┌────────────────────┐┌────────────────────────────────────────────┐
 │ AGENTS             ││ sisyphus                                   │
 │ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
@@ -144,7 +144,7 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- ↑↓ move · ←→ panes · enter set · v variant · x clear · a edit/sub · u undo · s save · q quit
+ s save · ? help · q quit
 ```
 
 Each region is a bordered card; the **focused** pane's border brightens to `$primary`, blurred
@@ -159,10 +159,10 @@ before `app` imports Textual) so the palette is consistent across terminals — 
 collapses to its ANSI slots, looking nothing like a `xterm-256color` session. Overridable:
 `TEXTUAL_COLOR_SYSTEM=truecolor` for 24-bit, `=auto` to restore Textual's own detection.
 
-The bottom hint bar (`Static#hints`) is **pane-aware** — it shows only the keys that act on the
-focused pane + highlighted row, so it stays one line (left pane drops `enter set`/`v`/`x`; the
-`+ add model…` row shows `enter add`; a category row drops `a sub`). `u undo` / `⌃r redo` are in
-the shared global tail but shown **only when there's something to undo/redo**. See §Textual contract.
+The bottom hint bar (`Static#hints`) is **minimal and static**: `s save · ? help · q quit` — the
+three keys you won't discover by convention and that act regardless of focus. It never tracks
+pane / row / undo state. **Every other key lives in the `?` help overlay** (`HelpModal`), a
+scrollable full-reference modal. See §Textual contract.
 
 ## Repo layout (src-layout, PyPI-ready)
 
@@ -252,7 +252,8 @@ oModel/
   fallback. A live, successful run rewrites the cache; every opencode call carries a `timeout=`.
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
-  worker (off the UI thread); the `Providers:` header shows cache age (`cached 3h ago · r to refresh`).
+  worker (off the UI thread); `r` is documented in the `?` help overlay (the `Providers:` header shows
+  only the connected list — no cache-age suffix).
 - **Memory safety (load-bearing):** a spawned opencode subprocess can't be killed, so the detail fetch
   is **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
   *current* target, which schedules the next — "chase the cursor"). Uncapped/un-stubbed, stacked
@@ -500,9 +501,10 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Header** `Static#providers`: one line `Providers: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the
-  ⚠-unavailable explainer ("no listed provider serves this"). When the list came from the 24h cache it
-  also shows its age (`cached 3h ago · r to refresh`; see §cache.py). On `CatalogUnavailable` it shows
-  the banner + `r` retry instead.
+  ⚠-unavailable explainer ("no listed provider serves this"). Just the connected list — **no cache-age
+  suffix** (dropped as clutter; the served list is bounded-fresh since an expired cache auto-refetches,
+  and `r` refresh is documented in the `?` overlay). On `CatalogUnavailable` it shows the banner +
+  `r` retry instead.
 - **Left** `OptionList#targets`: AGENTS then CATEGORIES; option IDs `agent:<name>`,
   `agent:<name>.ultrawork` / `.compaction` (indented sub-rows, shown when present in config or added
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`.
@@ -524,19 +526,20 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.
-- **Hint bar** `Static#hints` (bottom row): **pane-aware** key hints — only the keys that do
-  something for the focused pane + highlighted row, so it stays one line. Left/targets:
-  `↑↓ move · → candidates · [a sub ·|a edit ·] [x delete ·] s save · q quit` (`a sub` on an agent
-  row, `a edit` on a category row — categories have no sub-targets, so `a` opens the model modal
-  there; `x delete` only on an ultrawork/compaction sub-target row).
-  Right/candidates: `↑↓ move · ← targets · enter set · v variant · a edit · x clear · s save · q quit`
-  (`x clear` becomes `x delete` on a sub-target row),
-  or `… · enter add · …` on the `+ add model…` row. A shared global tail carries `u undo` / `⌃r redo`
-  **only when there's something to undo/redo** (then `s save · q quit`), so the bar stays one line.
-  Re-rendered on focus (`on_descendant_focus`) and highlight changes. Modals carry their own one-line
-  hint (`Static.modal-hints`) instead.
-  (`r` is intentionally absent from the hint bar — refresh is advertised in the `#providers`
-  header instead — while `q quit` keeps its label since quit is surfaced nowhere else.)
+- **Hint bar** `Static#hints` (bottom row): **minimal and static** — `s save · ? help · q quit`
+  (the `_HINT_BAR` constant), set once in `on_mount` and never re-rendered. It advertises only the
+  must-have keys: `s` (the app's whole point), `?` (the overlay that documents everything else),
+  and `q`. All the pane/row-contextual keys (`enter`, `v`, `x`, `a`) and `u`/`⌃r` undo/redo and `r`
+  refresh **moved into the `?` help overlay** (`HelpModal`), so the bar never grows past one line
+  and never has to track focus/row/undo state. This is deliberately *not* a full reference — the
+  bar is a floor (save/help/quit); `?` is the ceiling. Modals carry their own one-line hint
+  (`Static.modal-hints`) instead. (`r` is also still advertised in the `#providers` header.)
+- **Help overlay** `HelpModal` (`?`): a read-only, scrollable `ModalScreen` (same body pattern as
+  `ConfirmModal`) listing **every** key, grouped (Navigate / Edit / Undo / Models & file / In
+  dialogs). Base-screen-only (gated in `check_action` alongside focus + undo/redo — `?` over a
+  modal is pointless; `esc` closes the modal first). Closes with `?` (toggles), `esc`, or `q`.
+  Its `_BODY` text and `_HINT_BAR` are the only two places keys are advertised — keep them and the
+  module KEYS docstring in sync.
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
@@ -550,14 +553,15 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   base screen via `check_action`, so they don't reach through a modal that binds `u` itself);
   `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
-  `q` → quit (confirm if dirty); `←`/`→` → focus the targets / candidates pane (gated to the base
-  screen via `check_action`, so it never grabs focus from under a modal; the add-model `Input` keeps
-  its cursor arrows). **Vim aliases:** `h`/`l` mirror `←`/`→` (the *same* gated focus actions);
-  `j`/`k` mirror `↓`/`↑` within whatever list is focused — bound on the `VimOptionList` every list
-  uses (so they also work in the variant / add-sub modals), while a focused `Input` still takes
-  `h`/`j`/`k`/`l` as literal text (printable keys reach a widget before its bindings). The vim keys
-  are intentionally **absent from the hint bar** (it must stay one line). Pilot tests drive these via
-  the stable IDs.
+  `q` → quit (confirm if dirty); `?` → open the `HelpModal` full-key overlay (base-screen-only, same
+  `check_action` gate as focus + undo/redo); `←`/`→` → focus the targets / candidates pane (gated to
+  the base screen via `check_action`, so it never grabs focus from under a modal; the add-model
+  `Input` keeps its cursor arrows). **Vim aliases:** `h`/`l` mirror `←`/`→` (the *same* gated focus
+  actions); `j`/`k` mirror `↓`/`↑` within whatever list is focused — bound on the `VimOptionList`
+  every list uses (so they also work in the variant / add-sub modals), while a focused `Input` still
+  takes `h`/`j`/`k`/`l` as literal text (printable keys reach a widget before its bindings). The vim
+  keys — like every non-must-have key — are **absent from the (static, one-line) hint bar**; they're
+  documented in the `?` overlay instead. Pilot tests drive these via the stable IDs.
 - **Add-model modal (`a` / `cand:add`):** a **two-phase** picker (IDs `#add-input`,
   `#add-candidates`, `#add-variants`, `#add-title`, `#add-preview`, `#add-hints`).
   **Model phase** — the `Input` (`#add-input`) fuzzy-filters `#add-candidates`, a list of the

@@ -192,12 +192,14 @@ opencode models | head -5    # confirm models visible
 python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
-#   1. Verify Providers: header shows connected provider(s) + cache age (e.g. "cached 0m ago · r to refresh")
-#   2. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
-#   3. Pick a model from the candidate list
-#   4. Press 'r' — header shows "Refreshing…", then updates; ~/.cache/omodel/ is rebuilt
-#   5. Press 's', confirm
-#   6. Quit
+#   1. Verify Providers: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
+#   2. Verify the bottom hint bar is exactly "s save · ? help · q quit"; press '?' — the key
+#      overlay opens (Navigate/Edit/Undo/Models/dialogs); '?'/esc/q closes it
+#   3. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
+#   4. Pick a model from the candidate list
+#   5. Press 'r' — header shows "Refreshing…", then updates; ~/.cache/omodel/ is rebuilt
+#   6. Press 's', confirm
+#   7. Quit
 
 # Confirm the cache landed (and is the only place opencode output is cached by omodel):
 ls ~/.cache/omodel/    # models.json + verbose-<provider>.json

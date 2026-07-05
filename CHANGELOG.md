@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Press `?` for a full key-reference overlay — every keybinding, grouped (Navigate / Edit / Undo /
+  Models & file / In dialogs) — so the on-screen hint bar can stay minimal.
 - Add-model modal: fuzzy `provider/model` picker with an inline variant-selection step and
   Emacs-style list navigation (`Ctrl-P`/`Ctrl-N`), replacing the old free-text input.
 - The candidate list now surfaces a target's current off-chain (non-omo) assignment as its own
@@ -16,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`compaction`) directly, skipping the redundant one-option chooser.
 
 ### Changed
+- The bottom hint bar is now a fixed, minimal `s save · ? help · q quit` (previously it was
+  pane-aware and changed with focus / highlighted row / undo state). Every other key — navigation,
+  `enter`/`v`/`x`/`a`, undo/redo, refresh — is documented in the new `?` overlay instead.
+- The `Providers:` header now shows just the connected list; the `(cached Nh ago · r to refresh)`
+  suffix was dropped (the served list is already bounded-fresh, and `r` is documented under `?`).
 - Save is now **edit-in-place / text-preserving**: only the top-level `agents` and `categories`
   objects are rewritten clean; everything else in the file — other keys, formatting, and any
   comments or **commented-out config outside those two** — is preserved byte-for-byte. (Previously

@@ -101,7 +101,8 @@ def write(key: str, stdout: str, args: Optional[list] = None) -> None:
 
 def age_seconds(key: str) -> Optional[float]:
     """Seconds since `key` was cached, or None if there is no (readable) entry.
-    Ignores the TTL — used to render 'cached Nh ago' in the UI."""
+    Ignores the TTL — a cache-introspection helper (staleness in seconds); not currently
+    surfaced in the UI, kept as part of the cache API (CONTRACTS.md)."""
     try:
         with open(_path_for(key), encoding="utf-8") as f:
             blob = json.load(f)
