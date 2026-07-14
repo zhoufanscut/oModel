@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.13.0",
-    "omoCommit": "f31c735a5c5318226510e5755dcb5425ddc94352",
-    "generatedAt": "2026-06-27T00:59:43.678Z"
+    "omoVersion": "4.17.1",
+    "omoCommit": "ed0241d1af225d38de55fdbcf0baa0abc9a1465a",
+    "generatedAt": "2026-07-13T07:11:56.576Z"
   },
   "agents": {
     "sisyphus": {
@@ -78,6 +78,14 @@
         {
           "providers": [
             "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "high"
+        },
+        {
+          "providers": [
+            "openai",
             "github-copilot",
             "opencode",
             "vercel"
@@ -132,7 +140,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         }
       ],
       "requiresProvider": [],
@@ -329,7 +337,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         },
         {
           "providers": [
@@ -381,7 +389,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         },
         {
           "providers": [
@@ -396,6 +404,14 @@
     },
     "momus": {
       "fallbackChain": [
+        {
+          "providers": [
+            "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "xhigh"
+        },
         {
           "providers": [
             "openai",
@@ -431,7 +447,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         }
       ],
       "requiresProvider": [],
@@ -590,7 +606,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         },
         {
           "providers": [
@@ -605,6 +621,14 @@
     },
     "ultrabrain": {
       "fallbackChain": [
+        {
+          "providers": [
+            "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "xhigh"
+        },
         {
           "providers": [
             "openai",
@@ -639,7 +663,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         }
       ],
       "requiresProvider": [],
@@ -648,6 +672,22 @@
     },
     "deep": {
       "fallbackChain": [
+        {
+          "providers": [
+            "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-terra",
+          "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "high"
+        },
         {
           "providers": [
             "openai",
@@ -690,7 +730,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         }
       ],
       "requiresProvider": [],
@@ -740,7 +780,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         }
       ],
       "requiresProvider": [],
@@ -810,6 +850,14 @@
     },
     "unspecified-low": {
       "fallbackChain": [
+        {
+          "providers": [
+            "openai",
+            "vercel"
+          ],
+          "model": "gpt-5.6-luna",
+          "variant": "xhigh"
+        },
         {
           "providers": [
             "anthropic",
@@ -912,7 +960,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "glm-5.1"
+          "model": "glm-5.2"
         },
         {
           "providers": [
