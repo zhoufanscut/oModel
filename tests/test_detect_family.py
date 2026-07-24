@@ -146,36 +146,38 @@ class TestFamilyOrdering:
 # Bundled data integrity (DESIGN §Verification check #5)
 # ---------------------------------------------------------------------------
 
+# Names, not just counts: a rename (one dropped + one added) keeps the count equal while
+# silently changing which targets oModel offers. Target sets are stable upstream in a way
+# chain lengths are not, so pinning them stays refresh-friendly. Module scope, not class
+# attributes — a mutable class attribute trips RUF012.
+AGENT_NAMES = {
+    "atlas", "explore", "hephaestus", "librarian", "metis", "momus",
+    "multimodal-looker", "oracle", "prometheus", "sisyphus", "sisyphus-junior",
+}
+CATEGORY_NAMES = {
+    "artistry", "deep", "quick", "ultrabrain",
+    "unspecified-high", "unspecified-low", "visual-engineering", "writing",
+}
+
+
 class TestBundledSuggestionsLoad:
 
     def test_loads_without_omo_checkout(self, sugg):
         """importlib.resources loads successfully with no omo checkout present."""
         assert sugg is not None
 
-    # Names, not just counts: a rename (one dropped + one added) keeps the count equal
-    # while silently changing which targets oModel offers. Target sets are stable upstream
-    # in a way chain lengths are not, so pinning them stays refresh-friendly.
-    AGENTS = {
-        "atlas", "explore", "hephaestus", "librarian", "metis", "momus",
-        "multimodal-looker", "oracle", "prometheus", "sisyphus", "sisyphus-junior",
-    }
-    CATEGORIES = {
-        "artistry", "deep", "quick", "ultrabrain",
-        "unspecified-high", "unspecified-low", "visual-engineering", "writing",
-    }
-
     def test_11_agents(self, sugg):
         assert len(sugg.agents) == 11, f"Expected 11 agents, got {len(sugg.agents)}: {list(sugg.agents)}"
-        assert set(sugg.agents) == self.AGENTS, (
-            f"agent set changed: +{set(sugg.agents) - self.AGENTS} "
-            f"-{self.AGENTS - set(sugg.agents)}"
+        assert set(sugg.agents) == AGENT_NAMES, (
+            f"agent set changed: +{set(sugg.agents) - AGENT_NAMES} "
+            f"-{AGENT_NAMES - set(sugg.agents)}"
         )
 
     def test_8_categories(self, sugg):
         assert len(sugg.categories) == 8, f"Expected 8 categories, got {len(sugg.categories)}: {list(sugg.categories)}"
-        assert set(sugg.categories) == self.CATEGORIES, (
-            f"category set changed: +{set(sugg.categories) - self.CATEGORIES} "
-            f"-{self.CATEGORIES - set(sugg.categories)}"
+        assert set(sugg.categories) == CATEGORY_NAMES, (
+            f"category set changed: +{set(sugg.categories) - CATEGORY_NAMES} "
+            f"-{CATEGORY_NAMES - set(sugg.categories)}"
         )
 
     def test_15_families(self, sugg):

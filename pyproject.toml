@@ -35,7 +35,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+# ruff is capped: the repo lints on ruff's DEFAULT rule set (AGENTS.md — no [tool.ruff]
+# config), so a release that widens those defaults retroactively reds CI on untouched
+# code. 0.16.0 did exactly that (I001/UP045/SIM117/RUF012/BLE001/… — 141 findings on a
+# clean tree, many of them UP045 `X | None` rewrites this project's 3.9 floor resists).
+# Lift the cap in its own change, once those findings are triaged rather than in passing.
+dev = ["pytest", "ruff>=0.15,<0.16"]
 
 [project.scripts]
 omodel = "omodel.cli:main"
