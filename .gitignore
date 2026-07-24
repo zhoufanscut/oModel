@@ -16,7 +16,7 @@ htmlcov/
 
 # omo checkout used by --refresh-omo (CI clones it here; belt-and-braces next to the
 # refresh workflow's add-paths — never redistribute omo source, only the derived snapshot).
-oh-my-openagent/
+/oh-my-openagent/
 
 # Local Claude Code agent state (per-project/subagent memory, etc.) — never publish.
 .claude/
