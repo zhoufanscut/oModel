@@ -118,6 +118,11 @@ python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v
 **Pass criteria:** all assertions green; in particular the counts and that `patterns` are
 compiled `re.Pattern` objects, not raw strings.
 
+Chain *contents* are checked structurally, never by length — every agent/category
+`fallbackChain` must be non-empty with `providers` + `model` on each entry, and every
+`variant` must be one of `knownVariants`. Chain lengths are upstream churn (a weekly
+`--refresh-omo` routinely moves them), so pinning one would fail on healthy data.
+
 **Real-config safety:** no file writes; reads only the bundled wheel data.
 
 ---
