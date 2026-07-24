@@ -82,7 +82,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Optional
+from typing import ClassVar
 
 from textual import events, on, work
 from textual.app import App, ComposeResult
@@ -93,9 +93,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import __version__
+from . import __version__, config_io
 from . import catalog as catalog_mod
-from . import config_io
 from . import suggestions as suggestions_mod
 from .catalog import Catalog, CatalogUnavailable
 from .history import History
@@ -221,7 +220,7 @@ class VimOptionList(OptionList):
     only reach these bindings when this list is focused; a focused Input eats j/k as text first
     (so the add-model modal's id field is unaffected)."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
     ]
@@ -255,7 +254,7 @@ class AddModelModal(ModalScreen):
     forcing it to None).
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         # Only ↑/↓ (+ emacs Ctrl-P/Ctrl-N aliases) and Esc are bound on the screen; the Input keeps
         # h/j/k/l and ←/→ as literal text / cursor moves (do NOT bind those). Tab is intercepted in
         # on_key. In the model phase ↑/↓/Ctrl-P/Ctrl-N bubble from the (un-binding) Input to drive
@@ -312,7 +311,7 @@ class AddModelModal(ModalScreen):
         # GPT-only target (Hephaestus): a non-GPT model is BLOCKED (enter disabled), since omo
         # would reject it and reassign the agent to Sisyphus.
         self._require_gpt = require_gpt
-        self._staged: Optional[dict] = None
+        self._staged: dict | None = None
         self._phase = "model"
         # Candidate-row dicts currently in #add-candidates, parallel to its options (so a
         # highlighted/selected option index maps straight back to a row).
@@ -557,7 +556,7 @@ class AddModelModal(ModalScreen):
 
     # ----- variant phase ---------------------------------------------------------------
 
-    def _choose_model(self, row: Optional[dict]) -> None:
+    def _choose_model(self, row: dict | None) -> None:
         """Commit the chosen model: enter the variant phase iff opencode reports variants for its
         (provider, model) — catalog.variants_for, the cached `--verbose` map — else dismiss
         immediately with variant left None (kimi / glm-5 / any model opencode lists with no
@@ -631,7 +630,7 @@ class VariantModal(ModalScreen):
     may list is dropped by the caller as a duplicate of '(none)' (_is_no_variant).  Dismisses with
     the chosen variant string, the sentinel '' for (none), or None on cancel."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
@@ -696,7 +695,7 @@ class ConfirmModal(ModalScreen):
     scroller's own), so they scroll even while the Yes button keeps focus — leaving Enter to
     confirm the focused button as before."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "decline", "No", show=False),
         Binding("y", "accept", "Yes", show=False),
         Binding("n", "decline", "No", show=False),
@@ -808,7 +807,7 @@ class AddSubModal(ModalScreen):
     kind already on the agent is shown disabled (`✓ added`).  Dismisses with the chosen kind
     ('ultrawork'|'compaction') — via the `u`/`c` shortcut or enter on the row — or None on cancel."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("escape", "cancel", "Cancel", show=False),
         Binding("u", "pick('ultrawork')", "ultrawork", show=False),
         Binding("c", "pick('compaction')", "compaction", show=False),
@@ -834,7 +833,7 @@ class AddSubModal(ModalScreen):
 
     # One line on what each sub-model is for (display only). Mirrors omo: ultrawork swaps the
     # model on a keyworded message; compaction is the model used to summarize the session.
-    _BLURB = {
+    _BLURB: ClassVar[dict] = {
         "ultrawork": "model swapped in when you type 'ultrawork' / 'ulw'",
         "compaction": "model used for automatic context summaries",
     }
@@ -893,7 +892,7 @@ class HelpModal(ModalScreen):
     other key is documented here. Read-only and scrollable (same body pattern as ConfirmModal, in
     case the list outgrows a short terminal); closes with `?`, `esc`, or `q`."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("question_mark", "close", "Close", show=False),
         Binding("escape", "close", "Close", show=False),
         Binding("q", "close", "Close", show=False),
@@ -927,7 +926,9 @@ class HelpModal(ModalScreen):
 
     # One grouped reference for every key. Descriptions start at a fixed column so the keys line up.
     # Mirror any change here in the module KEYS docstring and DESIGN §Layout / §Textual contract.
-    _BODY = "\n".join(
+    # The list form keeps this aligned help table readable and diffable; FLY002 would
+    # collapse it into one ~700-char line for zero runtime gain.
+    _BODY = "\n".join(  # noqa: FLY002 - see comment above
         [
             "Navigate",
             "  ↑↓  jk         move within a list",
@@ -1043,7 +1044,7 @@ class OModelApp(App):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         Binding("left", "focus_targets", "targets", show=False),
         Binding("right", "focus_candidates", "candidates", show=False),
         Binding("h", "focus_targets", "targets", show=False),
@@ -1063,10 +1064,10 @@ class OModelApp(App):
         self,
         catalog: Catalog,
         suggestions: Suggestions,
-        resolver: Optional[Resolver],
+        resolver: Resolver | None,
         cfg: dict,
         config_path: str,
-        catalog_error: Optional[BaseException] = None,
+        catalog_error: BaseException | None = None,
     ) -> None:
         super().__init__()
         self.catalog = catalog
@@ -1095,7 +1096,7 @@ class OModelApp(App):
         # row, redoing brings it back. A refresh clears it (stored availability ⚠ would be stale).
         self._custom_rows: dict = {}
         # The target id currently shown in the right pane.
-        self._current_target: Optional[str] = None
+        self._current_target: str | None = None
         # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
         # provider/model identity (or the sentinel 'cand:add'). Restored on every candidate
         # re-render (_restore_cand_highlight) so the cursor returns to your last pick when you
@@ -1165,7 +1166,7 @@ class OModelApp(App):
         agent = (self.cfg.get("agents") or {}).get(name) or {}
         return [k for k in _SUBKINDS if isinstance(agent.get(k), dict)]
 
-    def _populate_targets(self, select: Optional[str] = None) -> None:
+    def _populate_targets(self, select: str | None = None) -> None:
         targets = self.query_one("#targets", OptionList)
         # Preserve highlight across rebuilds (e.g. after `a` adds a sub-target). `select`, when
         # given, overrides — restore the cursor straight to that option id (used by undo/redo so
@@ -1181,12 +1182,12 @@ class OModelApp(App):
 
         targets.clear_options()
         targets.add_option(Option("AGENTS", id="hdr:agents", disabled=True))
-        for name in self.suggestions.agents.keys():
+        for name in self.suggestions.agents:
             targets.add_option(Option(f"  {name}", id=f"agent:{name}"))
             for kind in self._agent_subtargets(name):
                 targets.add_option(Option(f"    ↳ {kind}", id=f"agent:{name}.{kind}"))
         targets.add_option(Option("CATEGORIES", id="hdr:categories", disabled=True))
-        for name in self.suggestions.categories.keys():
+        for name in self.suggestions.categories:
             targets.add_option(Option(f"  {name}", id=f"cat:{name}"))
 
         # Restore highlight to the prior id if it still exists, else first selectable row.
@@ -1359,13 +1360,13 @@ class OModelApp(App):
         detail.update("\n".join(lines))
 
     @staticmethod
-    def _detail_key(provider: "Optional[str]", bare: str) -> str:
+    def _detail_key(provider: str | None, bare: str) -> str:
         """_detail_cache key: the provider-qualified 'provider/bare' — the pane describes a
         (provider, model) pair, and the same model's record can differ per provider (gateway
         vs dedicated cost) — or the bare id alone for a prefix-less (hand-edited) assignment."""
         return f"{provider}/{bare}" if provider else bare
 
-    def _detail_info(self, target: str, provider: "Optional[str]", bare: str):
+    def _detail_info(self, target: str, provider: str | None, bare: str):
         """Cached `catalog.detail(bare, provider=provider)` for the detail pane. Returns the
         info dict (or None) when already known; on a cache miss schedules a background fetch
         and returns None so the base detail renders immediately. `catalog.detail()` is a ~3s
@@ -1381,7 +1382,7 @@ class OModelApp(App):
         self._schedule_detail_fetch(target, provider, bare)
         return None
 
-    def _schedule_detail_fetch(self, target: str, provider: "Optional[str]", bare: str) -> None:
+    def _schedule_detail_fetch(self, target: str, provider: str | None, bare: str) -> None:
         """Debounce (~0.2s) so scrolling doesn't fetch per row, and never start a second
         fetch while one is in flight — the running fetch re-renders the current target on
         completion, which reschedules from here if it's still uncached."""
@@ -1394,7 +1395,7 @@ class OModelApp(App):
         )
 
     @work(group="detail")
-    async def _fetch_detail(self, target: str, provider: "Optional[str]", bare: str) -> None:
+    async def _fetch_detail(self, target: str, provider: str | None, bare: str) -> None:
         """Background worker: run the blocking ~320 MB `catalog.detail()` subprocess off the
         event loop, cache it, then re-render the CURRENT target. At most one fetch runs at a
         time (the `_detail_fetching` gate, since a spawned subprocess can't be killed); the
@@ -1460,7 +1461,7 @@ class OModelApp(App):
         self._restore_cand_highlight(target, rows)
 
     @staticmethod
-    def _cand_identity(rows: list, option_id: Optional[str]):
+    def _cand_identity(rows: list, option_id: str | None):
         """Stable identity for a candidate option — index-independent so it still resolves after
         a refresh re-orders/adds/drops chain rows. The '+ add model…' row → the sentinel
         'cand:add'; a model row 'cand:<i>' → its 'provider/model'. None if it maps to neither."""
@@ -1489,7 +1490,7 @@ class OModelApp(App):
         if ident == "cand:add":
             try:
                 cands.highlighted = self._index_of_option(cands, "cand:add")
-            except Exception:
+            except Exception:  # noqa: S110 - cosmetic highlight; a failure must not break the key
                 pass
             return
         for i, row in enumerate(rows):
@@ -2014,7 +2015,7 @@ class OModelApp(App):
         )
 
 
-def create_app(config_path: str = None) -> OModelApp:
+def create_app(config_path: str | None = None) -> OModelApp:
     """Build catalog / suggestions / resolver / config and construct (but do NOT run) an
     OModelApp — the production wiring, factored out of `run_app` so it's directly testable
     without launching the Textual event loop.
@@ -2028,14 +2029,14 @@ def create_app(config_path: str = None) -> OModelApp:
     suggestions = suggestions_mod.load()
     cfg, resolved_path = config_io.load_config(config_path)
 
-    catalog_error: Optional[BaseException] = None
+    catalog_error: BaseException | None = None
     try:
         catalog = catalog_mod.load()
     except CatalogUnavailable as exc:
         catalog_error = exc
         catalog = Catalog(available={}, connected=[])
 
-    resolver: Optional[Resolver] = None
+    resolver: Resolver | None = None
     try:
         resolver = Resolver.build(catalog, suggestions)
     except Exception:
@@ -2051,7 +2052,7 @@ def create_app(config_path: str = None) -> OModelApp:
     )
 
 
-def run_app(config_path: str = None) -> None:
+def run_app(config_path: str | None = None) -> None:
     """Build and run OModelApp() for the default (no-subcommand) CLI invocation.
     Called by cli.main(). See create_app() for the construction details."""
     create_app(config_path).run()

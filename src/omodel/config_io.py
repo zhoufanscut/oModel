@@ -25,7 +25,7 @@ class ConfigParseError(ValueError):
     can print a friendly one-liner instead of letting a raw json5 traceback escape."""
 
 
-def config_path(cli_override: str = None) -> str:
+def config_path(cli_override: str | None = None) -> str:
     """Resolve the config path: cli_override, else $XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc,
     else ~/.config/opencode/oh-my-openagent.jsonc. Does NOT require the file to exist."""
     if cli_override is not None:
@@ -36,14 +36,15 @@ def config_path(cli_override: str = None) -> str:
     return str(Path.home() / ".config" / "opencode" / "oh-my-openagent.jsonc")
 
 
-def load_config(path: str = None):
+def load_config(path: str | None = None):
     """Resolve via config_path(path); if missing, scaffold the bundled
     data/default-config.jsonc to that location; json5.load → ordered dict.
     Returns (cfg: dict, resolved_path: str). `agents`/`categories` are editable; every
     other top-level key (claude_code, experimental, team_mode, $schema, …) passes through
     by value. Raises ConfigParseError if the on-disk JSONC is malformed."""
-    import json5
     import importlib.resources
+
+    import json5
 
     resolved = config_path(path)
 

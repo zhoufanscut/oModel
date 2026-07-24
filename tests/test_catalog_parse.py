@@ -10,12 +10,10 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _helpers import seed_verbose
 
 from omodel import cache
 from omodel.catalog import Catalog, CatalogUnavailable, load, refresh
-
-from _helpers import seed_verbose
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -326,7 +324,7 @@ MOCK_VERBOSE_OUTPUT = (
 class TestVerboseParsing:
     """DESIGN §catalog.py .detail() / §Verification check #3."""
 
-    def _make_catalog_with_opencode(self, models: list) -> "Catalog":
+    def _make_catalog_with_opencode(self, models: list) -> Catalog:
         available = {"opencode": models}
         connected = ["opencode"]
         return Catalog(available=available, connected=connected)

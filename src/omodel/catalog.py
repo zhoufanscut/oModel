@@ -41,7 +41,7 @@ class Catalog:
         """Connected providers that serve `model_id`, in first-seen order."""
         return [p for p in self.connected if model_id in self.available.get(p, [])]
 
-    def detail(self, model_id: str, use_cache: bool = True, provider: str = None):
+    def detail(self, model_id: str, use_cache: bool = True, provider: str | None = None):
         """On-demand `opencode models <prov> --verbose` for `provider` — when given AND it
         serves the model — else the RESOLVED provider (providers_for(model_id)[0]). The detail
         pane passes the current assignment's provider so an `opencode/x` assignment shows the
@@ -71,6 +71,7 @@ class Catalog:
                     capture_output=True,
                     text=True,
                     timeout=_VERBOSE_TIMEOUT,
+                    check=False,   # returncode inspected below; a non-zero exit is a handled state
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 return None
@@ -241,6 +242,7 @@ def load(opencode_bin: str = "opencode", use_cache: bool = True) -> Catalog:
             capture_output=True,
             text=True,
             timeout=_MODELS_TIMEOUT,
+            check=False,   # returncode inspected below; a non-zero exit is a handled state
         )
     except FileNotFoundError:
         return Catalog(available={}, connected=[])
@@ -285,6 +287,7 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
             capture_output=True,
             text=True,
             timeout=_REFRESH_TIMEOUT,
+            check=False,   # returncode inspected below; a non-zero exit is a handled state
         )
     except FileNotFoundError:
         cache.clear()

@@ -14,9 +14,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from omodel import cli
-from omodel import config_io
-
+from omodel import cli, config_io
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,9 +112,8 @@ class TestCheck:
 
     def test_check_degraded_mode(self, capsys):
         # opencode absent → catalog.load() returns before ever calling subprocess.run.
-        with _NO_SHELL:
-            with patch("shutil.which", return_value=None):
-                rc = cli.main(["--check"])
+        with _NO_SHELL, patch("shutil.which", return_value=None):
+            rc = cli.main(["--check"])
 
         captured = capsys.readouterr()
         assert rc == 0
@@ -134,9 +131,8 @@ class TestPrint:
         cfg_path = tmp_path / "oh-my-openagent.jsonc"
         _write(cfg_path, VALID_CONFIG)
 
-        with _NO_SHELL:
-            with patch("shutil.which", return_value=None):
-                rc = cli.main(["--print", "--config", str(cfg_path)])
+        with _NO_SHELL, patch("shutil.which", return_value=None):
+            rc = cli.main(["--print", "--config", str(cfg_path)])
 
         captured = capsys.readouterr()
         assert rc == 0
@@ -149,9 +145,8 @@ class TestPrint:
         cfg_path = tmp_path / "oh-my-openagent.jsonc"
         _write(cfg_path, "{ this is not valid json ][")
 
-        with _NO_SHELL:
-            with patch("shutil.which", return_value=None):
-                rc = cli.main(["--print", "--config", str(cfg_path)])
+        with _NO_SHELL, patch("shutil.which", return_value=None):
+            rc = cli.main(["--print", "--config", str(cfg_path)])
 
         captured = capsys.readouterr()
         assert rc == 1

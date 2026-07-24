@@ -18,13 +18,11 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
-from omodel.catalog import Catalog
-from omodel.suggestions import load as load_suggestions
-from omodel.resolve import Resolver
-
 from _helpers import frozen_suggestions, seed_verbose
 
+from omodel.catalog import Catalog
+from omodel.resolve import Resolver
+from omodel.suggestions import load as load_suggestions
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -475,9 +473,8 @@ class TestWarnFlags:
         # Now check warn via a synthetic candidate row built the same way resolve.py does:
         variant = "max"
         warn = []
-        if variant is not None:
-            if fam is not None and variant not in fam.variants:
-                warn.append("variant")
+        if variant is not None and fam is not None and variant not in fam.variants:
+            warn.append("variant")
         assert "variant" in warn
 
     def test_glm_max_warns_variant(self, resolver):

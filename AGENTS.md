@@ -16,7 +16,7 @@ neither an omo checkout nor a network call is needed at runtime.
 # Dev install (gets pytest + ruff)
 pip install -e ".[dev]"          # or: uv pip install -e .
 
-# Lint (no ruff config → defaults; CI runs exactly this)
+# Lint (ruff defaults MINUS the documented ignores in pyproject; CI runs exactly this)
 ruff check src/ tests/
 
 # Tests
@@ -119,6 +119,9 @@ before changing any public signature or shared shape.
 - **Python floor is 3.9** (CI matrix 3.9–3.13). Every module starts with
   `from __future__ import annotations`. No runtime PEP-604 unions (`isinstance(x, A | B)`) or PEP-585
   generics — annotations-as-strings make `dict | None` in signatures fine, but runtime use is not.
+  Signatures now use `X | None` throughout (ruff `UP045`); that is annotation-only and safe at 3.9,
+  and is NOT licence to use `|` where the expression is evaluated. The one rule the floor genuinely
+  blocks is `SIM117` (combining `with` needs 3.10 parenthesized context managers) — hence its ignore.
 - **Real-config safety (hard rule):** never read-then-write the live
   `~/.config/opencode/oh-my-openagent.jsonc` in tests or examples. Pass an explicit temp `path` /
   `--config` everywhere. Tests monkeypatch `subprocess.run`; no test calls real `opencode`.

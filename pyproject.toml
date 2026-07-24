@@ -35,12 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ruff is capped: the repo lints on ruff's DEFAULT rule set (AGENTS.md — no [tool.ruff]
-# config), so a release that widens those defaults retroactively reds CI on untouched
-# code. 0.16.0 did exactly that (I001/UP045/SIM117/RUF012/BLE001/… — 141 findings on a
-# clean tree, many of them UP045 `X | None` rewrites this project's 3.9 floor resists).
-# Lift the cap in its own change, once those findings are triaged rather than in passing.
-dev = ["pytest", "ruff>=0.15,<0.16"]
+dev = ["pytest", "ruff>=0.16"]
 
 [project.scripts]
 omodel = "omodel.cli:main"
@@ -66,3 +61,33 @@ include = [
   "CHANGELOG.md",
   "pyproject.toml",
 ]
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+# Runs on ruff's DEFAULT rule set (413 rules as of 0.16) minus the exclusions below. Each
+# one is a design decision, not a backlog item — if you are adding to this list, say why.
+#
+# Note the residual risk this config does NOT remove: ruff may widen its defaults again
+# (0.16 took them from ~60 rules to 413, which retroactively reddened a clean tree). That
+# is the cost of tracking defaults instead of pinning an explicit `select`; the upside is
+# new checks arrive for free. If a future widening is unwelcome, cap the version in `dev`
+# rather than freezing a 413-entry select list.
+[tool.ruff.lint]
+ignore = [
+  # Graceful degradation is load-bearing here (AGENTS.md): a missing `opencode`, a corrupt
+  # cache, an unparseable config or a failed resolver must each leave a working app rather
+  # than a traceback — `--check` is contractually exit-0 even when everything is broken. The
+  # 14 sites are all boundary catches of exactly that kind, several already commented as
+  # such. Narrowing them per-site would mean 14 noqa lines restating one design rule.
+  "BLE001",
+  # Combining nested `with` into one statement needs parenthesized context managers (3.10+).
+  # The floor is 3.9, so the only conforming rewrite is a single over-long line. This is the
+  # one rule the floor genuinely blocks — revisit if the floor ever rises.
+  "SIM117",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Pilot tests read small fixture files inside async test bodies. The blocking call is the
+# point (deterministic ordering against the Textual pilot); there is no server loop to starve.
+"tests/*" = ["ASYNC230"]
