@@ -146,6 +146,20 @@ class TestFamilyOrdering:
 # Bundled data integrity (DESIGN §Verification check #5)
 # ---------------------------------------------------------------------------
 
+# Names, not just counts: a rename (one dropped + one added) keeps the count equal while
+# silently changing which targets oModel offers. Target sets are stable upstream in a way
+# chain lengths are not, so pinning them stays refresh-friendly. Module scope, not class
+# attributes — a mutable class attribute trips RUF012.
+AGENT_NAMES = {
+    "atlas", "explore", "hephaestus", "librarian", "metis", "momus",
+    "multimodal-looker", "oracle", "prometheus", "sisyphus", "sisyphus-junior",
+}
+CATEGORY_NAMES = {
+    "artistry", "deep", "quick", "ultrabrain",
+    "unspecified-high", "unspecified-low", "visual-engineering", "writing",
+}
+
+
 class TestBundledSuggestionsLoad:
 
     def test_loads_without_omo_checkout(self, sugg):
@@ -154,9 +168,17 @@ class TestBundledSuggestionsLoad:
 
     def test_11_agents(self, sugg):
         assert len(sugg.agents) == 11, f"Expected 11 agents, got {len(sugg.agents)}: {list(sugg.agents)}"
+        assert set(sugg.agents) == AGENT_NAMES, (
+            f"agent set changed: +{set(sugg.agents) - AGENT_NAMES} "
+            f"-{AGENT_NAMES - set(sugg.agents)}"
+        )
 
     def test_8_categories(self, sugg):
         assert len(sugg.categories) == 8, f"Expected 8 categories, got {len(sugg.categories)}: {list(sugg.categories)}"
+        assert set(sugg.categories) == CATEGORY_NAMES, (
+            f"category set changed: +{set(sugg.categories) - CATEGORY_NAMES} "
+            f"-{CATEGORY_NAMES - set(sugg.categories)}"
+        )
 
     def test_15_families(self, sugg):
         assert len(sugg.families) == 15, f"Expected 15 families, got {len(sugg.families)}"
@@ -169,9 +191,55 @@ class TestBundledSuggestionsLoad:
         assert "omoCommit" in sugg.meta
         assert "generatedAt" in sugg.meta
 
-    def test_sisyphus_has_7_fallback_entries(self, sugg):
-        chain = sugg.agents["sisyphus"]["fallbackChain"]
-        assert len(chain) == 7, f"sisyphus chain length = {len(chain)}"
+    def test_fallback_chains_are_well_formed(self, sugg):
+        """Every agent/category chain is non-empty; each entry has providers + a model id.
+
+        Deliberately structural, NOT a count. Chain *lengths* are pure upstream churn — a
+        weekly `--refresh-omo` routinely adds or drops entries (omo 4.19.0 alone moved five
+        chains), so pinning one fails on data that is perfectly fine. The counts worth
+        pinning are the ones above, which guard something real: `test_15_families` backs
+        the FAMILY_VENDOR key-set, agents/categories back target coverage.
+        """
+        for section in ("agents", "categories"):
+            for name, body in getattr(sugg, section).items():
+                chain = body.get("fallbackChain")
+                assert chain, f"{section} '{name}' has a missing/empty fallbackChain"
+                for i, entry in enumerate(chain):
+                    # isinstance(list) is load-bearing, not belt-and-braces: a bare
+                    # "providers": "opencode" is truthy AND passes an all()-over-str check
+                    # (it iterates characters), so a shape regression would sail through
+                    # the very assertion meant to catch it — and resolve.py would then
+                    # iterate those characters as if they were provider names.
+                    assert isinstance(entry.get("providers"), list) and entry["providers"], (
+                        f"{section} '{name}'[{i}]: providers must be a non-empty list, "
+                        f"got {entry.get('providers')!r}"
+                    )
+                    assert all(isinstance(p, str) and p for p in entry["providers"]), (
+                        f"{section} '{name}'[{i}]: non-string provider in {entry['providers']}"
+                    )
+                    assert isinstance(entry.get("model"), str) and entry["model"], (
+                        f"{section} '{name}'[{i}]: missing/empty model id"
+                    )
+
+    def test_every_variant_is_a_known_variant(self, sugg):
+        """No chain entry (or target default) may carry a variant outside knownVariants.
+
+        This is the refresh-stable half of what the old chain-length pin was reaching for:
+        it ignores harmless churn but fails loudly if omo introduces a variant oModel does
+        not know how to write to config.
+        """
+        known = set(sugg.known_variants)
+        for section in ("agents", "categories"):
+            for name, body in getattr(sugg, section).items():
+                if "variant" in body:
+                    assert body["variant"] in known, (
+                        f"{section} '{name}': unknown default variant {body['variant']!r}"
+                    )
+                for i, entry in enumerate(body.get("fallbackChain") or ()):
+                    if "variant" in entry:
+                        assert entry["variant"] in known, (
+                            f"{section} '{name}'[{i}]: unknown variant {entry['variant']!r}"
+                        )
 
     def test_patterns_are_compiled(self, sugg):
         """All pattern fields are compiled re.Pattern objects (not raw strings)."""

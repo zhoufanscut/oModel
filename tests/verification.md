@@ -109,7 +109,9 @@ python -m pytest tests/test_detect_family.py -v
 ## Check 5 — Bundled suggestions load
 
 **Goal:** `importlib.resources` loads `omo-suggestions.json` with no omo checkout present;
-counts match the committed data (11 agents, 8 categories, 15 families, 9 knownVariants).
+counts match the committed data (11 agents, 8 categories, 15 families, 9 knownVariants),
+and the agent/category *name* sets are pinned so a rename can't hide behind an unchanged
+count.
 
 ```sh
 python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v
@@ -117,6 +119,11 @@ python -m pytest tests/test_detect_family.py::TestBundledSuggestionsLoad -v
 
 **Pass criteria:** all assertions green; in particular the counts and that `patterns` are
 compiled `re.Pattern` objects, not raw strings.
+
+Chain *contents* are checked structurally, never by length — every agent/category
+`fallbackChain` must be non-empty with `providers` + `model` on each entry, and every
+`variant` must be one of `knownVariants`. Chain lengths are upstream churn (a weekly
+`--refresh-omo` routinely moves them), so pinning one would fail on healthy data.
 
 **Real-config safety:** no file writes; reads only the bundled wheel data.
 

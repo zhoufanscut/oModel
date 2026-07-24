@@ -50,7 +50,16 @@ jobs:
       - name: Install omodel
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e ".[dev]"
+
+      # Mock `opencode` so catalog.load() degrades gracefully, exactly as CI does —
+      # the validation step below must see the same environment CI would.
+      - name: Create opencode mock
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\necho "mock opencode: not available"\nexit 1\n' > "$HOME/.local/bin/opencode"
+          chmod +x "$HOME/.local/bin/opencode"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run snapshot extractor
         run: |
@@ -76,17 +85,44 @@ jobs:
           print("data changed" if changed else "only meta changed; skipping PR", file=sys.stderr)
           PY
 
+      # Validate the regenerated data HERE, in this job. A PR opened with GITHUB_TOKEN does
+      # not trigger CI (GitHub suppresses workflow runs for token-authored events), so
+      # without this the PR sits looking unchecked-but-fine while actually being untested.
+      # continue-on-error so the PR still opens (the diff is worth reviewing either way) —
+      # it gets a warning in its body, and the final step turns the run red.
+      - name: Validate regenerated data (lint + tests)
+        id: validate
+        if: steps.diff.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          ruff check src/ tests/
+          pytest tests/ -q --tb=short
+
       - name: Open PR if changed
         if: steps.diff.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT makes the opened PR trigger CI normally; falls back to the default token
+          # (validation above still runs) when REFRESH_PAT is not configured. Fine-grained
+          # PAT scopes: Contents read/write + Pull requests read/write on this repo.
+          token: ${{ secrets.REFRESH_PAT || secrets.GITHUB_TOKEN }}
           branch: "auto/refresh-suggestions"
           title: "chore: refresh omo-suggestions.json"
           body: |
             Automated refresh of `src/omodel/data/omo-suggestions.json` from the latest
             oh-my-openagent source (${{ github.event.inputs.omo_ref || 'dev' }}).
 
+            ${{ steps.validate.outcome == 'failure' && '⚠️ **The test suite FAILED against this data — do not merge until it is green.** See the workflow run for the failure.' || '✅ Lint + test suite passed against this data in the refresh job.' }}
+
             Review the diff before merging.
           commit-message: "chore: refresh omo-suggestions.json from omo"
+          # Load-bearing: without it the action falls back to `git add -A`, which would
+          # sweep in the untracked oh-my-openagent/ sparse checkout as a gitlink.
           add-paths: "src/omodel/data/omo-suggestions.json"
+
+      # Surface a validation failure as a red run even though the PR was allowed to open.
+      - name: Fail the run if validation failed
+        if: steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::Test suite failed against the regenerated omo-suggestions.json"
+          exit 1
