@@ -1,7 +1,17 @@
 """test_resolve.py — gateway detection, prefix resolution, candidate assembly.
 
 DESIGN §resolve.py / CONTRACTS.md / §Verification check #2.
-Tests use MOCKED catalog + REAL bundled suggestion IDs.
+
+Tests use a MOCKED catalog throughout. Suggestions come from one of two sources, and which
+one a test uses is a deliberate choice:
+
+- `frozen_sugg` / `frozen_resolver` — FROZEN chains (_helpers.FROZEN_AGENTS) for tests about
+  resolve's LOGIC. These may name exact models and pin an exact pick list, because the data
+  cannot move under them. Use this for anything that needs a specific model to be present.
+- `sugg` / `resolver` — the REAL bundled data, for TestRealDataIntegration and the
+  detect_family-dependent tests. Assertions here must be STRUCTURAL: an omo release that
+  swaps models around must never red them (omo 4.19.1 replaced gpt-5.5 -> gpt-5.6-sol,
+  claude-opus-4-7 -> -4-8 and kimi-k2.5/k2.6/k2p5 -> kimi-k3 in one sweep).
 """
 from __future__ import annotations
 
@@ -13,7 +23,7 @@ from omodel.catalog import Catalog
 from omodel.suggestions import load as load_suggestions
 from omodel.resolve import Resolver
 
-from _helpers import seed_verbose
+from _helpers import frozen_suggestions, seed_verbose
 
 
 # ---------------------------------------------------------------------------
@@ -23,6 +33,12 @@ from _helpers import seed_verbose
 @pytest.fixture(scope="module")
 def sugg():
     return load_suggestions()
+
+
+@pytest.fixture(scope="module")
+def frozen_sugg():
+    """Frozen chains + real families — see _helpers.FROZEN_AGENTS for why."""
+    return frozen_suggestions()
 
 
 def _make_catalog(model_lines: list) -> Catalog:
@@ -94,6 +110,13 @@ def resolver(sugg):
 def resolver_with_openrouter(sugg):
     cat = _make_catalog(STANDARD_MODELS_WITH_OPENROUTER)
     return Resolver.build(cat, sugg)
+
+
+@pytest.fixture(scope="module")
+def frozen_resolver(frozen_sugg):
+    """STANDARD_MODELS catalog against the frozen `probe` chain — deterministic across omo
+    releases, so assertions here may name exact models and pin an exact pick list."""
+    return Resolver.build(_make_catalog(STANDARD_MODELS), frozen_sugg)
 
 
 # ---------------------------------------------------------------------------
@@ -240,21 +263,28 @@ def _assert_candidate_shape(row: dict, idx: int) -> None:
 
 
 class TestCandidatesShape:
+    """candidates() row shape and ordering, against the FROZEN `probe` chain.
 
-    def test_sisyphus_candidates_contract_shape(self, resolver):
-        """Every candidate row for agent:sisyphus matches CONTRACTS.md exactly."""
-        rows = resolver.candidates("agent:sisyphus")
+    These assertions name exact models and pin an exact pick list, which is only safe
+    because the chain is frozen (_helpers.FROZEN_AGENTS). Pinned against live bundled data
+    they broke on every omo sweep while the product was behaving correctly.
+    """
+
+    def test_probe_candidates_contract_shape(self, frozen_resolver):
+        """Every candidate row for agent:probe matches CONTRACTS.md exactly."""
+        rows = frozen_resolver.candidates("agent:probe")
         assert len(rows) > 0
         for i, row in enumerate(rows):
             _assert_candidate_shape(row, i)
 
-    def test_sisyphus_chain_filtered_to_available(self, resolver):
+    def test_chain_filtered_to_available(self, frozen_resolver):
         """Chain-only pick list, in chain order, EXPANDED to one row per serving provider —
-        dedicated (single-vendor) before aggregator (gateway). STANDARD_MODELS serves every
-        sisyphus entry exactly; models served by both a dedicated provider and opencode show
-        twice (dedicated first). The k2p5 entry is hardcode-aliased to kimi-k2.5
+        dedicated (single-vendor) before aggregator (gateway). Models served by both a
+        dedicated provider and opencode show twice (dedicated first). kimi-k3 is not in the
+        catalog → same-line substitute kimi-k2.6, which dedups against the chain's own
+        kimi-k2.6 entry. The k2p5 entry is hardcode-aliased to kimi-k2.5
         (_OMO_MODEL_ALIASES) and dedups against the chain's own kimi-k2.5 rows."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         assert all(r["source"] == "omo" for r in rows)
         assert "k2p5" not in [r["model"] for r in rows], "k2p5 is aliased to kimi-k2.5"
         keys = [f"{r['provider']}/{r['model']}" for r in rows]
@@ -267,67 +297,128 @@ class TestCandidatesShape:
             "opencode/big-pickle",
         ], f"Unexpected pick list: {keys}"
 
-    def test_all_providers_shown_dedicated_first(self, resolver):
+    def test_all_providers_shown_dedicated_first(self, frozen_resolver):
         """Headline behavior: a model served by a dedicated provider AND an aggregator shows
         one row EACH, dedicated (single-vendor) first. gpt-5.5 → openai/gpt-5.5 then
         opencode/gpt-5.5 — you can pick either."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         gpt = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "gpt-5.5"]
         assert gpt == ["openai/gpt-5.5", "opencode/gpt-5.5"]
 
-    def test_all_rows_use_omo_source(self, resolver):
+    def test_all_rows_use_omo_source(self, frozen_resolver):
         """Every candidate row comes from the chain → source='omo' (no 'mine' dump)."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         for row in rows:
             assert row["source"] == "omo", f"row has source={row['source']!r}"
 
-    def test_dedicated_first_provider(self, resolver):
+    def test_dedicated_first_provider(self, frozen_resolver):
         """glm-5 served by zhipuai(dedicated)+opencode(gateway) → BOTH rows show, dedicated
         first: zhipuai/glm-5 then opencode/glm-5."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         glm = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "glm-5"]
         assert glm == ["zhipuai/glm-5", "opencode/glm-5"]
 
-    def test_exact_rows_have_no_substitute_for(self, resolver):
-        """STANDARD serves these exactly → substitute_for is None on every row."""
-        rows = resolver.candidates("agent:sisyphus")
+    def test_exact_rows_have_no_substitute_for(self, frozen_resolver):
+        """The catalog serves every surviving row exactly (kimi-k3's substitute dedups into
+        the chain's own kimi-k2.6 entry) → substitute_for is None on every row."""
+        rows = frozen_resolver.candidates("agent:probe")
         for row in rows:
             assert row["substitute_for"] is None, (
                 f"{row['model']} should be exact, got substitute_for={row['substitute_for']!r}"
             )
 
-    def test_no_duplicate_provider_model(self, resolver):
+    def test_no_duplicate_provider_model(self, frozen_resolver):
         """No two rows have the same provider/model combination."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         keys = [f"{r['provider']}/{r['model']}" for r in rows]
         assert len(keys) == len(set(keys)), f"Duplicate provider/model keys: {keys}"
 
-    def test_entry_is_dict_for_omo_rows(self, resolver):
+    def test_entry_is_dict_for_omo_rows(self, frozen_resolver):
         """Every (omo) row carries its originating fallbackChain entry dict."""
-        rows = resolver.candidates("agent:sisyphus")
+        rows = frozen_resolver.candidates("agent:probe")
         for row in rows:
             assert isinstance(row["entry"], dict), "omo row must have entry dict"
 
-    def test_variant_precedence_entry_over_top(self, resolver):
-        """claude-opus-4-7 in sisyphus chain has variant='max' in the entry — must appear."""
-        rows = resolver.candidates("agent:sisyphus")
+    def test_variant_precedence_entry_over_top(self, frozen_resolver):
+        """claude-opus-4-7 in the probe chain has variant='max' in the entry — must appear."""
+        rows = frozen_resolver.candidates("agent:probe")
         opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
         assert len(opus_rows) >= 1
         assert opus_rows[0]["variant"] == "max"
 
-    def test_gpt_5_5_variant_medium(self, resolver):
-        """gpt-5.5 in sisyphus chain has variant='medium' in the entry."""
-        rows = resolver.candidates("agent:sisyphus")
+    def test_gpt_5_5_variant_medium(self, frozen_resolver):
+        """gpt-5.5 in the probe chain has variant='medium' in the entry."""
+        rows = frozen_resolver.candidates("agent:probe")
         gpt_rows = [r for r in rows if r["model"] == "gpt-5.5"]
         assert len(gpt_rows) >= 1
         assert gpt_rows[0]["variant"] == "medium"
 
-    def test_kimi_k2_5_no_variant(self, resolver):
-        """kimi-k2.5 in sisyphus chain has no variant in entry or top-level → None."""
-        rows = resolver.candidates("agent:sisyphus")
+    def test_kimi_k2_5_no_variant(self, frozen_resolver):
+        """kimi-k2.5 in the probe chain has no variant in entry or top-level → None."""
+        rows = frozen_resolver.candidates("agent:probe")
         kimi_rows = [r for r in rows if r["model"] == "kimi-k2.5"]
         assert len(kimi_rows) >= 1
         assert kimi_rows[0]["variant"] is None
+
+
+# ---------------------------------------------------------------------------
+# Real bundled data — structural only, so an omo sweep can never red these
+# ---------------------------------------------------------------------------
+
+class TestRealDataIntegration:
+    """The real bundled suggestions still flow through resolve end-to-end.
+
+    Deliberately asserts INVARIANTS, never specific model ids: which models omo recommends
+    is upstream churn, but "every row obeys the contract" must hold for any data. This is
+    what still catches a real regression when the frozen tests above cannot.
+    """
+
+    def test_every_real_target_resolves_cleanly(self, resolver, sugg):
+        """Every agent and category resolves to contract-shaped rows, with no duplicate
+        provider/model and no row inventing a source."""
+        targets = [f"agent:{a}" for a in sugg.agents] + [f"cat:{c}" for c in sugg.categories]
+        assert len(targets) == len(sugg.agents) + len(sugg.categories)
+        for target in targets:
+            rows = resolver.candidates(target)
+            for i, row in enumerate(rows):
+                _assert_candidate_shape(row, i)
+            keys = [f"{r['provider']}/{r['model']}" for r in rows]
+            assert len(keys) == len(set(keys)), f"{target}: duplicate rows {keys}"
+            assert all(r["source"] == "omo" for r in rows), f"{target}: non-omo source"
+
+    def test_dedicated_precedes_gateway_for_every_real_row(self, resolver, sugg):
+        """Wherever one model is served by both a dedicated provider and a gateway, the
+        dedicated row precedes the gateway row — the ordering rule, checked against whatever
+        omo currently recommends rather than against a hardcoded pair."""
+        for target in [f"agent:{a}" for a in sugg.agents]:
+            rows = resolver.candidates(target)
+            by_model: dict = {}
+            for idx, row in enumerate(rows):
+                by_model.setdefault(row["model"], []).append((idx, row["provider"]))
+            for model, entries in by_model.items():
+                gateways = [i for i, p in entries if resolver.vendors_served(p) >= 2]
+                dedicated = [i for i, p in entries if resolver.vendors_served(p) < 2]
+                if gateways and dedicated:
+                    assert max(dedicated) < min(gateways), (
+                        f"{target}/{model}: gateway row precedes a dedicated one"
+                    )
+
+    def test_substitutes_stay_in_family(self, resolver, sugg):
+        """Any same-line substitute shares a detect_family with the entry it stands in for —
+        the substitution rule, independent of which models are involved today."""
+        for target in [f"agent:{a}" for a in sugg.agents] + [f"cat:{c}" for c in sugg.categories]:
+            for row in resolver.candidates(target):
+                if row["substitute_for"] is None:
+                    continue
+                got = sugg.detect_family(row["model"])
+                want = sugg.detect_family(row["substitute_for"])
+                assert got is not None and want is not None, (
+                    f"{target}: substitute {row['model']}→{row['substitute_for']} has no family"
+                )
+                assert got.family == want.family, (
+                    f"{target}: {row['model']} ({got.family}) substitutes for "
+                    f"{row['substitute_for']} ({want.family}) — cross-family"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -398,9 +489,11 @@ class TestWarnFlags:
         assert fam is not None
         assert "max" not in fam.variants
 
-    def test_valid_variant_no_warn(self, resolver):
-        """claude-opus-4-7 with variant='max' — max IS in claude-opus.variants → no 'variant' warn."""
-        rows = resolver.candidates("agent:sisyphus")
+    def test_valid_variant_no_warn(self, frozen_resolver):
+        """claude-opus-4-7 with variant='max' — max IS in claude-opus.variants → no 'variant'
+        warn. Frozen chain: the point is that a VALID variant stays unflagged, not that omo
+        still recommends this particular model."""
+        rows = frozen_resolver.candidates("agent:probe")
         opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
         assert len(opus_rows) >= 1
         assert "variant" not in opus_rows[0]["warn"]
@@ -676,13 +769,16 @@ class TestNoiseTolerantMatch:
         assert res._matches_omo_id("claude-haiku-4-5-20251001", "claude-haiku-4-5")
         assert res._resolve_available("claude-haiku-4-5") == "claude-haiku-4-5-20251001"
 
-    def test_hyphenated_date_stamp_is_exact(self, sugg):
+    def test_hyphenated_date_stamp_is_exact(self, sugg, frozen_sugg):
         """YYYY-MM-DD splits into 4-/2-/2-digit tokens; the year opens the date so the whole tail
-        is noise. sisyphus' gpt-5.5 entry is served EXACTLY by the dated build, not a substitute."""
+        is noise. A gpt-5.5 chain entry is served EXACTLY by the dated build, not a substitute.
+        The id-matching half runs against real data; the end-to-end half uses the frozen chain,
+        since it needs a gpt-5.5 entry to exist and omo may drop one at any release."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
         assert res._matches_omo_id("gpt-5.5-2026-04-24", "gpt-5.5")
         assert res._matches_omo_id("gpt-5.2-2025-12-11", "gpt-5.2")
-        gpt = [r for r in res.candidates("agent:sisyphus") if r["model"].startswith("gpt-5.5")]
+        frozen = Resolver.build(_make_catalog(GATEWAY_MODELS), frozen_sugg)
+        gpt = [r for r in frozen.candidates("agent:probe") if r["model"].startswith("gpt-5.5")]
         assert gpt and gpt[0]["substitute_for"] is None
 
     def test_subversion_tag_is_exact(self, sugg):
