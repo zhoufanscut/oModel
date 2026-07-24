@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .catalog import Catalog
 from .suggestions import Suggestions, normalize_model_id, vendor
@@ -43,7 +42,7 @@ _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 # such notion). Every other family maps 1:1 to a product line, so they are unaffected.
 
 
-def _claude_line(model_id: str) -> "Optional[str]":
+def _claude_line(model_id: str) -> str | None:
     """The Claude product-line token in `model_id` — the FIRST non-numeric token after `claude`
     (haiku/sonnet/opus/fable/mythos/…), else None. Data-free, so any future Claude line is
     distinguished automatically. Handles both id orders: claude-sonnet-4-6 and claude-3-5-sonnet."""
@@ -64,7 +63,7 @@ class Resolver:
     real_tokens: set = field(default_factory=set)  # non-digit tokens omo uses in chain ids; set in build()
 
     @classmethod
-    def build(cls, catalog: Catalog, suggestions: Suggestions) -> "Resolver":
+    def build(cls, catalog: Catalog, suggestions: Suggestions) -> Resolver:
         """Construct and compute `gateways` once:
         gateways = {p for p in catalog.connected if vendors_served(p) >= 2}."""
         resolver = cls(catalog=catalog, suggestions=suggestions)
@@ -145,7 +144,7 @@ class Resolver:
             return self._is_noise_suffix(a[len(c) + 1:])
         return False
 
-    def _resolve_available(self, omo_id: str) -> "Optional[str]":
+    def _resolve_available(self, omo_id: str) -> str | None:
         """The concrete connected model id that fills `omo_id` exactly-or-by-noise, else None.
         Prefers an exactly-spelled match; otherwise the newest noise-suffixed build (e.g.
         claude-haiku-4-5 → claude-haiku-4-5-20251001). Returns the AVAILABLE id (the value that
@@ -167,7 +166,7 @@ class Resolver:
                 return m  # an exact spelling beats any noise-suffixed build
         return max(matches, key=self._version_key)  # newest build (date acts as the tiebreak)
 
-    def resolve_prefix(self, model_id: str, source: str, entry: dict = None) -> "Optional[str]":
+    def resolve_prefix(self, model_id: str, source: str, entry: dict | None = None) -> str | None:
         """Dedicated-first → resolved provider id (str) or None if unavailable.
           * source == 'mine'  → providers_for(model_id)[0] (first-seen).
           * else: cands = providers_for(model_id);
@@ -303,7 +302,7 @@ class Resolver:
 
         return rows
 
-    def _variant_warn(self, variant: "Optional[str]", provider: str, model: str) -> list:
+    def _variant_warn(self, variant: str | None, provider: str, model: str) -> list:
         """``["variant"]`` if `variant` is set but unsupported for (provider, model), else ``[]``.
 
         opencode `--verbose` is the source of truth — mirroring omo's own runtime > heuristic
@@ -325,7 +324,7 @@ class Resolver:
             return ["variant"]
         return []
 
-    def _same_line_match(self, model_id: str) -> "Optional[str]":
+    def _same_line_match(self, model_id: str) -> str | None:
         """Newest connected model sharing `model_id`'s detect_family, else None.
         'Newest' = highest version tuple (digit groups in the normalized id); ties resolve
         to first-seen (catalog order). Returns None when the omo model has no family (never
@@ -373,7 +372,7 @@ class Resolver:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _requirement_for(self, target: str) -> "Optional[dict]":
+    def _requirement_for(self, target: str) -> dict | None:
         """Look up the requirement dict for `target` in agents/categories."""
         if target.startswith("agent:"):
             rest = target[len("agent:"):]

@@ -17,7 +17,7 @@ from importlib.resources import files
 _BUN_TIMEOUT = 300
 
 
-def refresh(omo_src: str = None) -> int:
+def refresh(omo_src: str | None = None) -> int:
     """Locate omo src: `omo_src` (= --omo-src) | $OMO_SRC | ~/source/oh-my-openagent
     (needs packages/model-core/src). Runner: bun ONLY (no node fallback — verified broken).
     Run bundled tools/snapshot_omo.ts → JSON; write to a writable repo checkout
@@ -68,7 +68,7 @@ def refresh(omo_src: str = None) -> int:
         # a PyInstaller bundle), extract it to a temp file.
         import tempfile
         ts_text = ts_resource.read_text(encoding="utf-8")
-        tmp = tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - must outlive this block: bun reads the path after we close it
             mode="w",
             suffix=".ts",
             delete=False,
@@ -87,6 +87,7 @@ def refresh(omo_src: str = None) -> int:
                 capture_output=True,
                 text=True,
                 timeout=_BUN_TIMEOUT,
+                check=False,   # returncode inspected below; a non-zero exit is a handled state
             )
         except subprocess.TimeoutExpired:
             print(

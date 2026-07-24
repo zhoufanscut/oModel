@@ -8,7 +8,14 @@ from __future__ import annotations
 import re
 
 import pytest
-from omodel.suggestions import FAMILY_VENDOR, Family, Suggestions, load, normalize_model_id
+
+from omodel.suggestions import (
+    FAMILY_VENDOR,
+    Family,
+    Suggestions,
+    load,
+    normalize_model_id,
+)
 
 
 @pytest.fixture(scope="module")

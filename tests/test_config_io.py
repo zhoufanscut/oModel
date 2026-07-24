@@ -26,7 +26,6 @@ from omodel.config_io import (
     serialize,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -477,7 +476,7 @@ class TestRestore:
             new_snaps = ts_after - ts_before
             assert len(new_snaps) == 1, "restore() must create exactly one new snapshot"
             # The new snapshot contains what was the live file before restore
-            snap_content = _read_file(list(new_snaps)[0])
+            snap_content = _read_file(next(iter(new_snaps)))
             assert snap_content == content_before_restore
 
 
@@ -503,7 +502,7 @@ class TestLoadConfig:
             cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
             # Write a comment-free config that json5 can parse
             _write_file(cfg_path, '{"agents": {"sisyphus": {"model": "opencode/claude-opus-4-7"}}, "categories": {}, "team_mode": false}\n')
-            cfg, resolved = load_config(cfg_path)
+            cfg, _resolved = load_config(cfg_path)
             assert cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
             assert cfg["team_mode"] is False
 

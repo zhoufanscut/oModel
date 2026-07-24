@@ -10,7 +10,6 @@ import os
 import re
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import Optional
 
 # Hardcoded in oModel (omo has NO such table). 15-family → vendor map (DESIGN §suggestions.py).
 # Models whose detect_family is None contribute NO vendor — do not invent a family for them.
@@ -43,7 +42,7 @@ class Suggestions:
     families: list     # [Family, ...]  ORDERED — iteration order is significant for detect_family
     known_variants: list
 
-    def detect_family(self, model_id: str) -> "Optional[Family]":
+    def detect_family(self, model_id: str) -> Family | None:
         """Faithful port of omo `detectHeuristicModelFamily` → Family | None.
         Run normalize_model_id() first, then ORDERED iteration of `families`; within each
         entry `pattern` is tested BEFORE `includes`; FIRST match wins. (Parity:
@@ -63,12 +62,12 @@ class Suggestions:
                     return fam
         return None
 
-    def vendor_for(self, model_id: str) -> "Optional[str]":
+    def vendor_for(self, model_id: str) -> str | None:
         """vendor(self.detect_family(model_id)) → str | None."""
         return vendor(self.detect_family(model_id))
 
 
-def vendor(family: "Optional[Family]") -> "Optional[str]":
+def vendor(family: Family | None) -> str | None:
     """FAMILY_VENDOR.get(family.family) for a Family, else None (handles family=None)."""
     if family is None:
         return None
@@ -115,7 +114,7 @@ def _newer_of_xdg_and_bundled() -> str:
     return xdg_str if _generated_at(xdg_str) > _generated_at(bundled_str) else bundled_str
 
 
-def load(path: str = None) -> Suggestions:
+def load(path: str | None = None) -> Suggestions:
     """Load order: explicit `path` → $OMODEL_SUGGESTIONS → the NEWER of
     $XDG_DATA_HOME/omodel/omo-suggestions.json and the bundled
     importlib.resources.files('omodel.data')/'omo-suggestions.json', compared by
@@ -123,7 +122,7 @@ def load(path: str = None) -> Suggestions:
     → bundled) — so a stale XDG snapshot from an old `--refresh-omo` run can't permanently
     shadow a newer bundled release after an app upgrade.
     Each Family.pattern is re.compile()d from the JSON `pattern` string (or None) at load."""
-    data_str: "Optional[str]" = None
+    data_str: str | None = None
 
     if path is not None:
         with open(path, "r", encoding="utf-8") as f:

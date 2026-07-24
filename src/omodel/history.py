@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 
 @dataclass
@@ -27,7 +26,7 @@ class HistoryEntry:
     move them in lockstep with the assignment. None == "nothing stored" (treated as empty)."""
     state: dict
     label: str
-    aux: Optional[dict] = None
+    aux: dict | None = None
 
 
 class History:
@@ -42,7 +41,7 @@ class History:
     """
 
     def __init__(
-        self, initial: dict, label: str = "loaded", limit: int = 200, aux: Optional[dict] = None
+        self, initial: dict, label: str = "loaded", limit: int = 200, aux: dict | None = None
     ) -> None:
         # limit caps memory for very long sessions; >=2 so there's always room for one undo.
         self._limit = max(2, limit)
@@ -63,12 +62,12 @@ class History:
         return self._index < len(self._entries) - 1
 
     @property
-    def undo_label(self) -> Optional[str]:
+    def undo_label(self) -> str | None:
         """Label of the operation `undo()` would revert (the entry at the cursor), or None."""
         return self._entries[self._index].label if self.can_undo else None
 
     @property
-    def redo_label(self) -> Optional[str]:
+    def redo_label(self) -> str | None:
         """Label of the operation `redo()` would re-apply (the next entry), or None."""
         return self._entries[self._index + 1].label if self.can_redo else None
 
@@ -91,7 +90,7 @@ class History:
 
     # ----- mutation ---------------------------------------------------------------------
 
-    def push(self, state: dict, label: str, aux: Optional[dict] = None) -> bool:
+    def push(self, state: dict, label: str, aux: dict | None = None) -> bool:
         """Record `state` (and an optional `aux` companion snapshot) as a new entry under
         `label`, dropping any redo tail first. Returns False (a no-op) when `state` is unchanged
         from the current snapshot, so callers can push unconditionally after an edit without
@@ -111,7 +110,7 @@ class History:
             self._index -= overflow
         return True
 
-    def undo(self) -> Optional[Tuple[dict, str]]:
+    def undo(self) -> tuple[dict, str] | None:
         """Step back one entry. Returns `(restored_state, undone_label)` — the state to load
         and the label of the operation being reverted — or None at the bottom of the stack."""
         if not self.can_undo:
@@ -120,7 +119,7 @@ class History:
         self._index -= 1
         return self.current_state(), undone_label
 
-    def redo(self) -> Optional[Tuple[dict, str]]:
+    def redo(self) -> tuple[dict, str] | None:
         """Step forward one entry. Returns `(restored_state, redone_label)` — the state to load
         and the label of the operation being re-applied — or None at the top of the stack."""
         if not self.can_redo:

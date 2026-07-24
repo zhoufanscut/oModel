@@ -9,7 +9,7 @@ import argparse
 import sys
 
 
-def main(argv: list = None) -> int:
+def main(argv: list | None = None) -> int:
     """Parse argv and dispatch (DESIGN §CLI):
       (default)        → run the TUI (omodel.app.run_app)
       --config PATH    → use a specific config file
@@ -87,7 +87,9 @@ def main(argv: list = None) -> int:
     # --refresh-models: force opencode upstream re-fetch + rebuild our cache
     if args.refresh_models:
         import shutil
-        from omodel.catalog import CatalogUnavailable, refresh as refresh_catalog
+
+        from omodel.catalog import CatalogUnavailable
+        from omodel.catalog import refresh as refresh_catalog
 
         if shutil.which("opencode") is None:
             print("error: `opencode` not found on PATH", file=sys.stderr)
@@ -119,8 +121,8 @@ def main(argv: list = None) -> int:
     # Default: launch the TUI (import lazily so --version/--check/--refresh never import app).
     # Pin the color depth BEFORE importing app — Textual reads $TEXTUAL_COLOR_SYSTEM at import.
     _default_color_system()
-    from omodel.config_io import ConfigParseError
     from omodel.app import run_app
+    from omodel.config_io import ConfigParseError
     # load_config() runs once, at app construction (before the UI starts) and is never
     # re-called during the session — catching this narrow type around the whole call is safe.
     try:
@@ -153,7 +155,7 @@ def _default_color_system() -> None:
     import os
     os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "256")
 
-def _cmd_restore(config_override: "str | None") -> int:
+def _cmd_restore(config_override: str | None) -> int:
     """List newest 10 backups + pinned original, prompt user, restore."""
     from omodel.config_io import config_path, list_backups, restore
 
@@ -196,10 +198,11 @@ def _cmd_restore(config_override: "str | None") -> int:
     return 0
 
 
-def _cmd_print(config_override: "str | None") -> int:
+def _cmd_print(config_override: str | None) -> int:
     """Resolve current agent/category models from config + suggestions/catalog, print."""
-    from omodel.config_io import load_config, ConfigParseError
-    from omodel.catalog import load as load_catalog, CatalogUnavailable
+    from omodel.catalog import CatalogUnavailable
+    from omodel.catalog import load as load_catalog
+    from omodel.config_io import ConfigParseError, load_config
 
     try:
         cfg, path = load_config(config_override)
@@ -250,12 +253,13 @@ def _cmd_print(config_override: "str | None") -> int:
     return 0
 
 
-def _cmd_check(config_override: "str | None") -> int:
+def _cmd_check(config_override: str | None) -> int:
     """Dry-run: resolve candidate lists for every known target, CI-safe, always exit 0.
     Degrades gracefully if opencode is absent (suggestions-only)."""
-    from omodel.suggestions import load as load_suggestions
-    from omodel.catalog import load as load_catalog, CatalogUnavailable
+    from omodel.catalog import CatalogUnavailable
+    from omodel.catalog import load as load_catalog
     from omodel.resolve import Resolver
+    from omodel.suggestions import load as load_suggestions
 
     suggestions = load_suggestions()
 

@@ -102,7 +102,7 @@ def _build_app_with(cfg_path: str, catalog: Catalog) -> OModelApp:
 
 
 # Canonical fake-verbose cache seeder — shared across test files (tests/_helpers.py).
-from _helpers import seed_verbose as _seed_verbose  # noqa: E402
+from _helpers import seed_verbose as _seed_verbose
 
 
 async def _select_target(pilot, option_id: str) -> None:
@@ -957,8 +957,8 @@ def test_pilot_hephaestus_gpt_only(pilot_config):
 def test_addmodal_gpt_only_gating():
     """AddModelModal(require_gpt=True) blocks a non-GPT model (enter disabled) and accepts a
     GPT one; without the flag the same non-GPT model is accepted (other agents unaffected)."""
-    from omodel.app import AddModelModal
     from omodel import suggestions as suggestions_mod
+    from omodel.app import AddModelModal
 
     suggestions = suggestions_mod.load()
     catalog = Catalog(
@@ -2269,8 +2269,8 @@ def test_pilot_addmodal_esc_returns_then_cancels(pilot_config):
 def test_addmodal_gpt_filter_fuzzy_rows():
     """AddModelModal(require_gpt=True)._fuzzy_rows filters to GPT models only (a non-GPT pick is a
     foot-gun, not a warning); a typed non-GPT full id still stays blocked by _build_row."""
-    from omodel.app import AddModelModal
     from omodel import suggestions as suggestions_mod
+    from omodel.app import AddModelModal
 
     suggestions = suggestions_mod.load()
     catalog = Catalog(

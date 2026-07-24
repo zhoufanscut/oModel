@@ -18,7 +18,6 @@ import json
 import os
 import re
 import time
-from typing import Optional
 
 # Bump when the on-disk wrapper shape changes → silently invalidates old files.
 CACHE_VERSION = 1
@@ -55,7 +54,7 @@ def _path_for(key: str) -> str:
     return os.path.join(cache_dir(), f"{safe}.json")
 
 
-def read(key: str, ttl_seconds: Optional[float] = None) -> Optional[str]:
+def read(key: str, ttl_seconds: float | None = None) -> str | None:
     """Cached stdout for `key` if present and younger than the TTL, else None.
     A missing, corrupt, wrong-version, or expired entry is a miss (returns None)."""
     if ttl_seconds is None:
@@ -76,7 +75,7 @@ def read(key: str, ttl_seconds: Optional[float] = None) -> Optional[str]:
     return stdout
 
 
-def write(key: str, stdout: str, args: Optional[list] = None) -> None:
+def write(key: str, stdout: str, args: list | None = None) -> None:
     """Cache `stdout` under `key` (atomic write). Best-effort: any OSError is swallowed so
     a non-writable cache never breaks the caller."""
     path = _path_for(key)
@@ -99,7 +98,7 @@ def write(key: str, stdout: str, args: Optional[list] = None) -> None:
             pass
 
 
-def age_seconds(key: str) -> Optional[float]:
+def age_seconds(key: str) -> float | None:
     """Seconds since `key` was cached, or None if there is no (readable) entry.
     Ignores the TTL — a cache-introspection helper (staleness in seconds); not currently
     surfaced in the UI, kept as part of the cache API (CONTRACTS.md)."""
