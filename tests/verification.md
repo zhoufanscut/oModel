@@ -51,6 +51,14 @@ python -m pytest tests/test_catalog_parse.py tests/test_resolve.py -v
 - `providers_for("gpt-5.5") == ["opencode","openai"]` → `resolve_prefix` picks `openai`
 - `claude-opus-4-7` → `opencode` (only gateway serves it)
 - `kimi-k2.5` → `moonshotai-cn` (dedicated wins)
+
+**Data coupling:** assertions naming a specific model run against the FROZEN chain in
+`tests/_helpers.py` (`FROZEN_AGENTS`, target `agent:probe`), never the live bundled data —
+omo swaps models every few releases, and pinning them there reds CI on a healthy product.
+`TestRealDataIntegration` keeps the real data flowing through `resolve` with structural
+assertions only (contract shape, no duplicate rows, dedicated-before-gateway, substitutes
+stay in-family). Do not "update" `FROZEN_AGENTS` to match a new omo release — churn immunity
+is the point.
 - `glm-5` → `zhipuai`; `deepseek-v4-pro` → `deepseek`
 - `glm+max` and absent model → `warn` includes `"variant"` / `"unavailable"` but row accepted
 - With openrouter also connected, a both-gateways-only model resolves via first-seen, and the
