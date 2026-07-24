@@ -112,7 +112,13 @@ jobs:
             Automated refresh of `src/omodel/data/omo-suggestions.json` from the latest
             oh-my-openagent source (${{ github.event.inputs.omo_ref || 'dev' }}).
 
-            ${{ steps.validate.outcome == 'failure' && '⚠️ **The test suite FAILED against this data — do not merge until it is green.** See the workflow run for the failure.' || '✅ Lint + test suite passed against this data in the refresh job.' }}
+            ${{ steps.validate.outcome == 'failure' && '⚠️ **Validation FAILED** in the refresh run below, against the data as first pushed. Do not merge until the checks are green.' || '✅ Lint + tests passed in the refresh run below, against the data as first pushed.' }}
+
+            <sub>Point-in-time note from the run that opened this PR. Only a later refresh
+            run rewrites it, so after any other push **the checks are the source of truth**,
+            not this line.</sub>
+
+            Refresh run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             Review the diff before merging.
           commit-message: "chore: refresh omo-suggestions.json from omo"
