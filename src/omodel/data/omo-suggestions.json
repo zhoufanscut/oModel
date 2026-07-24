@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.19.0",
-    "omoCommit": "60092123e0ac4f1d08a738a33b19831df0876255",
-    "generatedAt": "2026-07-20T08:56:19.878Z"
+    "omoVersion": "4.19.1",
+    "omoCommit": "60201be160749965b9bb4c3b2744e1bbee820dc5",
+    "generatedAt": "2026-07-24T01:57:25.786Z"
   },
   "agents": {
     "sisyphus": {
@@ -14,7 +14,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -23,35 +23,14 @@
             "kimi-for-coding",
             "moonshotai",
             "opencode",
-            "vercel"
-          ],
-          "model": "kimi-k3"
-        },
-        {
-          "providers": [
-            "opencode-go",
-            "vercel"
-          ],
-          "model": "kimi-k2.6"
-        },
-        {
-          "providers": [
-            "kimi-for-coding"
-          ],
-          "model": "k2p5"
-        },
-        {
-          "providers": [
-            "opencode",
+            "vercel",
             "bailian-coding-plan",
-            "moonshotai",
             "moonshotai-cn",
             "firmware",
             "ollama-cloud",
-            "aihubmix",
-            "vercel"
+            "aihubmix"
           ],
-          "model": "kimi-k2.5"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -60,7 +39,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "medium"
         },
         {
@@ -89,19 +68,10 @@
           "providers": [
             "openai",
             "github-copilot",
-            "vercel"
+            "vercel",
+            "opencode"
           ],
           "model": "gpt-5.6-sol",
-          "variant": "high"
-        },
-        {
-          "providers": [
-            "openai",
-            "github-copilot",
-            "opencode",
-            "vercel"
-          ],
-          "model": "gpt-5.5",
           "variant": "medium"
         }
       ],
@@ -119,11 +89,17 @@
         {
           "providers": [
             "openai",
-            "github-copilot",
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
+          "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "github-copilot"
+          ],
+          "model": "gpt-5.6-sol",
           "variant": "high"
         },
         {
@@ -143,7 +119,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -290,15 +266,15 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
-          "variant": "medium"
+          "model": "gpt-5.6-sol",
+          "variant": "low"
         },
         {
           "providers": [
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -330,7 +306,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -340,7 +316,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "high"
         },
         {
@@ -382,7 +358,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -392,8 +368,8 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
-          "variant": "high"
+          "model": "gpt-5.6-sol",
+          "variant": "medium"
         },
         {
           "providers": [
@@ -406,7 +382,7 @@
           "providers": [
             "kimi-for-coding"
           ],
-          "model": "k2p5"
+          "model": "kimi-k3"
         }
       ],
       "requiresProvider": [],
@@ -433,12 +409,18 @@
         {
           "providers": [
             "openai",
-            "github-copilot",
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "github-copilot"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "high"
         },
         {
           "providers": [
@@ -447,7 +429,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -488,7 +470,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -497,7 +479,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "medium"
         },
         {
@@ -542,7 +524,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -551,7 +533,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "medium"
         },
         {
@@ -616,7 +598,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -630,7 +612,7 @@
           "providers": [
             "kimi-for-coding"
           ],
-          "model": "k2p5"
+          "model": "kimi-k3"
         }
       ],
       "requiresProvider": [],
@@ -660,7 +642,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "xhigh"
         },
         {
@@ -680,7 +662,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -728,7 +710,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "medium"
         },
         {
@@ -738,7 +720,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -756,7 +738,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -789,7 +771,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -799,14 +781,15 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5"
+          "model": "gpt-5.6-sol",
+          "variant": "high"
         },
         {
           "providers": [
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -913,7 +896,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "medium"
         },
         {
@@ -921,7 +904,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -967,7 +950,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-7",
+          "model": "claude-opus-4-8",
           "variant": "max"
         },
         {
@@ -977,7 +960,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
           "variant": "high"
         },
         {
@@ -993,7 +976,7 @@
           "providers": [
             "kimi-for-coding"
           ],
-          "model": "k2p5"
+          "model": "kimi-k3"
         },
         {
           "providers": [
@@ -1006,22 +989,14 @@
           "providers": [
             "opencode",
             "bailian-coding-plan",
-            "vercel"
-          ],
-          "model": "kimi-k2.5"
-        },
-        {
-          "providers": [
-            "opencode",
-            "bailian-coding-plan",
+            "vercel",
             "moonshotai",
             "moonshotai-cn",
             "firmware",
             "ollama-cloud",
-            "aihubmix",
-            "vercel"
+            "aihubmix"
           ],
-          "model": "kimi-k2.5"
+          "model": "kimi-k3"
         }
       ],
       "requiresProvider": [],
@@ -1044,7 +1019,7 @@
             "opencode-go",
             "vercel"
           ],
-          "model": "kimi-k2.6"
+          "model": "kimi-k3"
         },
         {
           "providers": [
