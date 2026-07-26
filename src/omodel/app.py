@@ -51,7 +51,9 @@ panes including #presets (Textual's own Screen traversal — NOT an app binding;
 the presets card, which ←/→ deliberately skip) · enter set (dispatch by row:
 cand:add → add-model modal, else set
 model + default variant) · v variant · x clear (on an ultrawork/compaction sub-target row: delete
-the whole row) · a pane-contextual (candidates + targets category
+the whole row; on a #candidates row YOU ADDED — a _custom_rows entry, and only with #candidates
+FOCUSED — delete that row instead, taking the assignment with it iff the row is what's assigned;
+chain rows keep the clear meaning) · a pane-contextual (candidates + targets category
 rows → add/edit-model modal; targets agent rows → add sub-target chooser) ·
 on a #presets row: enter SWITCHES to that preset — a staged, undoable replace that banks
 your edits into the one you leave; a ADDS a preset from the current models + names it +
@@ -62,7 +64,8 @@ unlimited and the list is dense, so a delete renumbers the rest · u undo / ctrl
 (in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
-CatalogUnavailable) — EXCEPT on a #presets row, where r RENAMES · ? help (open HelpModal — the full key reference; base-screen-only) ·
+CatalogUnavailable) — EXCEPT on a #presets row, where r RENAMES · ? help (open HelpModal — the
+base-screen keys, grouped by pane; base-screen-only) ·
 q quit (when dirty: a three-way save & quit / discard / cancel — `s` writes the config AND
 the presets file, so a discard drops both). In the two BUTTON modals (QuitModal, ConfirmModal)
 ←/→ and vim h/l walk the button row, wrapping like tab (`app.focus_next`/`focus_previous`) — the
@@ -401,7 +404,12 @@ class AddModelModal(ModalScreen):
     """
 
     _MODEL_TITLE = "Add model — type to search (or provider/model):"
-    _MODEL_HINTS = "↑↓ move · tab fill · enter add · esc cancel"
+    # ⌃p/⌃n earn their place HERE and only here: this is the one phase where your hands are on the
+    # home row typing a query and j/k are literal text, so the emacs aliases are the only way to
+    # move the list without leaving it. (They work in the variant phase too, but that list is
+    # focused and already advertises ↑↓/jk — a third alias would just lengthen the line.) The `?`
+    # overlay stays out of it: each dialog states its own keys — see HelpModal._BODY.
+    _MODEL_HINTS = "↑↓/⌃p⌃n move · tab fill · enter add · esc cancel"
     # Cap the rendered fuzzy list so a broad query (e.g. one common letter) can't re-introduce the
     # render lag this type-to-search design removes. Top matches by score; type more to narrow.
     _MAX_CANDIDATES = 50
@@ -1199,16 +1207,19 @@ class AddSubModal(ModalScreen):
 
 # The bottom hint bar (Static#hints) is deliberately MINIMAL and STATIC: only the three keys you
 # won't discover by convention and that act regardless of focus — `s` save (the app's whole point),
-# the `?` help overlay (which documents everything else), and `q` quit. Every other key lives in
-# HelpModal, so the bar never grows past one line and never has to track pane / row / undo state.
-# Keep this in sync with HelpModal._BODY (the two are the only places keys are advertised).
+# the `?` help overlay (which documents the base-screen keys), and `q` quit. Every other
+# base-screen key lives in HelpModal, so the bar never grows past one line and never has to track
+# pane / row / undo state. Keep this in sync with HelpModal._BODY; dialogs advertise their own keys
+# on their own hint line (`Static.modal-hints`) and are not repeated in either.
 _HINT_BAR = "s save · q quit · ? help"
 
 
 class HelpModal(ModalScreen):
-    """`?` — the full key reference. The hint bar shows only `s save · q quit · ? help`, so every
-    other key is documented here. Read-only and scrollable (same body pattern as ConfirmModal, in
-    case the list outgrows a short terminal); closes with `?`, `esc`, or `q`."""
+    """`?` — the base-screen keys the hint bar doesn't show, grouped by pane (the same key means
+    different things on a #presets row). Not an exhaustive reference: `s`/`q`/`?` stay on the bar
+    behind it, dialogs carry their own hint line, and conventions like enter/esc/y/n go unsaid.
+    Read-only and scrollable (same body pattern as ConfirmModal, in case it outgrows a short
+    terminal); closes with `?`, `esc`, or `q`."""
 
     BINDINGS: ClassVar[list] = [
         Binding("question_mark", "close", "Close", show=False),
@@ -1242,49 +1253,39 @@ class HelpModal(ModalScreen):
     }
     """
 
-    # One grouped reference for every key. Descriptions start at a fixed column so the keys line up.
-    # Mirror any change here in the module KEYS docstring and DESIGN §Layout / §Textual contract.
-    # The list form keeps this aligned help table readable and diffable; FLY002 would
-    # collapse it into one ~700-char line for zero runtime gain.
+    # The keys you can't guess, grouped BY PANE — because `enter`/`a`/`r`/`x` each mean something
+    # different on a #presets row, and that contrast is the whole reason this overlay exists.
+    # Deliberately NOT a full reference: `s`/`q`/`?` are on the hint bar behind this modal, every
+    # dialog carries its own hint line (`Static.modal-hints`), and universal conventions
+    # (enter confirms, esc cancels, y/n) are left unsaid — one line per key that earns it.
+    # Descriptions start at a fixed column (15) so the keys line up; lines stay ≤54 cells — the
+    # 62-cell panel leaves 56 of content, and a short terminal spends 2 of those on the scrollbar,
+    # which would WRAP a 55-cell line and cost back the height it just saved. Verified by
+    # test_help_body_stays_light. Mirror any change here in the module KEYS docstring and
+    # DESIGN §Layout / §Textual contract. The list form keeps this aligned help table readable and
+    # diffable; FLY002 would collapse it into one long line for zero runtime gain.
     _BODY = "\n".join(  # noqa: FLY002 - see comment above
         [
-            "Navigate",
-            "  ↑↓  jk         move within a list",
-            "  ←→  hl         targets ⇄ candidates",
-            "  tab  ⇧tab      cycle all three panes",
-            "                 (targets → presets → candidates)",
+            "Move",
+            "  ↑↓  jk       within a pane",
+            "  ←→  hl       targets ⇄ candidates",
+            "  tab          cycles all three panes, incl. presets",
             "",
-            "Edit",
-            "  enter          set the highlighted model",
-            "  v              choose a variant",
-            "  a              edit / add a model",
-            "                 (on an agent row: adds a sub-target)",
-            "  x              clear  (↳ sub-target row: delete it)",
+            "Models",
+            "  enter        set the highlighted model",
+            "  v            pick a variant",
+            "  a            add / edit a model  (agent: sub-target)",
+            "  x            clear (sub-target / added row: delete)",
+            "  r            refresh models from opencode",
             "",
-            "Presets",
-            "  enter          switch to it",
-            "                 (edits stay in the one you leave)",
-            "  a              add one from the current models",
-            "  r              rename it",
-            "  x              delete it  (not the one you're using)",
+            "Presets  (tab to reach)",
+            "  enter        switch — banks your edits first",
+            "  a            add one from the current models",
+            "  r            rename",
+            "  x            delete (not the active one)",
             "",
             "Undo",
-            "  u              undo the last edit",
-            "  ⌃r             redo",
-            "",
-            "Models & file",
-            "  r              refresh models from opencode",
-            "  s              save",
-            "  q              quit",
-            "",
-            "In dialogs",
-            "  enter          choose / confirm",
-            "  esc            back / cancel",
-            "  y  n           yes / no",
-            "  ←→  hl         move between buttons",
-            "  tab            fill the highlighted model",
-            "  ⌃p  ⌃n         move the list",
-            "  u  c           pick ultrawork / compaction (add-sub)",
+            "  u   ⌃r       undo / redo the last edit",
         ]
     )
 
@@ -2278,6 +2279,15 @@ class OModelApp(App):
 
     # ----- staging ---------------------------------------------------------------------
 
+    def _candidates_focused(self) -> bool:
+        """Whether `#candidates` owns focus. `x` dispatches on this so its row-scoped meaning
+        (drop the row you added) can only fire with a candidate actually under the cursor — from
+        `#targets` the same key still means clear-this-target, where no candidate is in play."""
+        try:
+            return self.focused is self.query_one("#candidates", OptionList)
+        except Exception:
+            return False
+
     def _highlighted_candidate_index(self):
         cands = self.query_one("#candidates", OptionList)
         hi = cands.highlighted
@@ -2418,12 +2428,19 @@ class OModelApp(App):
         super().notify(message, **kwargs)
 
     def action_clear(self) -> None:
-        """`x` — clear/delete the current target. On a base agent/category row it clears the
-        assignment (drops model/variant, keeps the row). On an ↳ ultrawork/compaction SUB-target
-        it deletes the whole row: a cleared sub-object serializes away anyway (config_io drops
-        empty sub-objects), so a model-less placeholder isn't worth keeping — for a sub-target
-        clear == delete, which is also how you undo a stray `a` add without reaching for `u`.
-        Undoable (`u`) either way — a fat-fingered `x` is one keystroke from being reverted.
+        """`x` — get rid of the thing under the cursor. On a `#candidates` row YOU added it drops
+        that row (`_remove_custom_row`). Otherwise it clears/deletes the current TARGET: on a base
+        agent/category row it clears the assignment (drops model/variant, keeps the row); on an ↳
+        ultrawork/compaction SUB-target it deletes the whole row — a cleared sub-object serializes
+        away anyway (config_io drops empty sub-objects), so a model-less placeholder isn't worth
+        keeping — for a sub-target clear == delete, which is also how you undo a stray `a` add
+        without reaching for `u`. Undoable (`u`) — a fat-fingered `x` is one keystroke from being
+        reverted.
+
+        The added-row branch comes FIRST, and is gated on `#candidates` having focus: a row you
+        typed is the one thing in that pane you can delete, and reading the cursor is the only way
+        `x` doesn't clear a model you aren't pointing at (it used to — see _remove_custom_row).
+        Chain rows keep the clear meaning: they're omo's data, not yours to remove.
 
         On a `#presets` row it deletes that PRESET instead, behind a confirm — the one `x` that
         is not undoable (the presets file lives outside the cfg history); on `+ add preset…` there
@@ -2438,6 +2455,8 @@ class OModelApp(App):
         target = self._current_target
         if target is None:
             return
+        if self._candidates_focused() and self._remove_custom_row(target):
+            return
         if target.startswith("agent:") and "." in target[len("agent:"):]:
             name, kind = target[len("agent:"):].split(".", 1)
             self._delete_subtarget(target, name, kind)
@@ -2450,6 +2469,67 @@ class OModelApp(App):
         self._rows.pop(target, None)
         self._refresh_right(target)
         self._record(f"clear {self._target_label(target)}")
+
+    def _remove_custom_row(self, target: str) -> bool:
+        """`x` on a `#candidates` row you added yourself — drop that row. Returns whether it
+        fired, so `action_clear` falls through to its clear/delete meanings for every other row.
+
+        Only `_custom_rows` entries qualify: models typed into the add-model modal, kept as rows
+        so one stays pickable after you try something else. That persistence is what made this
+        the one row with no way out — the chain rebuilds from omo's data and `_build_rows`'
+        synthesized off-chain row is derived from cfg (it vanishes on its own when the assignment
+        moves, and clearing is what removes it), but a typed row outlived every key in the app.
+        Meanwhile `x` read only `_current_target`, so pressing it here cleared whatever model was
+        assigned — a model you weren't pointing at — and left the row sitting there.
+
+        When the row IS the assignment the two go together, clear == delete as on a sub-target
+        row: a model left set on a target whose row just disappeared is the one state this pane
+        must not show. That branch touches cfg, so it records an undo entry. Dropping a row that
+        ISN'T assigned changes nothing that will ever be written — it is pane state, not an edit —
+        so it deliberately records none (`History.push` is cfg-only by contract, and `a` re-adds
+        the row in one keystroke)."""
+        customs = self._custom_rows.get(target) or []
+        idx = self._highlighted_candidate_index()
+        if not customs or idx is None:
+            return False
+        rows = self._build_rows(target)
+        if not 0 <= idx < len(rows):
+            return False
+        row = rows[idx]
+        # Match on OBJECT IDENTITY, not `provider/model`: `_build_rows` appends the very dicts
+        # held in `_custom_rows`, so `is` says exactly "this rendered row came from there".
+        # Comparing ids would misfire on a model you added that the chain ALSO offers — the two
+        # dedupe to one CHAIN row (History.push's docstring calls out that case), and `x` on it
+        # would silently drop the shadowed entry instead of clearing, which is the chain-row
+        # behaviour this fix promises to leave alone.
+        keep = [r for r in customs if r is not row]
+        if len(keep) == len(customs):
+            return False  # a chain row, or the synthesized off-chain one — not yours to delete
+        ident = f"{row['provider']}/{row['model']}"
+        if keep:
+            self._custom_rows[target] = keep
+        else:
+            self._custom_rows.pop(target, None)
+        clears = self._current_assignment(target)[0] == ident
+        if clears:
+            node = self._node_for(target)
+            if isinstance(node, dict):
+                node.pop("model", None)
+                node.pop("variant", None)
+        # The remembered cursor names a row that is about to stop existing. Re-aim it at whatever
+        # is assigned (its `●` row) so the pane doesn't come back un-highlighted under your hand;
+        # nothing assigned (we just cleared it) → forget it, and it renders like a fresh target.
+        if self._cand_choice.get(target) == ident:
+            still = self._current_assignment(target)[0]
+            if still:
+                self._cand_choice[target] = still
+            else:
+                self._cand_choice.pop(target, None)
+        self._rows.pop(target, None)
+        self._refresh_right(target)
+        if clears:
+            self._record(f"clear {self._target_label(target)}")
+        return True
 
     def _delete_subtarget(self, target: str, name: str, kind: str) -> None:
         """`x` on an ↳ ultrawork/compaction row — remove the sub-target outright, dropping the

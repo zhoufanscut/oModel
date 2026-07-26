@@ -23,8 +23,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Quitting with unsaved work now offers **save & quit / discard / cancel** instead of a bare
   yes/no, since discarding drops preset changes as well as config changes.
-- The `?` overlay now lists `Tab` / `Shift+Tab`, which cycle all three panes and are the way to
-  reach the presets card. They always worked; they were just never written down.
+- The `?` overlay now lists `Tab`, which cycles all three panes and is the way to reach the presets
+  card. It always worked; it was just never written down.
+- The `?` overlay is about half as long. It's grouped by pane, so you can see at a glance that
+  `enter`, `a`, `r` and `x` do different things on a preset row, and it no longer repeats what's
+  already on screen (`s` / `q` / `?` sit on the hint bar, and every dialog states its own keys) or
+  what needs no telling (`esc` cancels, `y`/`n` answer). It fits an ordinary terminal now without
+  scrolling.
 - The hint bar reads `s save · q quit · ? help` — save and quit next to each other, `?` at the end
   as the pointer to everything else.
 
@@ -33,6 +38,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   selected, so it was easy to confirm the wrong thing.
 
 ### Fixed
+- `x` on a model you added now deletes that row, instead of clearing whichever model happened to
+  be set. Adding a model, picking a different one, then pressing `x` on the row you added used to
+  unset the model you'd just picked and leave the added row in place — and there was no way to get
+  rid of that row at all. `x` reads the row under the cursor now: on a row you added it removes it
+  (and unsets the model too, if that's the one that was set — `u` brings both back); on any other
+  row it clears the target as before.
+
 - A model id containing square brackets no longer crashes oModel. Typing one in the add-model box
   took the app down on the keystroke, and one saved in your config (or a preset) took it down on
   every launch, before anything was drawn. Ids are now shown exactly as they are, brackets and all.

@@ -176,8 +176,9 @@ collapses to its ANSI slots, looking nothing like a `xterm-256color` session. Ov
 The bottom hint bar (`Static#hints-bar`) is **minimal and static**: the keys `s save · q quit · ? help` sit
 at the left, the app version (`v<version>`, a right-aligned `Static#hints-version`) at the tail — the
 three keys you won't discover by convention and that act regardless of focus. It never tracks
-pane / row / undo state. **Every other key lives in the `?` help overlay** (`HelpModal`), a
-scrollable full-reference modal. See §Textual contract.
+pane / row / undo state. **Every other base-screen key lives in the `?` help overlay**
+(`HelpModal`), a short modal grouped by pane; dialogs state their own keys on their own hint line.
+See §Textual contract.
 
 ## Repo layout (src-layout, PyPI-ready)
 
@@ -376,6 +377,30 @@ oModel/
   the configured model is always shown and re-selectable, and that row carries the `●` (see `_build_rows`). The
   picker proper stays chain-only; this single extra row is the current assignment, never a
   connected-model dump.
+- **The one row you can delete (`x` on a `#candidates` row you added).** Two different mechanisms
+  put an off-chain model in this list, and only one of them needs a delete key. The row above is
+  **derived from cfg**, so it appears and vanishes on its own as the assignment moves — clearing
+  the assignment is what removes it. A model typed into the add-model modal is different: it is
+  kept in `app.py`'s `_custom_rows` and **stays pickable after you try something else** (that's the
+  point — you can go back to it without retyping), which made it the one row with no way out.
+  Worse, `x` was **target-scoped**: `action_clear` read only `_current_target` and never the
+  cursor, so pressing it while pointing at an added row cleared *whatever model was assigned* —
+  one you weren't pointing at — and left the row sitting there. So `x` now reads the cursor
+  (`_remove_custom_row`), and:
+  - only `_custom_rows` entries are deletable — the chain is omo's data, not yours to remove, and
+    chain rows keep the clear meaning, so `x` still unsets a target from anywhere in the pane;
+  - it is **gated on `#candidates` having focus** (`_candidates_focused`), so `x` from `#targets`
+    can't reach across and eat whatever row the other pane's cursor happens to sit on;
+  - when the deleted row **is** the assignment, the assignment goes with it — clear == delete, the
+    same rule as a sub-target row: a model left set on a target whose row just disappeared is the
+    one state this pane must not show;
+  - the cursor re-aims at the assigned (`●`) row instead of coming back un-highlighted where the
+    deleted row used to be (`_cand_choice` is identity-keyed, so the stale identity is repointed).
+  **Undo:** deleting an assigned row touches cfg, so it lands in the history like any edit and `u`
+  restores model *and* row (`_custom_rows` rides in the entry's `aux`). Deleting a row that isn't
+  assigned changes nothing that will ever be written — it is pane state, not an edit — so it
+  records no entry, matching `History.push`'s cfg-only contract (§history.py); `a` re-adds it in
+  one keystroke.
 - **GPT-only agents (Hephaestus):** omo's `no-hephaestus-non-gpt` hook makes Hephaestus
   GPT-exclusive (`isGptModel` = model name after the last `/`, lowercased, contains "gpt"; a non-GPT
   model reassigns the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
@@ -804,26 +829,37 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 - **Hint bar** `Static#hints-bar` (bottom row): **minimal and static** — keys `s save · q quit · ? help` at
   the left, app version `v<version>` (`Static#hints-version`) right-aligned at the tail
   (the `_HINT_BAR` constant), set once in `on_mount` and never re-rendered. It advertises only the
-  must-have keys: `s` (the app's whole point), `q`, and `?` (the overlay that documents
-  everything else) — save and quit, the pair you reach for, sit together, and `?` tails the line
+  must-have keys: `s` (the app's whole point), `q`, and `?` (the overlay that documents the rest of
+  the base screen) — save and quit, the pair you reach for, sit together, and `?` tails the line
   as the pointer to the rest. All the pane/row-contextual keys (`enter`, `v`, `x`, `a`) and `u`/`⌃r` undo/redo and `r`
   refresh **moved into the `?` help overlay** (`HelpModal`), so the bar never grows past one line
   and never has to track focus/row/undo state. This is deliberately *not* a full reference — the
   bar is a floor (save/quit/help); `?` is the ceiling. Modals carry their own one-line hint
   (`Static.modal-hints`) instead. (`r` is also still advertised in the `#providers` header.)
 - **Help overlay** `HelpModal` (`?`): a read-only, scrollable `ModalScreen` (same body pattern as
-  `ConfirmModal`) listing **every** key, grouped (Navigate / Edit / Presets / Undo / Models &
-  file / In dialogs). Base-screen-only (gated in `check_action` alongside focus + undo/redo — `?` over a
+  `ConfirmModal`) carrying the base-screen keys **grouped by pane** — Move / Models / Presets /
+  Undo. Base-screen-only (gated in `check_action` alongside focus + undo/redo — `?` over a
   modal is pointless; `esc` closes the modal first). Closes with `?` (toggles), `esc`, or `q`.
-  Its `_BODY` text and `_HINT_BAR` are the only two places keys are advertised — keep them and the
-  module KEYS docstring in sync — including the keys that are *not* app bindings: **`tab` /
-  `shift+tab` are listed under Navigate**, since Textual provides them for free and they'd
-  otherwise be the one undocumented way to reach `#presets`. They are listed **there and nowhere
-  else**: each key earns one line, in the group that describes what it does, and repeating `tab`
-  under Presets only made that group longer than the thing it explains. The **Presets** group
-  carries the `enter`/`a`/`r`/`x` meanings on a `#presets` row and stops there — the
-  `+ add preset…` row earned no line of its own once `a` became row-blind (it does exactly what
-  `a` does, and the row says so on screen) — §presets.py.
+  Grouping by pane is the point: `enter`/`a`/`r`/`x` each mean something *different* on a
+  `#presets` row (switch / add / rename / delete) than on the model panes (set / add-edit /
+  refresh / clear), and two short adjacent groups show that contrast better than any prose could.
+  It is deliberately **not** an exhaustive reference — the earlier version was, and at 37 lines it
+  scrolled on a normal terminal, which is the one thing a help panel must not do. Three rules
+  keep it short: (1) keys already on screen aren't repeated — `s`/`q`/`?` sit on the hint bar
+  *behind* the modal, and every dialog states its own keys on its own hint line
+  (`Static.modal-hints`), so the old **In dialogs** group was eight lines of duplication;
+  (2) universal conventions go unsaid — enter confirms, esc cancels, `y`/`n` answer, arrows move;
+  (3) each key earns **one** line, in the group that describes what it does. What survives is what
+  you cannot guess: the vim aliases, `v`, the pane-contextual meanings, undo/redo, and the keys
+  that are *not* app bindings — **`tab` is listed under Move**, since Textual provides it for free
+  and it is otherwise the one undiscoverable way to reach `#presets` (hence the group's
+  `(tab to reach)` tag rather than a second `tab` line). The `+ add preset…` row earned no line of
+  its own once `a` became row-blind (it does exactly what `a` does, and the row says so on
+  screen) — §presets.py. `_BODY` and `_HINT_BAR` stay in sync with the module KEYS docstring.
+  Body lines stay **≤54 cells**, not the 56 of content the 62-cell panel actually offers: on a
+  short terminal the body scrolls and the scrollbar takes 2 of them, so a 55-cell line wraps and
+  gives back the height the trim just bought. `test_help_body_stays_light` pins both the width and
+  the line count; the result fits a 30-row terminal with no scroll (the old body needed 47).
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
@@ -836,7 +872,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `x` → clear
   the assignment (on an ultrawork/compaction sub-target row → **delete the whole row**, parent agent
   regains focus — clear == delete since an empty sub-object serializes away; on a `#presets` row →
-  **delete that preset**, behind a confirm, and REFUSED on the active one — the config mirrors it);
+  **delete that preset**, behind a confirm, and REFUSED on the active one — the config mirrors it;
+  on a `#candidates` row **you added** → **delete that row**, see §The one row you can delete);
   `u` → undo / `ctrl+r` → redo the last edit (in-session snapshot stack, §history.py — gated to the
   base screen via `check_action`, so they don't reach through a modal that binds `u` itself);
   `s` → diff+confirm save; `r` → refresh
@@ -884,7 +921,10 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   raises). A typed query auto-highlights the top match for quick-select; with the list empty (right
   after opening, or a query that matches nothing) **nothing is staged**, so a reflexive `enter` is a
   no-op — you never commit a model you didn't choose. `↑`/`↓` (or emacs **`Ctrl-P`/`Ctrl-N`**) move
-  the list while the `Input` keeps focus (driven from screen bindings; the list is `can_focus=False`).
+  the list while the `Input` keeps focus (driven from screen bindings; the list is `can_focus=False`)
+  — and this phase's hint line (`_MODEL_HINTS`) is where `⌃p`/`⌃n` are **advertised**, since it is
+  the one place `j`/`k` are literal text and the emacs aliases are the only home-row way to move.
+  (They work in the variant phase too, but that list is focused and already offers `↑↓`/`jk`.)
   `Ctrl-P` is normally the App's *priority* command-palette binding, so `OModelApp.check_action`
   suppresses the palette while this modal is open (the only way to gate a priority binding — it is
   checked App-down before the key reaches the modal). **`Tab`** fills the highlighted

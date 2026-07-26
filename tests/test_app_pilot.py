@@ -29,6 +29,7 @@ import time
 import types
 
 import pytest
+from rich.cells import cell_len
 from textual.content import Content
 from textual.widgets import Button, Input, OptionList, Static
 
@@ -1061,6 +1062,26 @@ def test_pilot_hint_bar_minimal_and_help(pilot_config):
     asyncio.run(_run())
 
 
+def test_help_body_stays_light():
+    """The `?` overlay is a short prompt, not a manual (DESIGN §Textual contract): it must fit an
+    ordinary terminal without scrolling and without wrapping. Guards the two ways it re-bloats —
+    growing past the panel's 56-cell content width, and re-listing keys that are already on screen
+    (the hint bar behind it, each dialog's own hint line) or that need no telling (esc, y/n)."""
+    lines = HelpModal._BODY.splitlines()
+    # +2 chrome rows (title, hint) + 4 border/padding, against a 24-row terminal.
+    assert len(lines) <= 22, f"help body must stay under ~22 lines, got {len(lines)}"
+    widest = max(lines, key=cell_len)
+    # 54, not the panel's 56 cells of content: on a short terminal the scrollbar eats 2, and a
+    # 55-cell line would then wrap — costing back the height the trim just bought.
+    assert cell_len(widest) <= 54, f"help line would wrap beside a scrollbar: {widest!r}"
+    # The keys the overlay exists for: contextual on both panes, plus the ones you can't guess.
+    for key in ("Move", "Models", "Presets", "Undo", "tab", "jk", "enter", "v", "a", "x", "r", "⌃r"):
+        assert key in HelpModal._BODY, f"help must still document {key!r}"
+    # …and the redundancy it deliberately drops.
+    for gone in ("In dialogs", "yes / no", "esc", "  s  ", "  q  "):
+        assert gone not in HelpModal._BODY, f"{gone!r} is on screen already — keep it out of help"
+
+
 # ---------------------------------------------------------------------------
 # Pilot test 10: ←/→ guardrail — the add-model Input keeps its cursor arrows
 # ---------------------------------------------------------------------------
@@ -1842,13 +1863,17 @@ def test_pilot_addmodal_tab_fills_input(pilot_config):
 def test_pilot_addmodal_ctrl_p_n_navigate_list(pilot_config):
     """Ctrl-P / Ctrl-N navigate the fuzzy list like ↑/↓ (emacs-style). Ctrl-P must NOT open the
     App command palette while the modal is open (OModelApp.check_action suppresses that priority
-    binding so the key drives the list instead)."""
+    binding so the key drives the list instead). This modal's own hint line is where they're
+    advertised — the `?` overlay documents base-screen keys only, so if the hint drops them the
+    key becomes undiscoverable."""
     cfg_path, _ = pilot_config
 
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             inp = await _open_add_modal(pilot)
+            hints = str(pilot.app.screen.query_one("#add-hints", Static).content)
+            assert "⌃p" in hints and "⌃n" in hints, f"model-phase hint must show ⌃p/⌃n: {hints!r}"
             inp.value = "glm"  # ≥2 matches: zhipuai/glm-5 (row 0, dedicated), opencode/glm-5 (row 1)
             await pilot.pause()
             cands = pilot.app.screen.query_one("#add-candidates", OptionList)
@@ -1868,6 +1893,200 @@ def test_pilot_addmodal_ctrl_p_n_navigate_list(pilot_config):
             assert cands.highlighted == 0, "Ctrl-P moves the highlight up"
             assert len(pilot.app.screen_stack) == 2, (
                 "Ctrl-P must navigate the list, NOT open the command palette"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# `x` on a candidate row you added — row-scoped delete
+# ---------------------------------------------------------------------------
+
+def _cand_labels(pilot):
+    cands = pilot.app.query_one("#candidates", OptionList)
+    return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+
+async def _highlight_cand(pilot, fragment: str) -> int:
+    """Park the #candidates cursor on the first model row whose label contains `fragment`."""
+    cands = pilot.app.query_one("#candidates", OptionList)
+    for i in range(cands.option_count):
+        opt = cands.get_option_at_index(i)
+        if (opt.id or "").startswith("cand:") and opt.id != "cand:add" and fragment in str(opt.prompt):
+            cands.highlighted = i
+            await pilot.pause()
+            return i
+    pytest.fail(f"no #candidates row matching {fragment!r}: {_cand_labels(pilot)}")
+
+
+async def _add_offchain_model(pilot, typed: str = "deepseek") -> None:
+    """Add an off-chain model through the add-model modal, accepting the top fuzzy match.
+    deepseek has no seeded `--verbose`, so there's no variant phase — one enter commits it."""
+    inp = await _open_add_modal(pilot)
+    inp.value = typed
+    await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def _sisyphus_model(pilot):
+    return pilot.app.cfg["agents"]["sisyphus"].get("model")
+
+
+def test_pilot_x_removes_the_row_you_added(pilot_config):
+    """The reported bug. Add a model, pick a DIFFERENT one, then press `x` on the row you added:
+    it must delete that row and leave the assignment alone.
+
+    `x` was target-scoped — `action_clear` read only `_current_target` and never the cursor — so
+    it cleared whatever was assigned (a model you weren't pointing at) while the added row stayed
+    put, since nothing ever removed a single `_custom_rows` entry."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot)
+            assert _sisyphus_model(pilot) == "deepseek/deepseek-v4-pro", "the add must set it"
+
+            # …then pick a chain model, so the added row is no longer the assignment.
+            await _highlight_cand(pilot, "zhipuai/glm-5")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) == "zhipuai/glm-5"
+            assert any("deepseek" in lbl for lbl in _cand_labels(pilot)), (
+                "a typed row stays pickable after you try something else"
+            )
+
+            # `x` on the added row: that row goes, the assignment does NOT.
+            await _highlight_cand(pilot, "deepseek")
+            await pilot.press("x")
+            await pilot.pause()
+            assert not any("deepseek" in lbl for lbl in _cand_labels(pilot)), (
+                f"`x` must delete the added row: {_cand_labels(pilot)}"
+            )
+            assert _sisyphus_model(pilot) == "zhipuai/glm-5", (
+                "`x` on a row you're pointing at must not clear a model you aren't"
+            )
+            # The cursor re-aims at what's assigned rather than vanishing with the deleted row.
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert cands.highlighted is not None, "the cursor must land somewhere after the delete"
+            assert "glm-5" in str(cands.get_option_at_index(cands.highlighted).prompt), (
+                "the cursor should land on the assigned (●) row"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_on_added_row_that_is_assigned_clears_too(pilot_config):
+    """`x` on an added row that IS the assignment takes both — clear == delete, as on a sub-target
+    row: a model left set on a target whose row just disappeared is the state this pane must not
+    show. That branch touches cfg, so `u` puts the model AND the row back (the `_custom_rows`
+    snapshot rides in the history entry's aux)."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot)
+            await _highlight_cand(pilot, "deepseek")
+            await pilot.press("x")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) is None, "the assignment goes with its row"
+            assert not any("deepseek" in lbl for lbl in _cand_labels(pilot))
+
+            await pilot.press("u")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) == "deepseek/deepseek-v4-pro", "undo restores the model"
+            assert any("deepseek" in lbl for lbl in _cand_labels(pilot)), (
+                "undo restores the row in lockstep (aux carries _custom_rows)"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_on_chain_row_still_clears(pilot_config):
+    """Unchanged for rows you didn't add: `x` on a chain row clears the target's assignment (the
+    documented meaning) and leaves the added row alone — omo's chain isn't yours to delete."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot)
+            await _highlight_cand(pilot, "zhipuai/glm-5")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await _highlight_cand(pilot, "opencode/kimi")  # a chain row, not the assignment
+            await pilot.press("x")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) is None, "`x` on a chain row still clears"
+            assert any("deepseek" in lbl for lbl in _cand_labels(pilot)), (
+                "…and must not take the added row with it"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_on_chain_row_shadowing_an_added_one_still_clears(pilot_config):
+    """Adding a model the chain ALREADY offers leaves a `_custom_rows` entry that `_build_rows`
+    dedupes away behind the chain row (History.push's docstring calls out that case). `x` on that
+    single visible row is a chain-row press and must still clear — hence the object-identity match
+    in `_remove_custom_row`; matching on `provider/model` would silently eat the hidden entry and
+    do nothing the user can see."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot, "zhipuai/glm-5")  # already a chain row
+            assert _sisyphus_model(pilot) == "zhipuai/glm-5"
+            assert pilot.app._custom_rows.get("agent:sisyphus"), "the add still records the row"
+            assert sum("zhipuai/glm-5" in lbl for lbl in _cand_labels(pilot)) == 1, (
+                "it must dedupe to ONE row, not render twice"
+            )
+
+            # Move the assignment elsewhere, so clearing is observably different from "the row
+            # I'm on happens to be what's set" — this is what pins the identity match.
+            await _highlight_cand(pilot, "openai/gpt-5.5")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) == "openai/gpt-5.5"
+
+            await _highlight_cand(pilot, "zhipuai/glm-5")
+            await pilot.press("x")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) is None, (
+                "`x` on the chain row must still clear the target, not quietly drop the hidden "
+                "_custom_rows entry that shares its id"
+            )
+            assert any("zhipuai/glm-5" in lbl for lbl in _cand_labels(pilot)), (
+                "…and the chain row itself stays in the list"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_x_from_targets_pane_ignores_the_candidate_cursor(pilot_config):
+    """The row-scoped delete is gated on #candidates having focus. With the candidate cursor
+    parked on an added row but focus back on #targets, `x` means clear-this-target again — the
+    left pane must never reach across and eat a row."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot)
+            await _highlight_cand(pilot, "deepseek")
+            await pilot.press("left")  # focus #targets, cursor still on the added row
+            await pilot.pause()
+            assert pilot.app.focused is pilot.app.query_one("#targets", OptionList)
+
+            await pilot.press("x")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) is None, "`x` on #targets still clears the target"
+            assert any("deepseek" in lbl for lbl in _cand_labels(pilot)), (
+                "…and leaves the candidate row the cursor happened to be on"
             )
 
     asyncio.run(_run())
