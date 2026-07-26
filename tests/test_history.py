@@ -180,24 +180,43 @@ class TestAuxStampAndRedoDrop:
     """Two escape hatches app.py needs for state that rides along with an entry but is NOT
     undoable on its own — the active preset index (DESIGN §presets.py)."""
 
-    def test_set_aux_key_stamps_every_entry(self):
-        h = History({"n": 0}, aux={"custom_rows": {}, "active": 0})
-        h.push({"n": 1}, "one", aux={"custom_rows": {}, "active": 0})
-        h.push({"n": 2}, "two", aux={"custom_rows": {}, "active": 0})
-        h.set_aux_key("active", 2)
-        # Past AND present: an undo must not resurrect the old index.
-        assert h.current_aux()["active"] == 2
-        h.undo()
-        assert h.current_aux()["active"] == 2
-        h.undo()
-        assert h.current_aux()["active"] == 2
-        assert h.current_aux()["custom_rows"] == {}, "other aux keys survive the stamp"
+    def _timeline(self, *actives):
+        h = History({"n": 0}, aux={"custom_rows": {}, "active": actives[0]})
+        for i, a in enumerate(actives[1:], start=1):
+            h.push({"n": i}, f"e{i}", aux={"custom_rows": {}, "active": a})
+        return h
 
-    def test_set_aux_key_on_entries_with_no_aux(self):
-        h = History({"n": 0})
+    def _actives(self, h):
+        return [e.aux.get("active") for e in h._entries]
+
+    def test_map_aux_key_rewrites_past_and_present(self):
+        h = self._timeline(0, 0, 0)
+        h.map_aux_key("active", lambda a: 2 if a == 0 else a)
+        # Past AND present: an undo must not resurrect the old index.
+        assert self._actives(h) == [2, 2, 2]
+        h.undo()
+        assert h.current_aux()["active"] == 2
+        assert h.current_aux()["custom_rows"] == {}, "other aux keys survive"
+
+    def test_map_aux_key_leaves_other_values_alone(self):
+        # The whole reason this isn't a blanket stamp: an entry recorded under a DIFFERENT preset
+        # must keep pointing there, or its switch could no longer be undone.
+        h = self._timeline(0, 1, 0)
+        h.map_aux_key("active", lambda a: 2 if a == 0 else a)
+        assert self._actives(h) == [2, 1, 2]
+
+    def test_map_aux_key_preserves_a_sentinel(self):
+        # app.py marks "the preset this entry pointed at was deleted" with -1; a later fork must
+        # not overwrite it, or the warning it drives is silently lost.
+        h = self._timeline(-1, -1, 0)
+        h.map_aux_key("active", lambda a: 1 if a == 0 else a)
+        assert self._actives(h) == [-1, -1, 1]
+
+    def test_map_aux_key_skips_entries_without_the_key(self):
+        h = History({"n": 0})           # no aux at all
         h.push({"n": 1}, "one")
-        h.set_aux_key("active", 1)
-        assert h.current_aux() == {"active": 1}
+        h.map_aux_key("active", lambda a: 99)
+        assert h.current_aux() == {}
 
     def test_drop_redo_discards_the_tail(self):
         h = History({"n": 0})

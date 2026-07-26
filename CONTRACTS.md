@@ -129,18 +129,22 @@ The stub files ARE the signatures; implement their bodies. Summary:
   `state` unchanged; `aux` rides along), `.undo()`/`.redo()->(state, label)|None`,
   `.current_state()->dict`, `.current_aux()->dict` (the cursor entry's `aux`, `{}` if none),
   `.clear_aux(keep=())->None` (drop all entries' `aux`, preserving the named keys for dict-shaped
-  aux — app.py keeps `active` across a catalog refresh), `.set_aux_key(key, value)->None` (stamp a
-  key into EVERY entry, for companion state that is deliberately not undoable — app.py's preset
-  fork), `.drop_redo()->None` (discard the redo tail without pushing, for an action that changes
-  state without changing cfg — switching to a preset holding identical models),
-  `.matches_current(state)->bool`, and the
+  aux — app.py keeps `active` across a catalog refresh), `.drop_redo()->None` (discard the redo
+  tail without pushing, for an action that changes state without changing cfg — switching to a
+  preset holding identical models),
+  `.matches_current(state)->bool`, `.map_aux_key(key, fn)->None` (rewrite a key PER ENTRY, for
+  companion state that is deliberately not undoable — app.py remaps the active-preset index when
+  a delete renumbers the list, and when a fork or a no-op switch moves the preset some entries
+  point at. Per-entry, never a blanket stamp: entries legitimately hold different values, and a
+  stamp erased both older switches and the delete sentinels), and the
   `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. `aux` is an out-of-cfg companion
-  snapshot (app.py stores `_custom_rows`). Pure data; snapshots deep-copied in and out. Consumed
-  only by `app.py`.
+  snapshot (app.py stores `_custom_rows` + the active preset index). Pure data; snapshots
+  deep-copied in and out. Consumed only by `app.py`.
 - `presets.py`: `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass
   Store(presets, active)` with `.current()->Preset|None` and `.is_empty()->bool`;
-  `load(config_path)->Store` (always `PRESET_COUNT` entries; missing/corrupt/wrong-version/short →
-  empty store, never raises; `active` normalized to a real preset);
+  `load(config_path)->Store` (a DENSE, unbounded list; missing/corrupt/wrong-version → empty
+  store, never raises; `active` normalized into range; MIGRATES the original fixed-3 shape —
+  `null` holes dropped, `active` following the preset it named);
   `write(config_path, store)->Store` (**the ONLY disk write in this module** — atomic, RAISES on
   failure so app.py notifies, returns the store as read back; an existing file that does not parse
   is moved to `<path>.corrupt` first, since `load` degrades it to an empty store the app would
@@ -152,7 +156,7 @@ The stub files ARE the signatures; implement their bodies. Summary:
   `model_count(preset)`, `sanitize_name(text, index)` (also strips `[`/`]` — Textual parses plain
   strings as markup, and a persisted name crashed every launch), `timestamp()`,
   `presets_path(config_path)`;
-  constants `PRESET_COUNT = 3`, `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. Stored at
+  constants `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. Stored at
   `<config_dir>/.omodel-presets.json` — next to the ACTIVE config, so a temp `--config` gets its own
   set. Non-dict `agents`/`categories` coerce to `{}` on read and write. Pure data + file IO, no
   Textual; consumed only by `app.py`. **Invariant app.py upholds:** the config on disk equals the

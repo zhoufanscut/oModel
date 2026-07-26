@@ -76,14 +76,16 @@ line when a new one does.
   *inside* agents/categories (preserved verbatim in `original.jsonc`). → config_io.py `serialize`
 - **backup vs history vs preset** — the three save-ish things, don't conflate. *backup* = verbatim
   `.backup/<ts>.jsonc` copy taken automatically at each save (on disk, cross-session, `--restore`);
-  *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`); *preset* = one of 3 **named sets
+  *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`); *preset* = one of any number of **named sets
   of assignments you switch between**, one of which is always active and mirrored by the config.
   → config_io.py / history.py / presets.py
-- **preset / active preset** — one of **3** named sets of assignments in the `#presets` card; the
-  **active** one (`●`) is what your edits go into and what `s` publishes to the config. `enter`
-  switches (a staged, undoable replace), `a` forks, `x` deletes but never the active one. Addressed
-  by **index** (0–2, shown 1–3) — ⚠ **never a "slot"**: that word means a *target*. Stored beside the
-  active config as `.omodel-presets.json`. → DESIGN decision #17, presets.py
+- **preset / active preset** — one of **any number** of named sets of assignments in the `#presets`
+  card (seeded with one `default`; `+ new preset…` adds more); the **active** one (`●`) is what your
+  edits go into and what `s` publishes to the config. `enter` switches (a staged, undoable replace),
+  `a` overwrites, `r` renames, `x` deletes but never the active one. Addressed by **index**
+  (0-based, shown 1-based) — ⚠ **never a "slot"**: that word means a *target*, and unlike a slot a
+  preset index is **not stable**: the list is dense, so a delete renumbers everything after it.
+  Stored beside the active config as `.omodel-presets.json`. → DESIGN decision #17, presets.py
 - **the presets invariant** — *the config on disk always equals the active preset*, never a fourth
   orphan state. Source of the **one write rule**: only `s` writes, and it writes **both** files
   (so quitting discards both, and `x` refuses on the active preset). → DESIGN §presets.py

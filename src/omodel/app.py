@@ -12,10 +12,12 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
   * OptionList#targets     — AGENTS then CATEGORIES. Option IDs: 'agent:<name>',
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
                             'cat:<name>'.
-  * OptionList#presets     — the 3 named presets (decision #17 / presets.py), a FIXED 5-line
-                            card under #targets inside Vertical#left. Option IDs 'preset:0' …
-                            'preset:2'; rows '● 1 <name>' / '  3 (empty)' ('●' = the ACTIVE
-                            preset — the one your edits go into and `s` publishes).
+  * OptionList#presets     — the named presets (decision #17 / presets.py), a card under
+                            #targets inside Vertical#left that grows with the list and caps at
+                            half the column. Option IDs 'preset:0' … 'preset:<n-1>' plus the
+                            trailing 'preset:new' (+ new preset…). Rows '● 1 <name>' ('●' = the
+                            ACTIVE preset — your edits go into it and `s` publishes it).
+                            UNLIMITED and DENSE: no empty rows, and a delete renumbers.
                             Heading is the border TITLE; the highlighted row's summary goes to
                             the border SUBTITLE (never #detail — see _preset_highlighted).
   * Static#detail          — current model/variant + catalog.detail() line. The detail()
@@ -53,13 +55,18 @@ the whole row) · a pane-contextual (candidates + targets category
 rows → add/edit-model modal; targets agent rows → add sub-target chooser) ·
 on a #presets row: enter SWITCHES to that preset — a staged, undoable replace that banks
 your edits into the one you leave; a forks the current models into it + names it + switches
-there; x deletes it behind a confirm, refused on the active one; v bells · u undo / ctrl+r redo
+there; r renames it; x deletes it behind a confirm, refused on the active one; v bells. The
+trailing `+ new preset…` row (id preset:new) takes enter/a to APPEND one — presets are
+unlimited and the list is dense, so a delete renumbers the rest · u undo / ctrl+r redo
 (in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
-CatalogUnavailable) · ? help (open HelpModal — the full key reference; base-screen-only) ·
+CatalogUnavailable) — EXCEPT on a #presets row, where r RENAMES · ? help (open HelpModal — the full key reference; base-screen-only) ·
 q quit (when dirty: a three-way save & quit / discard / cancel — `s` writes the config AND
-the presets file, so a discard drops both). The hint bar (Static#hints) is minimal and static — only
+the presets file, so a discard drops both). In the two BUTTON modals (QuitModal, ConfirmModal)
+←/→ and vim h/l walk the button row, wrapping like tab (`app.focus_next`/`focus_previous`) — the
+App's own ←/→ are check_action-gated to the base screen, so they are free inside a modal; in
+ConfirmModal j/k stay on the scrolling diff body. The hint bar (Static#hints) is minimal and static — only
 `s save · ? help · q quit`; every other key is documented in the `?` overlay (HelpModal) and,
 where relevant, in per-modal hint lines. (r is also advertised in the Static#providers header.)
 
@@ -134,14 +141,51 @@ _GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 _ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
 # Cells a preset name may occupy in a row: the 32-wide pane, less its border (2), less
-# OptionList's own DEFAULT_CSS `padding: 0 1` (2) — MEASURED: size.width is 28, and there is no
-# reserved scrollbar gutter — less the `● 1 ` prefix (4). Names are capped at presets.MAX_NAME
-# CHARACTERS on save; this is the render-time guard for wide (CJK) characters, which cost 2
-# cells each — 24 of them would otherwise wrap each row onto two lines and push the third preset
-# out of the fixed-height card. Used only as the fallback before layout; _populate_presets
-# prefers the widget's measured width, so a padding/CSS change can't silently reintroduce the
-# wrap. See _fit_cells.
-_PRESET_NAME_CELLS = 24
+# OptionList's own DEFAULT_CSS `padding: 0 1` (2), less the always-reserved scrollbar gutter (2)
+# — MEASURED: scrollable_content_region.width is 26 — less the `● 1 ` prefix (4). Names are
+# capped at presets.MAX_NAME CHARACTERS on save; this is the render-time guard for wide (CJK)
+# characters, which cost 2 cells each — 22 of them would otherwise wrap every row onto two
+# lines, doubling the height of a card that is capped at half the column. Used only as the
+# fallback before layout (and adjusted there for a wider row number); _populate_presets prefers
+# the widget's measured width, so a padding/CSS change can't silently reintroduce the wrap.
+# See _fit_cells.
+_PRESET_NAME_CELLS = 22
+
+# Option id of the trailing `+ new preset…` row in `#presets` — the only way to create one, and
+# a stable id the pilot tests address (like `cand:add`, whose idiom it borrows). It is NOT a
+# preset: `_preset_index` returns None for it and every caller branches on it explicitly.
+PRESET_NEW = "preset:new"
+
+# Stored in a history entry's `aux["active"]` once the preset it named has been deleted. Any
+# out-of-range int would do; a named sentinel keeps `_restore_state`'s "was deleted" branch
+# readable, and negative can never collide with a real index.
+_DELETED = -1
+
+
+def _retarget_active(active, was: int, now: int):
+    """Move a stored active-preset index from `was` to `now`, leaving every other value alone.
+
+    Used by the two actions that change which preset is active WITHOUT pushing a history entry
+    (a fork, and a switch between presets holding identical models): the entries recorded on the
+    preset you were sitting on have to follow you, or the next `u` quietly moves the `●` back.
+    Deliberately NOT `set_aux_key`, which stamps ONE value onto every entry — that erases both
+    genuinely different indices (so an older switch could no longer be undone) and the `_DELETED`
+    sentinels a prior delete wrote, which is what silently voided the "that preset was deleted"
+    warning."""
+    return now if active == was else active
+
+
+def _shift_active(active, removed: int):
+    """Remap a stored active-preset index after the preset at `removed` was deleted.
+
+    Presets are a dense list, so deleting one renumbers everything after it. `removed` itself
+    becomes `_DELETED` — the entry pointed at a preset that no longer exists, and pretending it
+    means the one that slid into that number would move a user's models without a word."""
+    if not isinstance(active, int):
+        return active
+    if active == removed:
+        return _DELETED
+    return active - 1 if active > removed else active
 
 
 def _is_gpt_model(model_id: str) -> bool:
@@ -746,13 +790,17 @@ class VariantModal(ModalScreen):
 
 
 class PresetNameModal(ModalScreen):
-    """`a` on a preset row — name the preset being saved.
+    """Name a preset — for all three things that need a name.
 
-    THIS MODAL IS THE OVERWRITE CONFIRM: on an occupied preset it opens prefilled and titled
-    `Overwrite preset 2 "max-power"?`.  That wording is load-bearing, not decoration — `a` means
-    "add model" in every other pane, so someone who tabs into the presets card and presses `a`
-    from habit (then `enter` reflexively) has to be told what they are about to replace, and a
-    preset write is outside the undo history.
+    * **new** (`a`/`enter` on `+ new preset…`, `index=None`): empty box, "Save new preset".
+    * **overwrite** (`a` on an existing row): prefilled, titled `Overwrite preset 2 "max-power"?`.
+      THIS MODAL IS THE OVERWRITE CONFIRM, and that wording is load-bearing, not decoration —
+      `a` means "add model" in every other pane, so someone who tabs into the presets card and
+      presses `a` from habit (then `enter` reflexively) has to be told what they are about to
+      replace, and a preset write is outside the undo history.
+    * **rename** (`r` on an existing row, `rename=True`): prefilled, and the ONLY mode that
+      touches nothing but the name — the distinct title is what keeps it from reading like the
+      overwrite it sits one key away from.
 
     Dismisses with the RAW typed text (the caller sanitizes via presets.sanitize_name) or None
     on cancel."""
@@ -778,29 +826,34 @@ class PresetNameModal(ModalScreen):
     }
     """
 
-    def __init__(self, index: int, existing) -> None:
+    def __init__(self, index: int | None, existing, rename: bool = False) -> None:
         super().__init__()
-        self._index = index
+        self._index = index          # None == a NEW preset (appended); no number to show yet
         self._existing = existing
+        self._rename = rename
 
     def compose(self) -> ComposeResult:
-        overwrite = self._existing is not None
+        overwrite = self._existing is not None and not self._rename
+        number = "" if self._index is None else f" {self._index + 1}"
+        if self._rename:
+            title = f'Rename preset{number} "{self._existing.name}"'
+        elif overwrite:
+            title = f'Overwrite preset{number} "{self._existing.name}"?'
+        else:
+            title = "Save new preset"
         with Vertical():
-            yield Label(
-                f'Overwrite preset {self._index + 1} "{self._existing.name}"?'
-                if overwrite
-                else f"Save preset {self._index + 1}",
-                id="preset-name-title",
-                markup=False,  # quotes a preset name
-            )
+            yield Label(title, id="preset-name-title", markup=False)  # quotes a preset name
             yield Input(
-                value=self._existing.name if overwrite else "",
-                placeholder=f"preset {self._index + 1}",
+                value=self._existing.name if self._existing is not None else "",
+                placeholder="preset name",
                 max_length=presets_mod.MAX_NAME,
                 id="preset-name-input",
             )
+            # "+ switch" on the two that MOVE you: both overwrite and new leave you editing that
+            # preset, which the title alone doesn't say and which decides where your next edit goes.
+            hint = "rename" if self._rename else ("overwrite + switch" if overwrite else "save + switch")
             yield Static(
-                "enter overwrite · esc cancel" if overwrite else "enter save · esc cancel",
+                f"enter {hint} · esc cancel",
                 id="preset-name-hints",
                 classes="modal-hints",
             )
@@ -829,6 +882,13 @@ class ConfirmModal(ModalScreen):
         Binding("escape", "cancel", "No", show=False),
         Binding("y", "accept", "Yes", show=False),
         Binding("n", "decline", "No", show=False),
+        # Yes/No sit side by side, so move between them side to side (see QuitModal). The
+        # vertical keys stay on the scrolling body — j/k scroll the diff, h/l pick the answer,
+        # the same split the base screen uses.
+        Binding("left", "app.focus_previous", "Previous", show=False),
+        Binding("right", "app.focus_next", "Next", show=False),
+        Binding("h", "app.focus_previous", "Previous", show=False),
+        Binding("l", "app.focus_next", "Next", show=False),
         Binding("up", "scroll(-1)", "Scroll up", show=False),
         Binding("k", "scroll(-1)", "Scroll up", show=False),
         Binding("down", "scroll(1)", "Scroll down", show=False),
@@ -864,6 +924,10 @@ class ConfirmModal(ModalScreen):
     }
     ConfirmModal Button {
         margin: 0 1;
+    }
+    /* Emphasis follows focus rather than sitting permanently on Yes — see QuitModal's note. */
+    ConfirmModal Button:focus {
+        background: $primary;
     }
     ConfirmModal .modal-hints {
         margin-top: 1;
@@ -905,7 +969,7 @@ class ConfirmModal(ModalScreen):
                 # markup=False: the save diff quotes model ids straight from the config.
                 yield Static(self._body, id="confirm-body-text", markup=False)
             with Horizontal(id="confirm-buttons"):
-                yield Button(self._yes_label, variant="primary", id="confirm-yes")
+                yield Button(self._yes_label, id="confirm-yes")  # focus is the emphasis
                 yield Button(self._no_label, id="confirm-no")
             yield Static(
                 self._hints or "↑↓/jk scroll · y yes · n no · esc cancel",
@@ -965,6 +1029,15 @@ class QuitModal(ModalScreen):
         Binding("c", "cancel", "Cancel", show=False),
         Binding("s", "save", "Save & quit", show=False),
         Binding("d", "discard", "Discard", show=False),
+        # Move along the button row the way the buttons are laid out — horizontally. `tab` alone
+        # (Textual's only default) is a poor fit for a row you read left-to-right, and `←`/`→`
+        # are dead keys here otherwise: the App's own ←/→ are gated to the base screen
+        # (check_action), so nothing else claims them. Same two actions `tab`/`shift+tab` use, so
+        # they wrap identically. `h`/`l` mirror them, as everywhere else in the app.
+        Binding("left", "app.focus_previous", "Previous", show=False),
+        Binding("right", "app.focus_next", "Next", show=False),
+        Binding("h", "app.focus_previous", "Previous", show=False),
+        Binding("l", "app.focus_next", "Next", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -986,6 +1059,16 @@ class QuitModal(ModalScreen):
     QuitModal Button {
         margin: 0 1;
     }
+    /* The emphasis has to FOLLOW focus. `variant="primary"` paints one button blue PERMANENTLY,
+       which competes with Textual's focus styling — two buttons look emphasized at once and the
+       eye reads the static blue one as selected, so moving along the row appears to do nothing.
+       Dropping the variant and colouring `:focus` instead makes the fill the cursor. NB Textual
+       focuses buttons with `text-style: b reverse` and that wins over anything set here, so this
+       renders as $primary TEXT on a light fill, not the other way round — either way it is one
+       unmistakable block, and it moves. */
+    QuitModal Button:focus {
+        background: $primary;
+    }
     QuitModal .modal-hints {
         margin-top: 1;
         color: $text-muted;
@@ -1002,7 +1085,8 @@ class QuitModal(ModalScreen):
             yield Label("Quit?")
             yield Static(self._body, id="quit-body", markup=False)
             with Horizontal(id="quit-buttons"):
-                yield Button("Save & quit", variant="primary", id="quit-save")
+                # No `variant="primary"` on any of them — see the DEFAULT_CSS note.
+                yield Button("Save & quit", id="quit-save")
                 yield Button("Discard", id="quit-discard")
                 yield Button("Cancel", id="quit-cancel")
             yield Static(
@@ -1176,11 +1260,13 @@ class HelpModal(ModalScreen):
             "                 (on an agent row: adds a sub-target)",
             "  x              clear  (↳ sub-target row: delete it)",
             "",
-            "Presets  (3 named sets of models; ● is the one you're editing)",
-            "  tab            reach the card  (see Navigate)",
-            "  enter          switch to it  (your edits are kept in the one you leave)",
-            "  a              fork the current models into it + name it",
+            "Presets  (named model sets; ● = the one you edit)",
+            "  enter          switch to it",
+            "                 (edits stay in the one you leave)",
+            "  a              overwrite it with the current models",
+            "  r              rename it",
             "  x              delete it  (not the one you're using)",
+            "  + new preset…  add one (last row; no limit)",
             "",
             "Undo",
             "  u              undo the last edit",
@@ -1195,6 +1281,7 @@ class HelpModal(ModalScreen):
             "  enter          choose / confirm",
             "  esc            back / cancel",
             "  y  n           yes / no",
+            "  ←→  hl         move between buttons",
             "  tab            fill the highlighted model",
             "  ⌃p  ⌃n         move the list",
             "  u  c           pick ultrawork / compaction (add-sub)",
@@ -1257,7 +1344,9 @@ class OModelApp(App):
         border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
     }
     #presets {
-        height: 5;                       /* FIXED: 3 preset rows + border. Never grows — the card is a bounded 3, and #targets takes the rest (DESIGN decision #17). */
+        height: auto;                    /* grows with however many presets you keep (unlimited) … */
+        max-height: 50%;                 /* … but never past half the column: #targets keeps the rest, and the card scrolls internally beyond that (DESIGN decision #17). */
+        scrollbar-gutter: stable;        /* ALWAYS reserve the 2-cell gutter, so the name budget _populate_presets measures can't be invalidated by the scrollbar appearing (see _fit_cells). */
         border: solid $surface-lighten-3;
     }
     #right {
@@ -1332,8 +1421,8 @@ class OModelApp(App):
         # state reads as clean, and a structural-but-unserialized change (an empty
         # ultrawork/compaction sub-object) is undoable yet never marks the file dirty.
         self._saved_text = config_io.serialize(cfg)
-        # The presets store for THIS config (presets.py; decision #17): 3 named assignment sets,
-        # exactly one ACTIVE, under the invariant that the config on disk always equals the
+        # The presets store for THIS config (presets.py; decision #17): any number of named
+        # assignment sets, exactly one ACTIVE, under the invariant that the config on disk equals the
         # active preset — never a fourth, orphan state. Read best-effort; a missing or mangled
         # file is SEEDED in memory from the config you already have, so there is always at least
         # one preset and the invariant holds from the first frame. NOTHING here is written until
@@ -1412,8 +1501,9 @@ class OModelApp(App):
         # markup=False: provider names come from `opencode` (see the module-top note).
         yield Static("", id="providers", markup=False)
         with Horizontal(id="main"):
-            # Left column: the targets list (1fr) over the fixed 5-line presets card, so the
-            # three presets are always visible without scrolling past ~21 target rows.
+            # Left column: the targets list (1fr) over the presets card, which grows with the
+            # list and is capped at half the column (scrolling past that), so presets are
+            # reachable without scrolling past ~21 target rows and #targets is never squeezed.
             with Vertical(id="left"):
                 yield VimOptionList(id="targets")
                 yield VimOptionList(id="presets")
@@ -1428,7 +1518,7 @@ class OModelApp(App):
         self._render_providers()
         self._populate_targets()
         # The card's heading lives in its border (not an in-list disabled row like #targets'
-        # AGENTS/CATEGORIES headers), so all 3 rows fit the fixed 5 lines.
+        # AGENTS/CATEGORIES headers), so no line of the bounded card is spent on a label.
         self.query_one("#presets", OptionList).border_title = "PRESETS"
         self._populate_presets()
         if self._sync_conflict:
@@ -1540,8 +1630,8 @@ class OModelApp(App):
     @staticmethod
     def _fit_cells(text: str, limit: int) -> str:
         """Truncate to `limit` terminal CELLS (not code points — 24 CJK chars are 48 cells).
-        A row that overflows the 32-wide pane wraps onto a second line, which would push the
-        third preset out of the fixed 5-line card."""
+        A row that overflows the 32-wide pane wraps onto a second line, doubling the height of a
+        card that is bounded at half the left column."""
         if cell_len(text) <= limit:
             return text
         out = ""
@@ -1552,28 +1642,42 @@ class OModelApp(App):
         return out + "…"
 
     def _populate_presets(self, select: int | None = None) -> None:
-        """Render the three preset rows (`preset:0` … `preset:2`).  `● ` marks the **active**
-        preset — the one your edits are going into and the one `s` publishes to the config; an
-        unset one reads `(empty)`.  Called on mount and after every cfg mutation (via _record /
-        _rerender_all), since a switch moves the marker."""
+        """Render one row per preset (`preset:0` … `preset:<n-1>`) plus the trailing
+        `+ new preset…` row (`preset:new`).  `● ` marks the **active** preset — the one your edits
+        are going into and the one `s` publishes to the config.  Called on mount and after every
+        cfg mutation (via _record / _rerender_all), since a switch moves the marker.
+
+        There is no "(empty)" row any more: the list is dense and unbounded, so a preset either
+        exists or isn't there, and `+ new preset…` is the one way to make another — the same
+        idiom as `+ add model…` in the candidate pane."""
         try:
             lst = self.query_one("#presets", OptionList)
         except Exception:
             return  # not mounted yet (a cfg edit during construction) — on_mount renders it
         prior = lst.highlighted if select is None else select
         lst.clear_options()
-        # Measured content width (already excludes border + scrollbar gutter) less the
-        # `● 1 ` prefix; the constant covers the pre-layout first render.
-        room = max(8, lst.size.width - 4) if lst.size.width else _PRESET_NAME_CELLS
+        # Name budget = the width rows are actually WRAPPED against, less the `● 12 ` prefix.
+        # That width is `scrollable_content_region`, NOT `size` — `size.width` is the content
+        # region and does not subtract the scrollbar, so measuring it overflowed every row by 2
+        # cells as soon as the card scrolled (verified: 15 rendered lines for 13 rows). Reading
+        # it before `clear_options()` is NOT a fix either: at the moment the list first outgrows
+        # the card the scrollbar isn't there yet, so the pre-clear read is the pre-scrollbar
+        # width. `scrollbar-gutter: stable` in the CSS is what makes this reliable — the gutter
+        # is always reserved, so this number is the same whether the card scrolls or not.
+        # The prefix grows a cell at 10 presets, hence deriving it from the count.
+        prefix = 3 + len(str(max(len(self._store.presets), 1)))
+        measured = lst.scrollable_content_region.width
+        # Pre-layout (first render, width 0) the constant stands in; it is stated for a 4-cell
+        # prefix, so a wider one comes out of the name's share rather than off the end.
+        fallback = _PRESET_NAME_CELLS - (prefix - 4)
+        room = max(8, measured - prefix) if measured else max(8, fallback)
         for i, preset in enumerate(self._store.presets):
-            if preset is None:
-                lst.add_option(Option(f"  {i + 1} (empty)", id=f"preset:{i}"))
-                continue
             active = i == self._store.active
             name = self._fit_cells(preset.name, room)
             lst.add_option(
                 Option(_lit(f"{'● ' if active else '  '}{i + 1} {name}"), id=f"preset:{i}")
             )
+        lst.add_option(Option("+ new preset…", id=PRESET_NEW))
         if prior is None and lst.option_count:
             # Seed the cursor when the rows are built, not on focus: `tab` is the only way in and
             # Textual's OptionList does not auto-highlight on focus — an unseeded card swallows
@@ -1582,26 +1686,33 @@ class OModelApp(App):
         if prior is not None and 0 <= prior < lst.option_count:
             lst.highlighted = prior
 
-    @staticmethod
-    def _preset_index(option_id):
-        """`preset:<i>` → i, or None for anything else / out of range."""
+    def _preset_index(self, option_id):
+        """`preset:<i>` → i, or None for anything else — `preset:new` included, which every
+        caller has to handle separately (it addresses no preset)."""
         if not option_id or not option_id.startswith("preset:"):
             return None
         try:
             idx = int(option_id[len("preset:"):])
         except ValueError:
             return None
-        return idx if 0 <= idx < presets_mod.PRESET_COUNT else None
+        return idx if 0 <= idx < len(self._store.presets) else None
 
-    def _highlighted_preset_index(self):
-        lst = self.query_one("#presets", OptionList)
+    def _highlighted_preset_id(self):
+        """The option id under the cursor in `#presets` — `preset:<i>`, `preset:new`, or None."""
+        try:
+            lst = self.query_one("#presets", OptionList)
+        except Exception:
+            return None
         hi = lst.highlighted
         if hi is None:
             return None
         try:
-            return self._preset_index(lst.get_option_at_index(hi).id)
+            return lst.get_option_at_index(hi).id
         except Exception:
             return None
+
+    def _highlighted_preset_index(self):
+        return self._preset_index(self._highlighted_preset_id())
 
     def _presets_focused(self) -> bool:
         """Whether `#presets` owns focus — `a`/`x`/`v` dispatch on this (they were focus-blind
@@ -1668,13 +1779,10 @@ class OModelApp(App):
         preset you came from until you press `s`, which is what keeps "the config always equals
         one of the presets" true at rest."""
         preset = self._store.presets[index]
-        if preset is None:
-            self.bell()
-            self.notify(f"Preset {index + 1} is empty — press a to put your models in it.")
-            return
         if index == self._store.active:
             self.notify(f"Already editing '{preset.name}'.")
             return
+        came_from = self._store.active
         self._store = self._projected_store()  # bank the in-flight edits into the old preset
         self._store.active = index
         agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
@@ -1690,31 +1798,65 @@ class OModelApp(App):
             # untruncated redo tail would let `ctrl+r` resurrect an undone edit AND jump the `●`
             # to a preset the user just left.
             self._history.drop_redo()
-            self._history.set_aux_key("active", self._store.active)
+            self._history.map_aux_key(
+                "active", lambda a: _retarget_active(a, came_from, self._store.active)
+            )
             self._rerender_all()
         self.notify(f"Now editing '{preset.name}' — s writes it to your config.")
 
-    def _fork_preset(self, index: int) -> None:
-        """`a` — copy the models you're looking at into preset `index`, name it, and switch to
-        it. This is how presets 2 and 3 come into being: fork the one you're on, then diverge.
+    def _fork_preset(self, index: int | None) -> None:
+        """`a` — copy the models you're looking at into a preset, name it, and switch to it.
 
-        The name modal doubles as the overwrite confirm. Staged like everything else — `s`
-        persists it, quitting without saving drops it."""
+        `index is None` (the `+ new preset…` row, or `enter` on it) APPENDS a new preset; an
+        existing index OVERWRITES that one, with the name modal doubling as the confirm. This is
+        how a second preset comes into being: fork the one you're on, then diverge.
+
+        Staged like everything else — `s` persists it, quitting without saving drops it."""
+        existing = None if index is None else self._store.presets[index]
+
+        def _named(text) -> None:
+            if text is None:
+                return
+            came_from = self._store.active
+            self._store = self._projected_store()  # bank in-flight edits into the old preset
+            at = len(self._store.presets) if index is None else index
+            name = presets_mod.sanitize_name(text, at)
+            fresh = presets_mod.capture(name, self.cfg)
+            if index is None:
+                self._store.presets.append(fresh)
+            else:
+                self._store.presets[index] = fresh
+            self._store.active = at
+            # A fork changes `active` without changing cfg, so it pushes no history entry — the
+            # entries recorded on the preset you were sitting on have to follow you here, or the
+            # next `u` would quietly move the `●` back (and fold the restored models into the
+            # preset you'd left). Only those entries: see `_retarget_active`.
+            self._history.map_aux_key("active", lambda a: _retarget_active(a, came_from, at))
+            self._populate_presets(select=at)
+            self.notify(f"Now editing '{name}' (preset {at + 1}) — s to save.")
+
+        self.push_screen(PresetNameModal(index, existing), _named)
+
+    def _rename_preset(self, index: int) -> None:
+        """`r` on a preset row — change its name, nothing else.
+
+        Deliberately does NOT restamp `saved_at`: that stamp answers "when were these models
+        banked", and renaming banks nothing. Staged like every other preset edit; the ACTIVE
+        preset's name is read back through `_projected_store` (which rebuilds it from cfg under
+        `current.name`), so renaming the one you're on sticks too."""
+        preset = self._store.presets[index]
+
         def _named(text) -> None:
             if text is None:
                 return
             name = presets_mod.sanitize_name(text, index)
-            self._store = self._projected_store()  # bank in-flight edits into the old preset
-            self._store.presets[index] = presets_mod.capture(name, self.cfg)
-            self._store.active = index
-            # A fork changes `active` without changing cfg, so it pushes no history entry —
-            # stamp the index across the timeline or the next `u` would quietly move the `●`
-            # back (and fold the restored models into the preset you'd left).
-            self._history.set_aux_key("active", index)
+            if name == preset.name:
+                return
+            preset.name = name
             self._populate_presets(select=index)
-            self.notify(f"Now editing '{name}' (preset {index + 1}) — s to save.")
+            self.notify(f"Renamed preset {index + 1} to '{name}' — s to save.")
 
-        self.push_screen(PresetNameModal(index, self._store.presets[index]), _named)
+        self.push_screen(PresetNameModal(index, preset, rename=True), _named)
 
     def _delete_preset(self, index: int) -> None:
         """`x` — drop preset `index`, behind a confirm.
@@ -1722,11 +1864,8 @@ class OModelApp(App):
         REFUSED on the active preset: the config on disk mirrors it, so deleting it would strand
         the config as a state matching no preset — exactly the orphan the whole design exists to
         prevent. Switch somewhere else first. (That also guarantees you can never reach zero
-        presets.)"""
+        presets — with one left it IS the active one, so `x` refuses.)"""
         preset = self._store.presets[index]
-        if preset is None:
-            self.bell()
-            return
         if index == self._store.active:
             self.bell()
             self.notify(
@@ -1738,13 +1877,21 @@ class OModelApp(App):
         def _confirm(ok) -> None:
             if not ok:
                 return
-            self._store.presets[index] = None
+            del self._store.presets[index]
+            if self._store.active > index:
+                self._store.active -= 1
             presets_mod.normalize_active(self._store)
-            # Deliberately NOT stamped like the fork is: history entries recorded while that
-            # preset was active keep pointing at it, so `_restore_state` can SEE that the
-            # destination is gone and say so, rather than moving models into a preset the user
-            # never chose without a word.
-            self._populate_presets(select=index)
+            # The list is DENSE, so removing an entry renumbers every later preset — and the undo
+            # history stores which preset was active per entry. Remap them in the same breath, or
+            # a later `u` would restore models into whichever preset slid into that number.
+            # Deliberately NOT `set_aux_key` (one value everywhere): entries legitimately differ,
+            # and an entry pointing at the preset that just went away must stay recognizable —
+            # `_DELETED` is what lets `_restore_state` say so instead of picking silently.
+            self._history.map_aux_key("active", lambda a: _shift_active(a, index))
+            # Land on the row that took this one's place, or the new last preset when you
+            # deleted the tail — never on `+ new preset…`, which is not a preset and would leave
+            # `x`/`r` inert under a cursor that just did something.
+            self._populate_presets(select=min(index, len(self._store.presets) - 1))
             self.notify(f"Deleted preset {index + 1} — s to save.")
 
         count = presets_mod.model_count(preset)
@@ -2110,6 +2257,11 @@ class OModelApp(App):
 
     @on(OptionList.OptionSelected, "#presets")
     def _preset_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id == PRESET_NEW:
+            # Same as `a` here: `enter` on `+ new preset…` is the obvious gesture, and the row
+            # would otherwise be inert under the key that activates every other row.
+            self._fork_preset(None)
+            return
         idx = self._preset_index(event.option_id)
         if idx is not None:
             self._switch_preset(idx)
@@ -2276,8 +2428,8 @@ class OModelApp(App):
         Undoable (`u`) either way — a fat-fingered `x` is one keystroke from being reverted.
 
         On a `#presets` row it deletes that PRESET instead, behind a confirm — the one `x` that
-        is not undoable (the presets file lives outside the cfg history). This action was
-        focus-blind before the presets card existed."""
+        is not undoable (the presets file lives outside the cfg history); on `+ new preset…` there
+        is nothing to delete, so it bells. This action was focus-blind before the card existed."""
         if self._presets_focused():
             idx = self._highlighted_preset_index()
             if idx is None:
@@ -2389,9 +2541,14 @@ class OModelApp(App):
         the add/edit-model modal ("edit").
 
         On a `#presets` row it forks the current assignments into that preset and switches to it
-        (the name modal doubles as the overwrite confirm)."""
+        (the name modal doubles as the overwrite confirm); on `+ new preset…` it appends a new
+        one instead — there is no cap."""
         if self._presets_focused():
-            idx = self._highlighted_preset_index()
+            oid = self._highlighted_preset_id()
+            if oid == PRESET_NEW:
+                self._fork_preset(None)
+                return
+            idx = self._preset_index(oid)
             if idx is None:
                 self.bell()
             else:
@@ -2517,6 +2674,21 @@ class OModelApp(App):
         self._restore_state(state)
         self.notify(f"Redo: {label}")
 
+    def _lands_elsewhere(self, state: dict) -> bool:
+        """Whether restoring `state` would actually CHANGE the active preset's models.
+
+        Gates the "that preset was deleted" warning, which is about models arriving somewhere the
+        user didn't choose. When the restored state is what the active preset already holds,
+        nothing arrives anywhere and the warning is pure noise — reachable because a fork
+        retargets the entries recorded on the preset it copied, so undoing all the way back to a
+        state the current preset also holds would otherwise announce a move that didn't happen."""
+        target = self._store.current()
+        if target is None:
+            return True
+        return presets_mod.fingerprint(
+            target.agents, target.categories
+        ) != presets_mod.fingerprint(state.get("agents"), state.get("categories"))
+
     def _restore_state(self, state: dict) -> None:
         """Swap self.cfg for a restored history snapshot and re-render everything that depends
         on it: the LEFT pane (sub-targets appear/vanish with the cfg) and the RIGHT pane
@@ -2534,16 +2706,17 @@ class OModelApp(App):
         aux = self._history.current_aux() or {}
         self._custom_rows = aux.get("custom_rows") or {}
         active = aux.get("active")
-        if isinstance(active, int) and 0 <= active < presets_mod.PRESET_COUNT:
-            if self._store.presets[active] is not None:
+        if isinstance(active, int):
+            if 0 <= active < len(self._store.presets):
                 self._store.active = active
-            elif active != self._store.active:
-                # This state was recorded while a preset that has since been DELETED was active.
-                # The models still come back (undo must undo), but they land in whichever preset
-                # is active now — so say so, rather than editing it silently.
+            elif active == _DELETED and self._lands_elsewhere(state):
+                # This state was recorded while a preset that has since been DELETED was active
+                # (`_shift_active` marked it). The models still come back — undo must undo — but
+                # they land in whichever preset is active now, so say so rather than editing it
+                # silently. Every OTHER stale index was renumbered, not orphaned.
                 target = self._store.current()
                 self.notify(
-                    f"Preset {active + 1} was deleted — these models are now in "
+                    "That preset was deleted — these models are now in "
                     f"'{target.name if target else 'the active preset'}'.",
                     severity="warning",
                 )
@@ -2656,7 +2829,19 @@ class OModelApp(App):
         CatalogUnavailable retry and the manual staleness refresh (DESIGN §CLI/refresh).
         Single-flight (`_refresh_inflight`): a second `r` while one is already running just
         notifies rather than spawning a second worker — see the field's comment in __init__ for
-        why `@work(exclusive=True)` alone isn't enough."""
+        why `@work(exclusive=True)` alone isn't enough.
+
+        On a `#presets` row `r` RENAMES that preset instead — the fourth key to dispatch on focus
+        (with `a`/`x`/`v`). Refreshing the model list is a whole-app action you'd never want while
+        looking at the presets card, and `r` for rename is the obvious letter; the card is one
+        `tab` away from anywhere, so the refresh is never more than that."""
+        if self._presets_focused():
+            idx = self._highlighted_preset_index()
+            if idx is None:
+                self.bell()  # the `+ new preset…` row — nothing to rename
+            else:
+                self._rename_preset(idx)
+            return
         if self._refresh_inflight:
             self.notify("Refresh already running…")
             return

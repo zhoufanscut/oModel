@@ -98,14 +98,15 @@ live re-fetch and rebuild the cache.
 | `↑` `↓` (`j` `k`) | Navigate agents/categories or candidates |
 | `←` `→` (`h` `l`) | Jump between the targets and candidates panes |
 | `Tab` / `Shift+Tab` | Cycle all three panes (targets → presets → candidates) — the way to reach the presets card |
-| `Enter` | Set the highlighted candidate (or open `+ add model…`); on a preset, switch to it |
+| `Enter` | Set the highlighted candidate (or open `+ add model…`); on a preset, switch to it; on `+ new preset…`, add one |
 | `v` | Pick a variant for the current candidate |
-| `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or fork the current models into a preset |
+| `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or put the current models into a preset |
+| `r` | Refresh the model list — or, on a preset, rename it |
 | `x` | Clear the current agent/category model (on a preset: delete it, after a confirm — never the one you're using) |
 | `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
 | `s` | Save (diff + confirm modal) |
-| `r` | Refresh the model list (force a live `opencode models --refresh`) |
 | `q` | Quit (if unsaved: save & quit / discard / cancel) |
+| `←` `→` (`h` `l`) *in a dialog* | Move between buttons (`Tab` works too) |
 
 ## How it works
 
@@ -119,14 +120,14 @@ live re-fetch and rebuild the cache.
 4. **Save** — shows a diff before writing a clean `oh-my-openagent.jsonc`, snapshotting the
    prior file to a timestamped backup (`omodel --restore` to roll back).
 
-Three **presets** sit under the agent list, and they're what you actually edit. One is always
-active (`●`); your model changes go into it, and `s` writes it to `oh-my-openagent.jsonc`. Press
-`Enter` on another preset to switch (your edits stay in the one you leave), `a` to fork the
-current models into an empty row and name it, `x` to delete one. First run seeds a `default`
-preset from the config you already have, so your config always matches one of the three — never
-a fourth state you can't get back to. Nothing is written until you press `s`, and then both
-files are written together; presets live beside your config in `.omodel-presets.json`, so a
-`--config` override keeps its own set.
+**Presets** sit under the agent list, and they're what you actually edit. One is always active
+(`●`); your model changes go into it, and `s` writes it to `oh-my-openagent.jsonc`. Press `Enter`
+on another preset to switch (your edits stay in the one you leave), `r` to rename one, `x` to
+delete one, and `+ new preset…` on the last row to add another — keep as many as you like. First
+run seeds a `default` preset from the config you already have, so your config always matches one
+of your presets — never a state you can't get back to. Nothing is written until you press `s`, and
+then both files are written together; presets live beside your config in `.omodel-presets.json`,
+so a `--config` override keeps its own set.
 
 See [DESIGN.md](DESIGN.md) for the full design — data sources, resolution rules, caching, and
 packaging.

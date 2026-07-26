@@ -93,18 +93,23 @@ data/omo-suggestions.json ──────────────► suggesti
   never required to equal the on-disk bytes. Each save snapshots the prior file verbatim to
   `<config_dir>/.backup/<ts>.jsonc`; the very first save pins `original.jsonc` (never pruned, never
   counts toward the 20-snapshot cap).
-- **`presets.py`** — 3 named presets, and they ARE the working state (decision #17): a leaf like
+- **`presets.py`** — named presets (unlimited, dense list seeded with one `default`), and they ARE
+  the working state (decision #17): a leaf like
   `history.py` (pure data + file IO, no omodel imports) over `<config_dir>/.omodel-presets.json`, so
   presets follow the **active** config. Exactly one preset is active; **the config on disk always
   equals it** — that invariant drives the rest: edits flow into the active preset (`app.py`'s
-  `_projected_store`), `enter` switches (banking your edits into the one you leave), `x` refuses on
-  the active one, and **only `s` writes — both files, together**, so quitting discards both in
-  lockstep. First launch with no presets seeds one from your config, in memory. Reads are
+  `_projected_store`), `enter` switches (banking your edits into the one you leave), `r` renames,
+  `x` refuses on the active one, and **only `s` writes — both files, together**, so quitting
+  discards both in lockstep. First launch with no presets seeds one from your config, in memory.
+  The list is dense, so **a delete renumbers every later preset** — `app.py` remaps the undo
+  history's stored indices in the same breath (`History.map_aux_key`, always PER-ENTRY: a blanket
+  stamp erases older switches and the delete sentinels); that is the sharp edge. Reads are
   best-effort (missing/corrupt → empty store, `active` normalized); `write()` raises so the app can
   notify.
 - **`app.py`** — Textual two-pane App. Stable widget IDs (`#targets`, `#presets`, `#candidates`,
   `#detail`, `#providers`) and option IDs (`agent:<name>[.ultrawork|.compaction]`, `cat:<name>`, `cand:<i>`,
-  `cand:add`) are a contract that pilot tests depend on — see the module docstring; don't rename.
+  `cand:add`, `preset:<i>`, `preset:new`) are a contract that pilot tests depend on — see the module
+  docstring; don't rename.
 - **`cli.py`** — argparse dispatch. Imports are deliberately lazy so `--version`/`--check`/`--refresh-omo`/
   `--refresh-models` never import Textual. Two refresh flags, one per data source: `--refresh-omo`
   (bundled omo suggestions, via `refresh.py`) and `--refresh-models` (opencode availability, via

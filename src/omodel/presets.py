@@ -1,7 +1,9 @@
-"""3 named presets — the working state.  DESIGN.md §presets.py (decision #17).
+"""Named presets — the working state.  DESIGN.md §presets.py (decision #17).
 
 A **preset** is a named set of assignments (the `agents` + `categories` subtrees, sub-targets
-included).  Exactly one is **active**, and the load-bearing invariant is:
+included).  There is no cap on how many you keep and no such thing as an empty one: the list is
+DENSE, seeded with a single `default` and grown by `a` (fork).  Exactly one is **active**, and
+the load-bearing invariant is:
 
     the config on disk always equals the ACTIVE preset — never a fourth, orphan state.
 
@@ -14,16 +16,20 @@ without saving discards both, in lockstep, leaving disk exactly as it was: still
 Keep the three save-ish things apart (GLOSSARY): a *backup* is the verbatim on-disk file copy
 taken automatically at every save (config_io.py, `--restore`); the *history* is the in-session
 undo stack (history.py); a *preset* is a named set of assignments you switch between.  "Slot"
-stays reserved for a TARGET — a preset is addressed by INDEX (0..2, shown as 1..3).
+stays reserved for a TARGET — a preset is addressed by INDEX (0-based, shown 1-based).  Because
+the list is dense, a DELETE SHIFTS every later index; app.py remaps its undo-history references
+in the same breath (`History.map_aux_key`), which is the one hazard the dense list introduces.
 
 Stored next to the ACTIVE config as `<config_dir>/.omodel-presets.json`, so a `--config`
 override gets its own set — which is what keeps the real-config safety rule satisfiable in
 tests with no extra env override.
 
 **Read = best-effort, write = loud.**  `load()` never raises (missing / corrupt / wrong version
-/ short list -> an empty store; a non-dict `agents`/`categories` -> `{}`; an out-of-range or
-empty-pointing `active` -> the first non-empty preset), because a hand-mangled presets file must
-not stop you editing models.  `write()` DOES raise on failure so app.py can notify: a silently
+-> an empty store; a non-dict `agents`/`categories` -> `{}`; an out-of-range `active` -> 0),
+because a hand-mangled presets file must not stop you editing models.  It also MIGRATES the
+original fixed-3 shape in place (`FILE_VERSION` 1 -> 2): `null` holes (an "empty slot" back when
+there were exactly three) are dropped and `active` is remapped onto the compacted list, so an
+existing file keeps working.  `write()` DOES raise on failure so app.py can notify: a silently
 dropped preset write would be a lie about durable state, whereas cache.py swallows its write
 errors because a lost cache write costs only speed.
 
@@ -40,13 +46,20 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-# Fixed number of presets (decision #17).  Widening the feature is this one constant.
-PRESET_COUNT = 3
+# On-disk shape version.  We WRITE 2 (dense, unbounded list) and READ both:
+#   1 = the original fixed-3 list, `null` for an empty slot, `active` indexing that 3-list
+#   2 = a dense list of any length
+# `load` migrates 1 -> 2 in memory (see `_LEGACY_VERSIONS`); anything else reads as "no presets"
+# rather than raising.  The bump is NOT about reading — the payload shape never changed, so
+# unversioned reading would work fine.  It is about the DOWNGRADE: a build that predates
+# unlimited presets accepts a version-1 file, silently truncates it to 3, and its next save
+# deletes the rest with no copy kept (verified against that build).  Given an unknown version it
+# instead reads empty AND `_preserve_unreadable` moves the file to `<path>.corrupt` first, so a
+# rollback costs you the presets pane, not the presets.
+FILE_VERSION = 2
+_LEGACY_VERSIONS = (1,)
 
-# On-disk shape version; a mismatch reads as "no presets" rather than raising.
-FILE_VERSION = 1
-
-# Cap on a preset name — what fits the 32-wide pane once the `● 1 ` prefix is drawn.
+# Cap on a preset name — what fits the 32-wide pane once the `● 12 ` prefix is drawn.
 MAX_NAME = 24
 
 # Name given to the preset seeded from your existing config on first launch.
@@ -70,11 +83,11 @@ class Preset:
 
 @dataclass
 class Store:
-    """The whole presets file: `PRESET_COUNT` entries (`Preset | None`) plus which one is
-    ACTIVE.  `active` always points at a real (non-None) preset when the store holds any, so
-    app.py never has to handle "active points at nothing"."""
+    """The whole presets file: a DENSE list of presets (no holes, no cap) plus which one is
+    ACTIVE.  `active` always points at a real preset when the store holds any, so app.py never
+    has to handle "active points at nothing"."""
 
-    presets: list = field(default_factory=lambda: [None] * PRESET_COUNT)
+    presets: list = field(default_factory=list)
     active: int = 0
 
     def current(self) -> Preset | None:
@@ -84,7 +97,7 @@ class Store:
         return None
 
     def is_empty(self) -> bool:
-        return all(p is None for p in self.presets)
+        return not self.presets
 
 
 def presets_path(config_path: str) -> str:
@@ -133,38 +146,47 @@ def _entry(raw) -> Preset | None:
 
 
 def normalize_active(store: Store) -> Store:
-    """Force `active` to point at a real preset: out of range, or aimed at an empty entry,
-    falls back to the first non-empty one (0 when the store is empty).  Called on every read
-    and after every mutation, so `Store.current()` is None only for a genuinely empty store."""
-    presets = store.presets
-    if 0 <= store.active < len(presets) and presets[store.active] is not None:
-        return store
-    store.active = next((i for i, p in enumerate(presets) if p is not None), 0)
+    """Force `active` into range — out of bounds falls back to the first preset (0 when the
+    store is empty).  Called on every read and after every mutation (a DELETE shifts indices),
+    so `Store.current()` is None only for a genuinely empty store."""
+    if not 0 <= store.active < len(store.presets):
+        store.active = 0
     return store
 
 
 def load(config_path: str) -> Store:
     """The presets Store for `config_path`.
 
-    NEVER raises — missing file, unreadable file, malformed JSON, a non-dict root, a version
-    mismatch or a short/long list all read as an empty store (or are padded/truncated to
-    `PRESET_COUNT`), and `active` is normalized to a real preset."""
+    NEVER raises — missing file, unreadable file, malformed JSON, a non-dict root or a version
+    mismatch all read as an empty store, and `active` is normalized into range.
+
+    Migrates a version-1 file (the original fixed-3 shape): `null` entries (the old "empty slot")
+    are DROPPED and `active` follows the preset it pointed at into the compacted list, so a file
+    written before presets went unlimited loads as the 1-3 real presets it actually held.  The
+    compaction is unconditional rather than gated on the version, because it is also the right
+    reading of a hand-edited version-2 file that happens to contain a `null`."""
     try:
         with open(presets_path(config_path), encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return Store()
-    if not isinstance(data, dict) or data.get("version") != FILE_VERSION:
+    if not isinstance(data, dict) or data.get("version") not in (FILE_VERSION, *_LEGACY_VERSIONS):
         return Store()
     raw = data.get("presets")
     if not isinstance(raw, list):
         return Store()
-    items = [_entry(r) for r in raw[:PRESET_COUNT]]
-    items += [None] * (PRESET_COUNT - len(items))
     active = data.get("active")
-    return normalize_active(
-        Store(presets=items, active=active if isinstance(active, int) else 0)
-    )
+    active = active if isinstance(active, int) else 0
+    items = []
+    remapped = 0  # active pointing at a hole (or out of range) falls back to the first preset
+    for i, r in enumerate(raw):
+        entry = _entry(r)
+        if entry is None:  # a legacy `null` hole, or a junk entry — neither survives compaction
+            continue
+        if i == active:
+            remapped = len(items)  # where the preset that WAS active lands once holes are gone
+        items.append(entry)
+    return normalize_active(Store(presets=items, active=remapped))
 
 
 def _payload(store: Store) -> str:
@@ -174,9 +196,7 @@ def _payload(store: Store) -> str:
                 "version": FILE_VERSION,
                 "active": store.active,
                 "presets": [
-                    None
-                    if p is None
-                    else {
+                    {
                         "name": p.name,
                         "saved_at": p.saved_at,
                         "agents": _as_map(p.agents),
@@ -208,7 +228,10 @@ def _preserve_unreadable(path: str) -> None:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        readable = isinstance(data, dict) and data.get("version") == FILE_VERSION
+        readable = isinstance(data, dict) and data.get("version") in (
+            FILE_VERSION,
+            *_LEGACY_VERSIONS,
+        )
     except Exception:
         readable = False  # unparseable / unreadable → worth keeping a copy of
     if readable:
@@ -264,10 +287,7 @@ def seeded(cfg: dict, name: str = DEFAULT_NAME) -> Store:
     """The first-launch store: preset 1 captured from your existing config, active.  Returned
     IN MEMORY, never written — the first `s` materializes it (one write rule).  Until then a
     fresh launch that changes nothing stays clean, and re-seeding next time is identical."""
-    store = Store()
-    store.presets[0] = capture(name, cfg)
-    store.active = 0
-    return store
+    return Store(presets=[capture(name, cfg)], active=0)
 
 
 def matching_index(store: Store, cfg: dict):
@@ -275,7 +295,7 @@ def matching_index(store: Store, cfg: dict):
     "does the config still reflect one of the presets?" — the invariant's only real test."""
     target = fingerprint(cfg.get("agents"), cfg.get("categories"))
     for i, preset in enumerate(store.presets):
-        if preset is not None and fingerprint(preset.agents, preset.categories) == target:
+        if fingerprint(preset.agents, preset.categories) == target:
             return i
     return None
 
@@ -301,7 +321,7 @@ def model_count(preset: Preset) -> int:
 
 def sanitize_name(text: str, index: int) -> str:
     """Clean a typed preset name: drop non-printables (a newline in an OptionList prompt
-    renders as two lines and would push row 3 out of the fixed-height card), collapse
+    renders as two lines and would double a row's height in a bounded card), collapse
     whitespace, cap at MAX_NAME.  Empty (or all-junk) falls back to `preset <N>`, N being the
     1-based index."""
     # Non-printables become spaces rather than vanishing (so "a\nb" reads "a b", not "ab"),
@@ -352,9 +372,7 @@ def store_fingerprint(store: Store) -> str:
         {
             "active": store.active,
             "presets": [
-                None
-                if p is None
-                else {"name": p.name, "assignments": fingerprint(p.agents, p.categories)}
+                {"name": p.name, "assignments": fingerprint(p.agents, p.categories)}
                 for p in store.presets
             ],
         },

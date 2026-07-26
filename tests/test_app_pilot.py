@@ -30,7 +30,7 @@ import types
 
 import pytest
 from textual.content import Content
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Button, Input, OptionList, Static
 
 import omodel
 from omodel import presets as presets_mod
@@ -3055,12 +3055,39 @@ async def _focus_preset(pilot, index: int) -> None:
 
 
 async def _fork_preset(pilot, index: int, name: str) -> None:
-    """`a` on preset `index` → PresetNameModal → type `name` → enter (fork + switch to it)."""
+    """`a` on an EXISTING preset row → PresetNameModal (which doubles as the overwrite confirm)
+    → type `name` → enter. Replaces preset `index` with the models you're looking at. Use
+    `_new_preset` for the append case."""
     await _focus_preset(pilot, index)
     await pilot.press("a")
     await pilot.pause()
     # Modal widgets live on the pushed screen, not the base one (pilot.app.query_one would
     # search Screen#_default) — same access pattern the add-model tests use.
+    pilot.app.screen.query_one("#preset-name-input", Input).value = name
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def _capture_notifications(pilot) -> list:
+    """Record `(severity, message)` for every toast raised from here on, and keep raising them.
+    The toast rack isn't mounted headless, so this is how a test asserts on user-facing warnings."""
+    seen = []
+    original = pilot.app.notify
+
+    def _spy(message, **kwargs):
+        seen.append((kwargs.get("severity", "information"), message))
+        return original(message, **kwargs)
+
+    pilot.app.notify = _spy
+    return seen
+
+
+async def _new_preset(pilot, name: str) -> None:
+    """`a` on the trailing `+ new preset…` row → name it → enter (append + switch to it)."""
+    lst = pilot.app.query_one("#presets", OptionList)
+    await _focus_preset(pilot, lst.option_count - 1)  # the `+ new preset…` row is always last
+    await pilot.press("a")
+    await pilot.pause()
     pilot.app.screen.query_one("#preset-name-input", Input).value = name
     await pilot.press("enter")
     await pilot.pause()
@@ -3085,7 +3112,8 @@ def test_pilot_first_launch_seeds_a_default_preset(pilot_config):
         async with app.run_test() as pilot:
             labels = _preset_labels(pilot.app)
             assert labels[0] == f"● 1 {presets_mod.DEFAULT_NAME}", labels
-            assert "(empty)" in labels[1] and "(empty)" in labels[2], labels
+            # ONE preset plus the way to make more — no empty slots to fill in.
+            assert labels[1:] == ["+ new preset…"], labels
             assert _active_row(pilot.app) == 0
 
             seeded = pilot.app._store.current()
@@ -3144,7 +3172,7 @@ def test_pilot_fork_creates_a_preset_and_switches_to_it(pilot_config):
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
             await _select_candidate(pilot, "zhipuai/glm-5")
-            await _fork_preset(pilot, 1, "experiment")
+            await _new_preset(pilot, "experiment")
 
             assert _active_row(pilot.app) == 1
             labels = _preset_labels(pilot.app)
@@ -3169,7 +3197,7 @@ def test_pilot_switching_banks_the_edits_you_made(pilot_config):
             # Preset 1 (seeded) gets glm-5; fork it to preset 2, then give 2 a different model.
             await _select_target(pilot, "agent:sisyphus")
             await _select_candidate(pilot, "zhipuai/glm-5")
-            await _fork_preset(pilot, 1, "experiment")
+            await _new_preset(pilot, "experiment")
             await _select_target(pilot, "agent:sisyphus")
             await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
             assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "moonshotai-cn/kimi-k2.5"
@@ -3196,7 +3224,7 @@ def test_pilot_undo_moves_the_marker_back_with_the_models(pilot_config):
         async with app.run_test() as pilot:
             await _select_target(pilot, "agent:sisyphus")
             await _select_candidate(pilot, "zhipuai/glm-5")
-            await _fork_preset(pilot, 1, "experiment")
+            await _new_preset(pilot, "experiment")
             await _select_target(pilot, "agent:sisyphus")
             await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
             await _switch_preset(pilot, 0)
@@ -3221,24 +3249,25 @@ def test_pilot_delete_refuses_on_the_active_preset(pilot_config):
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            await _fork_preset(pilot, 1, "experiment")  # active is now row 2
+            await _new_preset(pilot, "experiment")  # active is now row 2
             assert _active_row(pilot.app) == 1
 
             await _focus_preset(pilot, 1)
             await pilot.press("x")
             await pilot.pause()
             assert len(pilot.app.screen_stack) == 1, "no confirm — the delete is refused outright"
-            assert pilot.app._store.presets[1] is not None
+            assert [p.name for p in pilot.app._store.presets] == ["default", "experiment"]
 
-            # The other one deletes.
+            # The other one deletes — and the list CLOSES UP behind it (dense, no holes).
             await _focus_preset(pilot, 0)
             await pilot.press("x")
             await pilot.pause()
             assert len(pilot.app.screen_stack) > 1
             await pilot.press("y")
             await pilot.pause()
-            assert pilot.app._store.presets[0] is None
-            assert _active_row(pilot.app) == 1, "the active preset is untouched by the delete"
+            assert [p.name for p in pilot.app._store.presets] == ["experiment"]
+            assert _active_row(pilot.app) == 0, "the active preset moved down with the list"
+            assert pilot.app._store.current().name == "experiment", "…and is still the same one"
 
     asyncio.run(_run())
     # Staged only: nothing was written, because only `s` writes.
@@ -3300,7 +3329,7 @@ def test_pilot_launch_prompts_when_the_config_matches_no_preset(pilot_config):
     end at `s`."""
     cfg_path, tmp_dir = pilot_config
     other = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
-    store = presets_mod.Store(presets=[other, None, None], active=0)
+    store = presets_mod.Store(presets=[other], active=0)
     presets_mod.write(cfg_path, store)
     before_presets = _read_text(os.path.join(tmp_dir, ".omodel-presets.json"))
     before_cfg = _read_text(cfg_path)
@@ -3330,7 +3359,7 @@ def test_pilot_launch_activates_a_matching_preset_silently(pilot_config):
 
     cfg, _resolved = _config_io.load_config(cfg_path)
     matching = presets_mod.capture("matching", cfg)
-    presets_mod.write(cfg_path, presets_mod.Store(presets=[mine, matching, None], active=0))
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[mine, matching], active=0))
 
     async def _run():
         app = _build_app(cfg_path)
@@ -3390,15 +3419,24 @@ def test_pilot_preset_survives_a_mangled_sidecar(pilot_config):
     assert store.current().agents["sisyphus"]["model"] == "zhipuai/glm-5"
 
 
-def test_pilot_preset_row_never_wraps_the_fixed_card(pilot_config):
+@pytest.mark.parametrize("count", [3, 12])
+def test_pilot_preset_row_never_wraps(pilot_config, count):
     """A name at the CHARACTER cap made of WIDE (2-cell) characters must still render on one
-    line. The card is a fixed 5 lines for exactly 3 rows, so a wrapped row pushes the third
-    preset out of view — and the cap alone doesn't prevent that (24 CJK chars = 48 cells).
-    Guards the render-time cell fit against a CSS/scrollbar-gutter change: caught for real when
-    the name width was computed as 26 cells against a 28-cell content box."""
+    line: a wrapped row costs a whole extra line of a card capped at half the column, and the
+    character cap alone doesn't prevent it (24 CJK chars = 48 cells).
+
+    `count=12` is the case that matters and the one the fixed-3 card could never reach: past the
+    height cap the card SCROLLS, and a scrollbar narrows the width rows are wrapped against.
+    `size.width` (the content region) does not subtract it — measuring that overflowed every row
+    by 2 cells (15 rendered lines for 13 rows). The fix is `scrollbar-gutter: stable` plus
+    measuring `scrollable_content_region`; reading the width before `clear_options()` is NOT
+    enough, because at the moment the list first outgrows the card the scrollbar isn't there yet.
+    12 also crosses into two-digit row numbers, which take a cell off the name budget."""
     cfg_path, _ = pilot_config
     wide = presets_mod.capture("設" * presets_mod.MAX_NAME, {"agents": {}})
-    presets_mod.write(cfg_path, presets_mod.Store(presets=[wide, wide, wide], active=0))
+    presets_mod.write(
+        cfg_path, presets_mod.Store(presets=[wide for _ in range(count)], active=0)
+    )
 
     async def _run():
         app = _build_app(cfg_path)
@@ -3407,19 +3445,409 @@ def test_pilot_preset_row_never_wraps_the_fixed_card(pilot_config):
                 await pilot.press("y")  # the sync prompt: adopt, we only care about layout
                 await pilot.pause()
             lst = pilot.app.query_one("#presets", OptionList)
-            assert lst.virtual_size.height == presets_mod.PRESET_COUNT, (
-                f"a preset row wrapped: {lst.virtual_size.height} lines rendered for "
-                f"{presets_mod.PRESET_COUNT} rows — the last preset is pushed off the card"
+            rows = lst.option_count  # the presets + the `+ new preset…` row
+            assert rows == count + 1
+            # The first render happens pre-layout (width 0) — the _PRESET_NAME_CELLS fallback.
+            assert lst.virtual_size.height == rows, (
+                f"a preset row wrapped pre-layout: {lst.virtual_size.height} lines for {rows} rows"
             )
             # …and the fit is real truncation, not a silent overflow.
             assert str(lst.get_option_at_index(0).prompt).endswith("…")
-            # The first render happens pre-layout (size.width == 0), which only exercises the
-            # _PRESET_NAME_CELLS fallback. Re-render now that the widget is measured, so the
-            # measured branch — the one a CSS change would move — is covered too.
+            # Re-render now that the widget is measured, so the measured branch — the one a CSS
+            # change would move — is covered too.
             assert lst.size.width, "the card should be laid out by now"
             pilot.app._populate_presets()
             await pilot.pause()
-            assert lst.virtual_size.height == presets_mod.PRESET_COUNT, "measured branch wrapped"
+            assert lst.virtual_size.height == rows, (
+                f"a preset row wrapped when measured: {lst.virtual_size.height} lines for {rows} rows"
+            )
+            if count == 12:
+                assert lst.show_vertical_scrollbar, "12 presets must actually overflow the card"
+
+    asyncio.run(_run())
+
+
+def test_pilot_growing_past_the_card_does_not_wrap(pilot_config):
+    """The transition the pre-clear width read gets wrong: the scrollbar appears DURING the
+    rebuild that first overflows the card, so any width sampled beforehand is the pre-scrollbar
+    one. Grow the store in-session and re-render, the way adding presets actually does."""
+    cfg_path, _ = pilot_config
+    wide = presets_mod.capture("設" * presets_mod.MAX_NAME, {"agents": {}})
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[wide], active=0))
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            if len(pilot.app.screen_stack) > 1:
+                await pilot.press("y")
+                await pilot.pause()
+            lst = pilot.app.query_one("#presets", OptionList)
+            assert not lst.show_vertical_scrollbar, "one preset must not overflow"
+            for _ in range(15):
+                pilot.app._store.presets.append(copy.deepcopy(wide))
+            pilot.app._populate_presets()
+            await pilot.pause()
+            assert lst.show_vertical_scrollbar
+            assert lst.virtual_size.height == lst.option_count, (
+                f"rows wrapped when the scrollbar appeared: {lst.virtual_size.height} lines "
+                f"for {lst.option_count} rows"
+            )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot: unlimited presets, `+ new preset…`, and `r` rename
+# ---------------------------------------------------------------------------
+
+def test_pilot_presets_are_unlimited(pilot_config):
+    """There is no cap: `+ new preset…` keeps appending, the card scrolls rather than truncating,
+    and every one of them survives a save/reload round trip."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            for i in range(11):  # past 9, where the row number takes a second digit
+                await _new_preset(pilot, f"p{i}")
+            names = [p.name for p in pilot.app._store.presets]
+            assert names == ["default"] + [f"p{i}" for i in range(11)]
+            labels = _preset_labels(pilot.app)
+            assert labels[-1] == "+ new preset…", "the new-preset row stays last"
+            # default is row 1, so p9 is row 11 — two-digit numbering still fits the card.
+            assert labels[10] == "  11 p9", labels[10]
+            assert labels[11].startswith("● 12 p10"), labels[11]
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run())
+    assert [p.name for p in presets_mod.load(cfg_path).presets] == ["default"] + [
+        f"p{i}" for i in range(11)
+    ]
+
+
+def test_pilot_enter_on_the_new_row_also_creates(pilot_config):
+    """`enter` activates every other row in the app; on `+ new preset…` it must mean the same
+    thing as `a` rather than being inert."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            lst = pilot.app.query_one("#presets", OptionList)
+            await _focus_preset(pilot, lst.option_count - 1)
+            await pilot.press("enter")
+            await pilot.pause()
+            pilot.app.screen.query_one("#preset-name-input", Input).value = "via-enter"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert [p.name for p in pilot.app._store.presets] == ["default", "via-enter"]
+            assert _active_row(pilot.app) == 1, "a new preset is the one you're editing"
+
+    asyncio.run(_run())
+
+
+def test_pilot_r_renames_a_preset(pilot_config):
+    """`r` is the fourth key to dispatch on focus (with `a`/`x`/`v`): on a preset row it renames,
+    everywhere else it still refreshes the model list. A rename changes the name and NOTHING
+    else — the models and the `saved_at` stamp are untouched."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            before = pilot.app._store.presets[0]
+            stamp, models = before.saved_at, copy.deepcopy(before.agents)
+
+            await _focus_preset(pilot, 0)
+            await pilot.press("r")
+            await pilot.pause()
+            pilot.app.screen.query_one("#preset-name-input", Input).value = "renamed"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            after = pilot.app._store.presets[0]
+            assert after.name == "renamed"
+            assert after.saved_at == stamp, "a rename banks nothing — the stamp stays"
+            assert after.agents == models
+            assert _preset_labels(pilot.app)[0] == "● 1 renamed"
+            assert pilot.app._is_dirty(), "a rename is a change `s` has to write"
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run())
+    assert presets_mod.load(cfg_path).presets[0].name == "renamed"
+
+
+def test_pilot_r_outside_the_card_still_refreshes(pilot_config, monkeypatch):
+    """The focus dispatch must not cost anyone the refresh key."""
+    cfg_path, _ = pilot_config
+    called = []
+
+    async def _run():
+        app = _build_app(cfg_path)
+        monkeypatch.setattr(app, "_refresh_catalog", lambda: called.append(True))
+        async with app.run_test() as pilot:
+            pilot.app.query_one("#targets", OptionList).focus()
+            await pilot.press("r")
+            await pilot.pause()
+            assert called, "r outside the presets card is still refresh"
+
+    asyncio.run(_run())
+
+
+def test_pilot_r_on_the_new_row_does_nothing(pilot_config):
+    """`+ new preset…` names no preset, so there is nothing to rename — and it must not fall
+    through to a catalog refresh either."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            lst = pilot.app.query_one("#presets", OptionList)
+            await _focus_preset(pilot, lst.option_count - 1)
+            await pilot.press("r")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "no modal opened"
+            assert not pilot.app._refresh_inflight, "and no refresh started"
+
+    asyncio.run(_run())
+
+
+def test_pilot_deleting_a_preset_renumbers_the_undo_history(pilot_config):
+    """The hazard the dense list introduces: deleting a preset RENUMBERS every later one, while
+    the undo history stores which preset each snapshot was made under. Without the remap, `u`
+    after a delete would restore models into whichever preset slid into that number."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _new_preset(pilot, "middle")   # index 1
+            await _new_preset(pilot, "last")     # index 2, active
+            # An edit recorded while `last` (index 2) is active.
+            await _select_target(pilot, "agent:oracle")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert _active_row(pilot.app) == 2
+
+            await _switch_preset(pilot, 0)       # leave `last` so it can be deleted
+            await _focus_preset(pilot, 1)        # delete `middle` — everything after shifts down
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            assert [p.name for p in pilot.app._store.presets] == ["default", "last"]
+
+            # Undo back through the switch: the entry that said "preset 3" must now find `last`
+            # at its new index 1, not point past the end and not land on `default`.
+            for _ in range(3):
+                await pilot.press("u")
+                await pilot.pause()
+            assert pilot.app._store.current().name == "last", (
+                f"undo landed on {pilot.app._store.current().name!r}"
+            )
+
+    asyncio.run(_run())
+
+
+def _actives(app):
+    """The active-preset index each history entry was recorded under (-1 == the preset it named
+    has since been deleted)."""
+    return [e.aux.get("active") for e in app._history._entries]
+
+
+def test_pilot_arrow_keys_move_between_modal_buttons(pilot_config):
+    """Both button modals are a horizontal ROW, but Textual only gives them `tab`. `←`/`→` (and
+    vim `h`/`l`) walk the row the way it's laid out, wrapping exactly as tab does — the App's own
+    ←/→ are gated to the base screen, so nothing else claims them inside a modal."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:oracle")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+
+            # Three-way quit modal.
+            await pilot.press("q")
+            await pilot.pause()
+            assert pilot.app.focused.id == "quit-save"
+            for key, want in (
+                ("right", "quit-discard"),
+                ("right", "quit-cancel"),
+                ("right", "quit-save"),     # wraps, like tab
+                ("left", "quit-cancel"),    # and backwards
+                ("l", "quit-save"),
+                ("h", "quit-cancel"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert pilot.app.focused.id == want, f"{key} -> {pilot.app.focused.id}"
+            await pilot.press("escape")
+            await pilot.pause()
+
+            # Two-way save-diff confirm.
+            await pilot.press("s")
+            await pilot.pause()
+            assert pilot.app.focused.id == "confirm-yes"
+            for key, want in (
+                ("right", "confirm-no"),
+                ("right", "confirm-yes"),
+                ("l", "confirm-no"),
+                ("h", "confirm-yes"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert pilot.app.focused.id == want, f"{key} -> {pilot.app.focused.id}"
+            # …and the vertical keys still belong to the scrolling diff body, not the buttons.
+            await pilot.press("j")
+            await pilot.pause()
+            assert pilot.app.focused.id == "confirm-yes", "j must scroll, not move focus"
+
+    asyncio.run(_run())
+
+
+def test_pilot_modal_emphasis_follows_focus(pilot_config):
+    """No button may carry a STATIC `variant="primary"`.
+
+    It paints one button permanently, which competes with Textual's focus styling: two buttons
+    look emphasized at once, the eye reads the always-coloured one as the selection, and moving
+    along the row appears to do nothing at all. Emphasis has to be the cursor, so it comes from
+    `:focus` — exactly one button is lit, and it is the focused one."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:oracle")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+
+            async def _check(modal: str):
+                buttons = list(pilot.app.screen.query(Button))
+                assert buttons, f"{modal} has no buttons"
+                assert [b for b in buttons if b.has_focus], f"{modal}: nothing focused"
+                for b in buttons:
+                    assert b.variant == "default", (
+                        f"{modal}: {b.id} carries variant={b.variant!r} — a static emphasis that "
+                        f"does not move with focus"
+                    )
+                # The focused one is the only one whose background differs from the rest.
+                lit = {b.id for b in buttons if b.styles.background != buttons[-1].styles.background
+                       or b.has_focus}
+                assert lit == {b.id for b in buttons if b.has_focus}, lit
+
+            await pilot.press("q")
+            await pilot.pause()
+            await _check("QuitModal")
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+            await _check("ConfirmModal")
+
+    asyncio.run(_run())
+
+
+def test_pilot_a_new_preset_keeps_the_deleted_markers(pilot_config):
+    """A fork must move only the entries recorded on the preset you were SITTING ON.
+
+    It used to stamp one index onto every entry, which erased the markers a prior delete left —
+    so undoing into a deleted preset's models landed them in the preset you had just created,
+    with no warning at all. That silently voided the guarantee `_delete_preset` exists to make."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            notes = _capture_notifications(pilot)
+            await _new_preset(pilot, "b")
+            await _select_target(pilot, "agent:oracle")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _switch_preset(pilot, 0)
+            await _focus_preset(pilot, 1)
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            assert -1 in _actives(pilot.app), _actives(pilot.app)
+
+            await _new_preset(pilot, "fresh")
+            assert -1 in _actives(pilot.app), (
+                f"the fork erased the deleted markers: {_actives(pilot.app)}"
+            )
+
+            notes.clear()
+            await pilot.press("u")
+            await pilot.pause()
+            assert any("was deleted" in m for sev, m in notes if sev == "warning"), notes
+
+    asyncio.run(_run())
+
+
+def test_pilot_no_deleted_warning_when_the_models_were_already_there(pilot_config):
+    """The warning is about models arriving somewhere you didn't choose. Undoing back to a state
+    the active preset ALREADY holds moves nothing, so announcing a move is noise — and it named
+    as destination the very preset the entry originally pointed at."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            notes = _capture_notifications(pilot)
+            await _new_preset(pilot, "b")
+            await _select_target(pilot, "agent:oracle")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _switch_preset(pilot, 0)
+            await _focus_preset(pilot, 1)
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+
+            notes.clear()
+            for _ in range(4):  # all the way back to the initial state
+                await pilot.press("u")
+                await pilot.pause()
+            warnings = [m for sev, m in notes if sev == "warning" and "was deleted" in m]
+            # Exactly one: the step whose models really did land in a preset that isn't theirs.
+            assert len(warnings) == 1, warnings
+            assert not (pilot.app.cfg.get("agents", {}).get("oracle") or {}).get("model"), (
+                "the undo itself must still have gone all the way back"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_a_legacy_three_slot_file_still_opens(pilot_config):
+    """A presets file written before presets went unlimited holds exactly three entries with
+    `null` for an empty slot, and its `active` indexes THAT list. Opening it must land the user
+    on the same preset, not lose one to a refactor."""
+    cfg_path, _ = pilot_config
+    mine = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    import json5
+
+    with open(cfg_path, encoding="utf-8") as f:
+        third = presets_mod.capture("third", json5.load(f))
+    legacy = {
+        "version": presets_mod.FILE_VERSION,
+        "active": 2,  # the third slot, with the second empty
+        "presets": [
+            {"name": p.name, "saved_at": p.saved_at, "agents": p.agents,
+             "categories": p.categories}
+            if p
+            else None
+            for p in (mine, None, third)
+        ],
+    }
+    with open(presets_mod.presets_path(cfg_path), "w", encoding="utf-8") as f:
+        json.dump(legacy, f)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert len(pilot.app.screen_stack) == 1, "the config matches `third` — no sync prompt"
+            assert [p.name for p in pilot.app._store.presets] == ["mine", "third"]
+            assert pilot.app._store.current().name == "third", "the hole must not move you"
+            assert _active_row(pilot.app) == 1
 
     asyncio.run(_run())
 
@@ -3443,7 +3871,7 @@ def test_pilot_forked_preset_survives_a_relaunch(pilot_config):
     async def _run_first():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            await _fork_preset(pilot, 1, "max-power")
+            await _new_preset(pilot, "max-power")
             await _save_and_confirm(pilot)
 
     asyncio.run(_run_first())
@@ -3470,7 +3898,7 @@ def test_pilot_undo_after_a_fork_does_not_move_the_marker(pilot_config):
         async with app.run_test() as pilot:
             await _select_target(pilot, "cat:deep")
             await _select_candidate(pilot, "openai/gpt-5.5")
-            await _fork_preset(pilot, 1, "forked")
+            await _new_preset(pilot, "forked")
             assert _active_row(pilot.app) == 1
 
             await pilot.press("u")
@@ -3496,7 +3924,7 @@ def test_pilot_undo_into_a_deleted_preset_says_so(pilot_config):
                 original(msg, **kw),
             )[1]
 
-            await _fork_preset(pilot, 1, "cheap")
+            await _new_preset(pilot, "cheap")
             await _select_target(pilot, "cat:deep")
             await _select_candidate(pilot, "openai/gpt-5.5")
             await _switch_preset(pilot, 0)
@@ -3524,7 +3952,7 @@ def test_pilot_switch_to_an_identical_preset_drops_the_redo_tail(pilot_config):
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            await _fork_preset(pilot, 1, "twin")  # identical to preset 1 by construction
+            await _new_preset(pilot, "twin")  # identical to preset 1 by construction
             await _select_target(pilot, "cat:deep")
             await _select_candidate(pilot, "openai/gpt-5.5")
             await pilot.press("u")  # creates a redo tail
@@ -3661,7 +4089,7 @@ def test_pilot_a_markup_shaped_preset_name_does_not_crash(pilot_config):
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            await _fork_preset(pilot, 1, "[/b]")
+            await _new_preset(pilot, "[/b]")
             assert "[" not in "".join(_preset_labels(pilot.app))
             await _save_and_confirm(pilot)
 
@@ -3761,7 +4189,7 @@ def test_pilot_escape_on_the_sync_prompt_changes_nothing(pilot_config):
     that said "esc cancel"."""
     cfg_path, _ = pilot_config
     other = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
-    presets_mod.write(cfg_path, presets_mod.Store(presets=[other, None, None], active=0))
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[other], active=0))
 
     async def _run():
         app = _build_app(cfg_path)

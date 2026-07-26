@@ -127,15 +127,20 @@ class History:
         self._index += 1
         return self.current_state(), self._entries[self._index].label
 
-    def set_aux_key(self, key, value) -> None:
-        """Stamp `key`=`value` into EVERY entry's aux, past and future.
+    def map_aux_key(self, key, fn) -> None:
+        """Rewrite `key` in EVERY entry's aux through `fn`, entry by entry.
 
-        For companion state that is deliberately *not* undoable: app.py's preset fork and delete
-        change which preset is active without changing cfg, so they push no entry — and the
-        stored index would otherwise stay behind, letting the next `u` silently move the `●`
-        (and with it, where the restored models get written)."""
+        The point is that it is per-entry: different entries legitimately hold different values —
+        app.py's active-preset index does, which is what makes undoing a preset switch move the
+        `●` back. A blanket "stamp one value everywhere" was tried first and was wrong three ways:
+        it erased older switches, it erased the sentinel a delete writes for "this entry pointed
+        at a preset that no longer exists", and it therefore silently voided the warning that
+        sentinel exists to produce. Every preset action that moves `active` without pushing an
+        entry (fork, no-op switch, delete) goes through here with a mapper that touches only the
+        entries it should. Entries with no aux (or no such key) are left alone."""
         for entry in self._entries:
-            entry.aux = dict(entry.aux or {}, **{key: value})
+            if isinstance(entry.aux, dict) and key in entry.aux:
+                entry.aux = dict(entry.aux, **{key: fn(entry.aux[key])})
 
     def drop_redo(self) -> None:
         """Discard the redo tail without pushing.
