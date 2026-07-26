@@ -3001,13 +3001,24 @@ def test_pilot_detail_fetch_failure_not_cached_forever(pilot_config):
             return {"context": 128000, "cost": None, "reasoning": False, "image": False}
 
         app.catalog.detail = _flaky_detail
+        # Silence the app's OWN ~0.2s debounce timer, armed whenever a target renders, so the
+        # only fetches that can run are the two this test makes explicitly.
+        #
+        # Without this the counts below are a race against machine load, and the fix under test
+        # is what loads the dice: a transient failure caches nothing, so _fetch_detail's closing
+        # re-render (app.py `_render_detail` → `_detail_info`) arms ANOTHER timer. Should it fire
+        # while we await, `calls` gains an increment this test never asked for. It passes on an
+        # idle box and reds on a busy CI runner — it did, on 3.10 only, with `{'n': 2}`.
+        #
+        # Stubbing is faithful to the intent: the debounce is explicitly not what this regression
+        # is about, and it keeps its coverage from every other pilot test that renders a target.
+        app._schedule_detail_fetch = lambda *a, **k: None
 
         async with app.run_test() as pilot:
             # pilot_config's sisyphus is assigned opencode/claude-opus-4-7 → the detail cache
             # keys the (provider, model) pair as 'opencode/claude-opus-4-7' (_detail_key).
-            # Drive the background worker directly — bypassing the ~0.2s debounce timer, which
-            # isn't what this fix is about — for a deterministic, fast test (this is exactly
-            # how _schedule_detail_fetch's timer callback invokes it).
+            # Drive the background worker directly, exactly as the debounce timer's callback
+            # would, for a deterministic and fast test.
             key = "opencode/claude-opus-4-7"
             pilot.app._current_target = "agent:sisyphus"
             pilot.app._fetch_detail("agent:sisyphus", "opencode", "claude-opus-4-7")
