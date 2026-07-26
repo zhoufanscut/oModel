@@ -80,9 +80,11 @@ line when a new one does.
   of assignments you switch between**, one of which is always active and mirrored by the config.
   → config_io.py / history.py / presets.py
 - **preset / active preset** — one of **any number** of named sets of assignments in the `#presets`
-  card (seeded with one `default`; `+ new preset…` adds more); the **active** one (`●`) is what your
+  card (seeded with one `default`; `a` adds more); the **active** one (`●`) is what your
   edits go into and what `s` publishes to the config. `enter` switches (a staged, undoable replace),
-  `a` overwrites, `r` renames, `x` deletes but never the active one. Addressed by **index**
+  `a` adds one holding the current models (row-blind — it never overwrites; the trailing
+  `+ add preset…` row does the same on `enter`), `r` renames, `x` deletes but never the active
+  one. Addressed by **index**
   (0-based, shown 1-based) — ⚠ **never a "slot"**: that word means a *target*, and unlike a slot a
   preset index is **not stable**: the list is dense, so a delete renumbers everything after it.
   Stored beside the active config as `.omodel-presets.json`. → DESIGN decision #17, presets.py

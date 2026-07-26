@@ -134,7 +134,7 @@ The stub files ARE the signatures; implement their bodies. Summary:
   preset holding identical models),
   `.matches_current(state)->bool`, `.map_aux_key(key, fn)->None` (rewrite a key PER ENTRY, for
   companion state that is deliberately not undoable — app.py remaps the active-preset index when
-  a delete renumbers the list, and when a fork or a no-op switch moves the preset some entries
+  a delete renumbers the list, and when an add or a no-op switch moves the preset some entries
   point at. Per-entry, never a blanket stamp: entries legitimately hold different values, and a
   stamp erased both older switches and the delete sentinels), and the
   `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. `aux` is an out-of-cfg companion

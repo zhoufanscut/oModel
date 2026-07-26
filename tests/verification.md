@@ -208,7 +208,7 @@ python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
 #   1. Verify oModel: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
-#   2. Verify the bottom hint bar shows "s save · ? help · q quit" (left) with the version "v<version>"
+#   2. Verify the bottom hint bar shows "s save · q quit · ? help" (left) with the version "v<version>"
 #      right-aligned at the far right; press '?' — the key
 #      overlay opens (Navigate/Edit/Presets/Undo/Models/dialogs); '?'/esc/q closes it
 #   3. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
@@ -262,7 +262,7 @@ Manual (run inside the Check 8 live session, before quitting):
 #   1. First launch: the PRESETS card shows "● 1 default" seeded from your config, and
 #        ls <config_dir>/.omodel-presets.json     # ABSENT — the seed is in memory (one write rule)
 #      Press 'q' immediately: it exits with NO prompt (nothing to save).
-#   2. Relaunch. Set a model, `tab` into the card, enter on "+ new preset…", name it → the new
+#   2. Relaunch. Set a model, `tab` into the card, enter on "+ add preset…", name it → the new
 #      row is now ● and holds those models. Change another model: it goes there, not into row 1.
 #      Add several more — the card grows and then scrolls; it never pushes #targets below half.
 #   3. Press enter on row 1 → its models come back. Enter on row 2 → your row-2 edits are still

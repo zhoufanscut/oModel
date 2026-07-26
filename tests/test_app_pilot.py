@@ -995,12 +995,12 @@ def test_addmodal_gpt_only_gating():
 # ---------------------------------------------------------------------------
 
 def test_pilot_hint_bar_minimal_and_help(pilot_config):
-    """Static#hints is minimal and STATIC (`s save · ? help · q quit`, keys left) with the app
+    """Static#hints is minimal and STATIC (`s save · q quit · ? help`, keys left) with the app
     version (`#hints-version`, right-aligned at the tail) regardless of pane or highlighted row; `?`
     opens the full-reference HelpModal (which documents the keys the bar no longer shows) and toggles
     it closed; ←/→ still cross panes."""
     cfg_path, _ = pilot_config
-    EXPECTED = "s save · ? help · q quit"
+    EXPECTED = "s save · q quit · ? help"
     # Keys that used to live in the pane-aware bar and now belong only in the `?` overlay.
     MOVED_OUT = ("enter set", "enter add", "v variant", "x clear", "x delete",
                  "a sub", "a edit", "u undo", "⌃r redo", "→ candidates", "← targets")
@@ -1509,10 +1509,10 @@ def test_pilot_undo_restores_clean_state(pilot_config):
 
 def test_pilot_undo_redo_absent_from_bar_documented_in_help(pilot_config):
     """Undo/redo never appear in the (now static) hint bar — the bar stays
-    `s save · ? help · q quit` before and after an edit + undo — but they ARE documented in the
+    `s save · q quit · ? help` before and after an edit + undo — but they ARE documented in the
     `?` overlay. (The bar is minimal by design; `?` carries the full reference — DESIGN §Layout.)"""
     cfg_path, _ = pilot_config
-    EXPECTED = "s save · ? help · q quit"
+    EXPECTED = "s save · q quit · ? help"
 
     async def _run():
         app = _build_app(cfg_path)
@@ -3054,20 +3054,6 @@ async def _focus_preset(pilot, index: int) -> None:
     await pilot.pause()
 
 
-async def _fork_preset(pilot, index: int, name: str) -> None:
-    """`a` on an EXISTING preset row → PresetNameModal (which doubles as the overwrite confirm)
-    → type `name` → enter. Replaces preset `index` with the models you're looking at. Use
-    `_new_preset` for the append case."""
-    await _focus_preset(pilot, index)
-    await pilot.press("a")
-    await pilot.pause()
-    # Modal widgets live on the pushed screen, not the base one (pilot.app.query_one would
-    # search Screen#_default) — same access pattern the add-model tests use.
-    pilot.app.screen.query_one("#preset-name-input", Input).value = name
-    await pilot.press("enter")
-    await pilot.pause()
-
-
 def _capture_notifications(pilot) -> list:
     """Record `(severity, message)` for every toast raised from here on, and keep raising them.
     The toast rack isn't mounted headless, so this is how a test asserts on user-facing warnings."""
@@ -3082,12 +3068,15 @@ def _capture_notifications(pilot) -> list:
     return seen
 
 
-async def _new_preset(pilot, name: str) -> None:
-    """`a` on the trailing `+ new preset…` row → name it → enter (append + switch to it)."""
+async def _new_preset(pilot, name: str, row: int | None = None) -> None:
+    """`a` → name it → enter (append + switch to it). `a` is row-blind, so `row` only picks where
+    the cursor sits when it's pressed; default is the trailing `+ add preset…` row."""
     lst = pilot.app.query_one("#presets", OptionList)
-    await _focus_preset(pilot, lst.option_count - 1)  # the `+ new preset…` row is always last
+    await _focus_preset(pilot, lst.option_count - 1 if row is None else row)
     await pilot.press("a")
     await pilot.pause()
+    # Modal widgets live on the pushed screen, not the base one (pilot.app.query_one would
+    # search Screen#_default) — same access pattern the add-model tests use.
     pilot.app.screen.query_one("#preset-name-input", Input).value = name
     await pilot.press("enter")
     await pilot.pause()
@@ -3113,7 +3102,7 @@ def test_pilot_first_launch_seeds_a_default_preset(pilot_config):
             labels = _preset_labels(pilot.app)
             assert labels[0] == f"● 1 {presets_mod.DEFAULT_NAME}", labels
             # ONE preset plus the way to make more — no empty slots to fill in.
-            assert labels[1:] == ["+ new preset…"], labels
+            assert labels[1:] == ["+ add preset…"], labels
             assert _active_row(pilot.app) == 0
 
             seeded = pilot.app._store.current()
@@ -3162,8 +3151,8 @@ def test_pilot_edits_flow_into_the_active_preset_and_s_writes_both(pilot_config)
     assert presets_mod.matching_index(store, saved) == store.active
 
 
-def test_pilot_fork_creates_a_preset_and_switches_to_it(pilot_config):
-    """`a` copies the models you're looking at into another row, names it, and moves you there —
+def test_pilot_add_creates_a_preset_and_switches_to_it(pilot_config):
+    """`a` copies the models you're looking at into a NEW row, names it, and moves you there —
     the only way presets 2 and 3 come into being."""
     cfg_path, _ = pilot_config
 
@@ -3179,9 +3168,42 @@ def test_pilot_fork_creates_a_preset_and_switches_to_it(pilot_config):
             assert labels[1] == "● 2 experiment", labels
             assert labels[0].startswith("  1 "), labels
             store = pilot.app._projected_store()
-            # Both presets hold the models as of the fork; they diverge from here.
+            # Both presets hold the models as of the add; they diverge from here.
             assert store.presets[1].agents["sisyphus"]["model"] == "zhipuai/glm-5"
             assert store.presets[0].agents["sisyphus"]["model"] == "zhipuai/glm-5"
+
+    asyncio.run(_run())
+
+
+def test_pilot_a_on_an_existing_preset_appends_instead_of_overwriting(pilot_config):
+    """`a` is ROW-BLIND: pressed on preset 1 it adds preset 2, it does not replace preset 1.
+
+    It used to overwrite the highlighted row (with the name modal as the only confirm), which put
+    the one destructive, non-undoable action in the app under the key that means *add* in every
+    other pane. Pin the new behaviour: the row under the cursor keeps its models and its name."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            # Preset 1 is seeded from the config; give preset 2 a different model so an overwrite
+            # of row 0 would be visible in its models as well as in the row count.
+            await _new_preset(pilot, "second")
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+
+            before = copy.deepcopy(pilot.app._store.presets[0])
+            await _new_preset(pilot, "third", row=0)  # cursor parked ON preset 1
+
+            names = [p.name for p in pilot.app._store.presets]
+            assert names == ["default", "second", "third"], names
+            assert _active_row(pilot.app) == 2, "you land on the preset you just added"
+            kept = pilot.app._store.presets[0]
+            assert kept.name == before.name
+            assert kept.agents == before.agents, "the row under the cursor was not touched"
+            assert (
+                pilot.app._store.presets[2].agents["sisyphus"]["model"] == "zhipuai/glm-5"
+            ), "the new preset holds the models you were looking at"
 
     asyncio.run(_run())
 
@@ -3445,7 +3467,7 @@ def test_pilot_preset_row_never_wraps(pilot_config, count):
                 await pilot.press("y")  # the sync prompt: adopt, we only care about layout
                 await pilot.pause()
             lst = pilot.app.query_one("#presets", OptionList)
-            rows = lst.option_count  # the presets + the `+ new preset…` row
+            rows = lst.option_count  # the presets + the `+ add preset…` row
             assert rows == count + 1
             # The first render happens pre-layout (width 0) — the _PRESET_NAME_CELLS fallback.
             assert lst.virtual_size.height == rows, (
@@ -3497,11 +3519,11 @@ def test_pilot_growing_past_the_card_does_not_wrap(pilot_config):
 
 
 # ---------------------------------------------------------------------------
-# Pilot: unlimited presets, `+ new preset…`, and `r` rename
+# Pilot: unlimited presets, `+ add preset…`, and `r` rename
 # ---------------------------------------------------------------------------
 
 def test_pilot_presets_are_unlimited(pilot_config):
-    """There is no cap: `+ new preset…` keeps appending, the card scrolls rather than truncating,
+    """There is no cap: `a` keeps appending, the card scrolls rather than truncating,
     and every one of them survives a save/reload round trip."""
     cfg_path, _ = pilot_config
 
@@ -3513,7 +3535,7 @@ def test_pilot_presets_are_unlimited(pilot_config):
             names = [p.name for p in pilot.app._store.presets]
             assert names == ["default"] + [f"p{i}" for i in range(11)]
             labels = _preset_labels(pilot.app)
-            assert labels[-1] == "+ new preset…", "the new-preset row stays last"
+            assert labels[-1] == "+ add preset…", "the add-preset row stays last"
             # default is row 1, so p9 is row 11 — two-digit numbering still fits the card.
             assert labels[10] == "  11 p9", labels[10]
             assert labels[11].startswith("● 12 p10"), labels[11]
@@ -3526,7 +3548,7 @@ def test_pilot_presets_are_unlimited(pilot_config):
 
 
 def test_pilot_enter_on_the_new_row_also_creates(pilot_config):
-    """`enter` activates every other row in the app; on `+ new preset…` it must mean the same
+    """`enter` activates every other row in the app; on `+ add preset…` it must mean the same
     thing as `a` rather than being inert."""
     cfg_path, _ = pilot_config
 
@@ -3595,7 +3617,7 @@ def test_pilot_r_outside_the_card_still_refreshes(pilot_config, monkeypatch):
 
 
 def test_pilot_r_on_the_new_row_does_nothing(pilot_config):
-    """`+ new preset…` names no preset, so there is nothing to rename — and it must not fall
+    """`+ add preset…` names no preset, so there is nothing to rename — and it must not fall
     through to a catalog refresh either."""
     cfg_path, _ = pilot_config
 

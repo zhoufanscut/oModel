@@ -8,9 +8,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Named **presets** in a card under the agent list — and they're what you edit. One is always
   active (`●`): your model changes go into it, and `s` writes it to your config. `Enter` switches
-  presets (your edits stay in the one you leave), `a` puts the current models into one, `r` renames
-  one, `x` deletes one, and the last row `+ new preset…` adds another — keep **as many as you
-  like**; `tab` / `shift+tab` reach the card. First run seeds a `default` preset from the config you
+  presets (your edits stay in the one you leave), `a` adds one holding the models you're looking at
+  (so does `Enter` on the last row, `+ add preset…`), `r` renames one, `x` deletes one — keep **as
+  many as you like**; `tab` / `shift+tab` reach the card. `a` never replaces a preset, whatever row
+  the cursor is on. First run seeds a `default` preset from the config you
   already have, so **your config always matches one of your presets** — never a state you can't get
   back to.
 - Presets live next to your config in `.omodel-presets.json` (a `--config` override keeps its own
@@ -24,6 +25,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   yes/no, since discarding drops preset changes as well as config changes.
 - The `?` overlay now lists `Tab` / `Shift+Tab`, which cycle all three panes and are the way to
   reach the presets card. They always worked; they were just never written down.
+- The hint bar reads `s save · q quit · ? help` — save and quit next to each other, `?` at the end
+  as the pointer to everything else.
 
 - Confirmation dialogs now take `←`/`→` (and `h`/`l`) to move between buttons, not just `Tab`, and
   the highlight actually moves with you — previously one button stayed coloured whichever was

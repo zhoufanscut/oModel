@@ -25,7 +25,7 @@ verbatim (timestamped backups each save).
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- s save · ? help · q quit                                     v0.2.0
+ s save · q quit · ? help                                     v0.2.0
 ```
 
 ## Requirements
@@ -98,9 +98,9 @@ live re-fetch and rebuild the cache.
 | `↑` `↓` (`j` `k`) | Navigate agents/categories or candidates |
 | `←` `→` (`h` `l`) | Jump between the targets and candidates panes |
 | `Tab` / `Shift+Tab` | Cycle all three panes (targets → presets → candidates) — the way to reach the presets card |
-| `Enter` | Set the highlighted candidate (or open `+ add model…`); on a preset, switch to it; on `+ new preset…`, add one |
+| `Enter` | Set the highlighted candidate (or open `+ add model…`); on a preset, switch to it; on `+ add preset…`, add one |
 | `v` | Pick a variant for the current candidate |
-| `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or put the current models into a preset |
+| `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or a new preset holding the current models (presets card) |
 | `r` | Refresh the model list — or, on a preset, rename it |
 | `x` | Clear the current agent/category model (on a preset: delete it, after a confirm — never the one you're using) |
 | `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
@@ -123,7 +123,8 @@ live re-fetch and rebuild the cache.
 **Presets** sit under the agent list, and they're what you actually edit. One is always active
 (`●`); your model changes go into it, and `s` writes it to `oh-my-openagent.jsonc`. Press `Enter`
 on another preset to switch (your edits stay in the one you leave), `r` to rename one, `x` to
-delete one, and `+ new preset…` on the last row to add another — keep as many as you like. First
+delete one, and `a` (or `Enter` on the last row, `+ add preset…`) to add another from the models
+you're looking at — keep as many as you like. First
 run seeds a `default` preset from the config you already have, so your config always matches one
 of your presets — never a state you can't get back to. Nothing is written until you press `s`, and
 then both files are written together; presets live beside your config in `.omodel-presets.json`,
