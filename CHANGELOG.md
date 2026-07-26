@@ -6,6 +6,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **oModel can now be driven by an LLM agent.** New subcommands emit JSON and return meaningful
+  exit codes, so an agent can ask what's set, ask what you can run, and change it — through the
+  same rules the TUI applies. Previously the only way to change a model without the TUI was to
+  hand-edit `oh-my-openagent.jsonc`, which skips the `provider/` prefix, the variant check, the
+  backup and the preset invariant.
+  ```sh
+  omodel agent-guide                          # the whole contract, in one call
+  omodel candidates agent:sisyphus --json     # what this agent can run
+  omodel set agent:sisyphus opencode/gpt-5.5 --variant medium
+  ```
+  Also `targets`, `show`, `check`, `clear`, `apply` (many assignments, one save) and
+  `preset ls|use|new|rm`. Every one takes `--json` and `--config`; the mutating ones take
+  `--dry-run`. Exit `3` means "refused — pick something else", `1` means "oModel failed".
+- `omodel agent-guide` prints the agent contract — target ids, the candidates→set loop, the JSON
+  shapes, the exit codes, and what oModel won't do. It ships inside the binary, so an agent that
+  finds `omodel` on `PATH` can read it without the repo.
 - Named **presets** in a card under the agent list — and they're what you edit. One is always
   active (`●`): your model changes go into it, and `s` writes it to your config. `Enter` switches
   presets (your edits stay in the one you leave), `a` adds one holding the models you're looking at
@@ -21,6 +37,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   say where they landed instead of quietly ending up in a different one.
 
 ### Changed
+- Internally, the editable state moved into a new headless `session.py` that both the TUI and the
+  CLI edit through, so the two can't drift on what a model may be set to or what a save writes.
+  No change to how the TUI behaves. Every existing flag (`--print`, `--check`, `--restore`,
+  `--refresh-omo`, `--refresh-models`, `--version`) works exactly as before; `omodel --check`
+  still always exits 0 for CI, while the new `omodel check` exits 3 when it finds a problem.
 - Quitting with unsaved work now offers **save & quit / discard / cancel** instead of a bare
   yes/no, since discarding drops preset changes as well as config changes.
 - The `?` overlay now lists `Tab`, which cycles all three panes and is the way to reach the presets

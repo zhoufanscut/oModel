@@ -57,6 +57,7 @@ prefix and a valid variant, and saves a clean config.
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub/delete-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
 | 17 | Presets | **Named presets ARE the working state** (as many as you keep — seeded with one `default`), in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json`). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` adds one holding the current models (as does `enter` on the trailing `+ add preset…` row) — it is row-blind and never overwrites; `r` renames; `x` refuses on the active one (so you can never reach zero). **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
+| 18 | Agent surface | **omodel is a tool an LLM agent can call**, not only a TUI a human drives: JSON subcommands (§CLI) over a headless `session.py` that `app.py` and `cli.py` BOTH edit through. The alternative — leaving the CLI read-only — was rejected because an agent asked to change a model would then hand-edit `oh-my-openagent.jsonc`, bypassing provider prefixing, variant validity, the GPT-only lock, the backup and the preset invariant: exactly the failure mode oModel exists to prevent. So the extraction is the point, and the verbs are the cheap part. `session.py` must never import Textual (cli.py's lazy-import discipline depends on it). |
 
 ## Data sources
 
@@ -111,6 +112,9 @@ prefix and a valid variant, and saves a clean config.
 
 ## CLI
 
+Two audiences, one parser. The flat flags are the **human** surface and are unchanged; the
+subcommands are the **agent** surface (decision #18).
+
 ```
 omodel                          # launch the TUI
 omodel --config PATH            # use a specific config file
@@ -121,6 +125,56 @@ omodel --check                  # dry-run: resolve candidate lists for every tar
 omodel --refresh-models         # force `opencode models --refresh` + rebuild the ~/.cache/omodel cache
 omodel --version
 ```
+
+```
+omodel agent-guide                       # print data/agent-usage.md — the agent contract
+omodel targets [--json]                  # every valid target id
+omodel show [--json]                     # assignments + providers + presets + degraded
+omodel candidates <target> [--json]      # the pick list, with a ready-to-use `value` per row
+omodel check [--json]                    # config problems; exit 3 if any
+omodel set <target> <provider/model> [--variant V] [--dry-run] [--force] [--json]
+omodel clear <target> [--dry-run] [--json]
+omodel apply [--dry-run] [--force] [--json]   # batch assignments from stdin JSON, ONE save
+omodel preset ls|use <name|index>|new <name>|rm <name> [--json]
+```
+
+**Exit codes** (the agent surface's real contract — `0` success, `1` omodel failed, `2` usage,
+`3` **refused by a guard**). The 1-vs-3 split is load-bearing: an agent that can't distinguish
+them either retries a broken tool or abandons a fixable pick.
+
+**Strictness of `set`/`apply`** — refuse, `--force` overrides, with one exception:
+
+| Condition | Result | `--force`? |
+|---|---|---|
+| unknown target, unqualified `provider/model` | exit 3 | never |
+| non-GPT model on a GPT-only agent (hephaestus) | exit 3 | **never** — omo's hook would reassign the session, so the config could not take effect; the CLI must not be a looser door than the TUI, which hides the escape hatch entirely |
+| no connected provider serves the model | exit 3 | yes (writes with `warn: ["unavailable"]`) |
+| variant not in opencode's set | exit 3 | yes (writes with `warn: ["variant"]`) |
+
+The variant check fires **only when opencode reports a non-empty set** for that (provider,
+model). `variants_for` is cache-only and dedicated providers report `{}`, so empty means "no
+information", not "no variants" — refusing on silence would reject valid picks on a cold cache
+(mirrors `resolve._variant_warn`, decision #14).
+
+**Write rule.** Every mutating verb is a complete transaction: **validate → mutate cfg** →
+`config_io.save` → `presets.write(projected_store())`, **config first** (mirroring `app.py`'s
+`_save`). Validate-before-mutate is what makes `apply` all-or-nothing, and is safe because
+`_validate` reads only suggestions + catalog, never cfg — so no entry's validity can depend on
+another entry's effect. Nothing to change → write **nothing** (no file rewrite, no backup slot
+burned), mirroring the TUI's "Nothing to save." There is no staging across processes — a staged state would be the orphan fourth state
+decision #17 forbids. `apply` validates **all-or-nothing** so a half-applied config never lands,
+and exists because each save snapshots a backup and the ring keeps only 20: eleven individual
+`set` calls would evict eleven of the user's own snapshots.
+
+**JSON.** Every payload carries `"schema": 1`. `degraded: true` (empty `catalog.connected`) means
+availability is UNKNOWN, not that nothing works — without it a consumer reads `candidates: []` as
+"no models exist". The raw omo `fallbackChain` `entry` is deliberately **not** exposed (it would
+freeze omo's internal schema into omodel's public output); `substitute_for` carries what a
+consumer needs. Shapes are pinned in CONTRACTS.md §agent JSON.
+
+**The doc ships in the package** (`data/agent-usage.md`, read via `importlib.resources`) so
+`omodel agent-guide` works from the PyInstaller binary, where most users meet omodel and where
+there is no repo to read.
 
 CLI error behavior: a malformed (unparseable) config makes the TUI launch and `--print` exit 1 with
 a one-line friendly message + a "fix the file or `omodel --restore`" hint (`ConfigParseError` from
@@ -189,8 +243,9 @@ oModel/
   install.sh                     # curl|sh: detect os/arch → download release binary → ~/.local/bin
   src/omodel/
     __init__.py
-    cli.py            # argparse: default → TUI; --config/--restore/--print/--check/--refresh-omo/--refresh-models
-    app.py            # Textual two-pane App (see §Textual contract)
+    cli.py            # argparse: default → TUI; the flat flags; the agent subcommands (§CLI)
+    session.py        # HEADLESS CORE: cfg+catalog+resolver+store, every mutation, the save. No Textual.
+    app.py            # Textual two-pane App (see §Textual contract) — a Session + rendering
     catalog.py        # availability via `opencode models`; verbose-record parser; providers_for(); refresh()
     cache.py          # 24h on-disk cache of opencode stdout (~/.cache/omodel); read-through by catalog
     suggestions.py    # load bundled/override omo-suggestions.json; detect_family(); variants
@@ -202,6 +257,7 @@ oModel/
     data/
       omo-suggestions.json        # BUNDLED, committed (regenerated by --refresh-omo)
       default-config.jsonc        # BUNDLED starter — oModel's OWN minimal template (not vendored)
+      agent-usage.md              # BUNDLED agent contract — printed by `omodel agent-guide`
     tools/
       snapshot_omo.ts             # BUNDLED extractor (oModel's own code; imports omo at maintainer time)
   tests/
@@ -211,6 +267,7 @@ oModel/
     test_config_io.py             # clean rewrite preserves non-model sections; .bak; comment loss
     test_history.py               # undo/redo stack: change detection, deep-copy isolation, cap
     test_presets.py               # preset file IO: 3 entries, name, missing/corrupt → 3 empties
+    test_session.py               # the headless core: pick list, mutations, both-files save
     test_app_pilot.py             # Textual App.run_test() set + save + undo/redo via queryable IDs
   .github/workflows/
     ci.yml                        # lint + tests (opencode + bun mocked; no omo source needed)
@@ -479,6 +536,36 @@ oModel/
   `{ "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json", "agents": {}, "categories": {} }`
   — valid and minimal; the left pane is populated from the bundled snapshot, so empty maps still show
   all 11 agents / 8 categories as unset, and only what you set gets written.
+
+### `session.py` — the headless core (decision #18)
+- **Purpose:** hold the editable state and perform every mutation, so `app.py` (TUI) and
+  `cli.py` (agent surface) cannot drift into two answers for "what may I set here?" or "what
+  does a save write?". Before it existed, those rules lived in `OModelApp` methods that queried
+  widgets, so nothing outside a running TUI could apply them.
+- **`Session`** = `catalog` + `suggestions` + `resolver` + `cfg` + `config_path` + `store`
+  (+ `catalog_error`, `sync_conflict`). `__post_init__` does the presets load / seed /
+  launch-reconcile and takes both dirtiness baselines (`saved_text`, `saved_store_fp`), so every
+  entry point upholds the invariant identically. `Session.build(config_path)` is the production
+  wiring both `create_app()` and every CLI verb call.
+- **Reads:** `known_targets()` / `is_known()` (omo's targets, sub-kinds filtered per agent),
+  `rows(target, custom_rows=())` (the pick list: chain + caller-held custom rows + the current
+  off-chain assignment), `assignment()`, `variants_for()`, `degraded`.
+- **Writes:** `set_model` / `set_row` / `clear` / `delete_subtarget` / `switch_preset`, then
+  `save_config()` + `write_store()` (or `save()`, which does both, config first). `app.py`
+  calls the two halves rather than `save()` because its save is interactive (diff → confirm) and
+  it reports a config-landed-store-didn't failure differently.
+- **What deliberately stays in `app.py`:** the undo `History`, the per-target row cache,
+  `_custom_rows`, and all rendering — session-shaped only inside a UI (a CLI process edits once
+  and exits, so it has no undo stack and no cursor to remember). `rows()` therefore takes the
+  custom rows as an ARGUMENT rather than owning them.
+- **Aliasing:** `cfg` is shared by identity with `app.py` (`OModelApp.cfg` is a property onto
+  `session.cfg`); `store` is REASSIGNED by a switch and by a write, so it is reached through the
+  property rather than aliased at construction — otherwise the two would fork.
+- **No Textual, no `app` import** — `cli.py`'s lazy imports (`--version` / `--check` / the JSON
+  verbs never pay for Textual) depend on it. The guards and the target-id vocabulary
+  (`GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`, `is_gpt_model`, `subkinds_for`, `is_no_variant`,
+  `coerce_dict`, `gpt_only`, `split_target`, `target_label`) moved here and `app.py` re-imports
+  them under their historical private names.
 
 ### `history.py` — in-session undo/redo (decision #16)
 - **Purpose:** recover from a mis-press *within a session*, before/independent of saving — a

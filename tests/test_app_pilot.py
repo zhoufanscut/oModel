@@ -4397,3 +4397,93 @@ def test_pilot_escape_on_the_sync_prompt_changes_nothing(pilot_config):
             assert len(pilot.app.screen_stack) == 1
 
     asyncio.run(_run())
+
+
+def test_pilot_refresh_actually_re_resolves_the_chain(pilot_config, monkeypatch):
+    """`r` must rebuild the PICK LIST against the refreshed catalog, not just the header.
+
+    Regression guard for the session extraction: `catalog` / `resolver` / `catalog_error` are
+    reassigned by `_refresh_catalog`, and `_build_rows` delegates to `session.rows()`. When those
+    three were plain attributes copied in `__init__` instead of properties onto the session, a
+    refresh updated the app and left the session holding the pre-refresh resolver — so
+    `#providers` and the add-model modal went fresh while the chain silently kept resolving
+    against the OLD catalog, which is the one thing `r` exists to do.
+
+    Deliberately hands the worker a catalog that is BIGGER than the original (the newly-connected
+    -provider case). `test_pilot_candidate_highlight_survives_refresh` above passes an equivalent
+    catalog, so a stale resolver produces identical rows there and the bug survives it.
+    """
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        # Start with ONLY opencode connected — as if zhipuai/openai weren't logged in yet.
+        narrow = Catalog(
+            available={"opencode": ["claude-opus-4-7"]},
+            connected=["opencode"],
+        )
+        app = _build_app_with(cfg_path, narrow)
+
+        from omodel import app as app_mod
+
+        # ...then the user runs `opencode auth login` elsewhere and presses `r`.
+        widened = Catalog(
+            available={
+                "opencode": ["claude-opus-4-7", "glm-5", "gpt-5.5"],
+                "zhipuai": ["glm-5"],
+                "openai": ["gpt-5.5"],
+            },
+            connected=["opencode", "zhipuai", "openai"],
+        )
+        monkeypatch.setattr(app_mod.catalog_mod, "refresh", lambda *a, **k: widened)
+
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            before = _candidate_prompts(pilot)
+            assert not any("zhipuai/glm-5" in p for p in before), (
+                "precondition: zhipuai isn't connected yet"
+            )
+
+            await pilot.press("r")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+            after = _candidate_prompts(pilot)
+            assert any("zhipuai/glm-5" in p for p in after), (
+                "after `r` the pick list must offer models from the newly-connected provider; "
+                f"still showing {after!r}"
+            )
+            assert any("openai/gpt-5.5" in p for p in after)
+            # The app and the session must be looking at the SAME catalog.
+            assert pilot.app.catalog.connected == pilot.app.session.catalog.connected
+            assert pilot.app.resolver is pilot.app.session.resolver
+
+    asyncio.run(_run())
+
+
+def _candidate_prompts(pilot) -> list:
+    cands = pilot.app.query_one("#candidates", OptionList)
+    return [str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)]
+
+
+def test_pilot_survives_a_non_dict_agents_map(tmp_path, monkeypatch):
+    """A truthy non-dict `agents` must not kill the app during the first render.
+
+    `(cfg.get("agents") or {})` rescues `null` but NOT `"oops"`, so `_agent_subtargets` called
+    `.get` on a str and the app died on launch — while `omodel check` reported the same config
+    healthy. The CLI hardening made that inconsistency worse, not better: an agent would call it
+    fine and the user still couldn't open the TUI.
+    """
+    cfg_path = tmp_path / "oh-my-openagent.jsonc"
+    cfg_path.write_text('{"agents": "oops", "categories": {}}', encoding="utf-8")
+
+    async def _run():
+        app = _build_app(str(cfg_path))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            targets = pilot.app.query_one("#targets", OptionList)
+            assert targets.option_count > 0, "the target list still renders from bundled omo data"
+            # And an edit repairs the map rather than merely surviving it.
+            await _select_target(pilot, "agent:sisyphus")
+            assert pilot.app._agent_subtargets("sisyphus") == []
+
+    asyncio.run(_run())

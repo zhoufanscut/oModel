@@ -130,6 +130,49 @@ of your presets — never a state you can't get back to. Nothing is written unti
 then both files are written together; presets live beside your config in `.omodel-presets.json`,
 so a `--config` override keeps its own set.
 
+## Using oModel from an agent
+
+If you work with an LLM coding agent, it can drive oModel directly instead of hand-editing your
+config — which means it gets the `provider/` prefix, the variant check, the backup and the preset
+invariant, same as you do from the TUI.
+
+```sh
+omodel agent-guide                            # the full contract, written for an agent
+omodel candidates agent:sisyphus --json       # what this agent can run
+omodel set agent:sisyphus opencode/gpt-5.5 --dry-run   # preview; drop --dry-run to write
+```
+
+Also `targets`, `show`, `check`, `clear`, `apply` (batch, one save) and
+`preset ls|use|new|rm` — all with `--json`. Exit codes carry the meaning: `0` success, `1` oModel
+failed, `2` usage, `3` refused (unknown target, a model you can't run, a bad variant).
+
+### Telling your agent oModel exists
+
+An agent that reaches for `omodel --help` finds `agent-guide` and reads the whole contract from
+there. The gap is earlier than that: asked to change a model, an agent's first instinct is often
+to open `oh-my-openagent.jsonc` and edit it — and nothing in that file mentions oModel.
+
+So say it once, before the agent forms a plan. Paste this into your `CLAUDE.md`, `AGENTS.md`, or
+whatever instructions file your agent reads at startup:
+
+```markdown
+## Changing OMO models
+
+Never hand-edit `oh-my-openagent.jsonc` — it skips the `provider/` prefix, the variant check,
+the backup and the preset invariant. Use the `omodel` CLI instead:
+
+    omodel agent-guide                        # read this first — the full contract
+    omodel candidates <target> --json         # what a target can run; use a row's `value` verbatim
+    omodel set <target> <value> [--variant V] # writes config + presets together
+
+Targets are `agent:<name>`, `agent:<name>.ultrawork`, `agent:<name>.compaction`, `cat:<name>`
+(`omodel targets --json` lists them). Exit 3 means the request was refused — read the message
+and pick another candidate. Exit 1 means omodel failed; stop and report.
+```
+
+One line of it does the real work: *never hand-edit the file*. Everything else the agent can
+discover from `omodel agent-guide`.
+
 See [DESIGN.md](DESIGN.md) for the full design — data sources, resolution rules, caching, and
 packaging.
 

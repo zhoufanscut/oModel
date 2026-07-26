@@ -1,7 +1,12 @@
 # AGENTS.md
 
 This file provides guidance to coding agents (including Claude Code, via a `CLAUDE.md` that imports
-it) when working with code in this repository.
+it) when working **on this repository's source**.
+
+> **Just want to USE `omodel` to set a model?** That is a different document: run
+> **`omodel agent-guide`** (or read `src/omodel/data/agent-usage.md`) for the verbs, the JSON
+> shapes, and the exit codes. Short version: never hand-edit `oh-my-openagent.jsonc` — run
+> `omodel candidates <target> --json`, then `omodel set <target> <value>`.
 
 ## What this is
 
@@ -32,6 +37,13 @@ omodel --check                   # CI-safe dry-run resolve (exit 0; degrades w/o
 omodel --print                   # resolved models, no UI
 omodel --config /tmp/x.jsonc     # ALWAYS use a temp path when testing saves
 
+# Agent surface (JSON + exit codes; see `omodel agent-guide` for the full contract)
+omodel targets --json
+omodel candidates agent:sisyphus --json
+omodel set agent:sisyphus opencode/claude-opus-4-8 --variant max --dry-run --json
+omodel apply --json < assignments.json     # batch, ONE save (backup ring holds 20)
+omodel preset use cheap
+
 # Refresh opencode availability: force `opencode models --refresh` + rebuild ~/.cache/omodel
 omodel --refresh-models          # in-TUI equivalent: the `r` key (off-thread)
 
@@ -51,11 +63,12 @@ pre-release gate (it covers the live `opencode` and PyInstaller-binary checks th
 A four-stage pipeline; `app.py` is the integration point that consumes all of it.
 
 ```
-opencode models (live) ─► cache.py (24h) ─► catalog.py    ─┐
-                                                           ├─► resolve.py ──► candidate-row dicts ──► app.py (TUI)
-data/omo-suggestions.json ──────────────► suggestions.py ─┘                                              │
-(bundled omo snapshot)                                                                                   ▼
-                                                                                                  config_io.py (save)
+opencode models (live) ─► cache.py (24h) ─► catalog.py    ─┐                          ┌─► app.py (TUI)
+                                                           ├─► resolve.py ─► session.py ┤
+data/omo-suggestions.json ──────────────► suggestions.py ─┘   candidate-row  (headless)└─► cli.py (agent JSON)
+(bundled omo snapshot)                                            dicts            │
+                                                                                   ▼
+                                                                        config_io.py + presets.py (save, together)
 ```
 
 - **`catalog.py`** — "what you have." Parses `opencode models` into `available={provider:[ids]}` +
@@ -106,14 +119,33 @@ data/omo-suggestions.json ──────────────► suggesti
   stamp erases older switches and the delete sentinels); that is the sharp edge. Reads are
   best-effort (missing/corrupt → empty store, `active` normalized); `write()` raises so the app can
   notify.
-- **`app.py`** — Textual two-pane App. Stable widget IDs (`#targets`, `#presets`, `#candidates`,
+- **`session.py`** — the **headless core** (decision #18), and the reason the CLI can do anything
+  the TUI can. Holds cfg + catalog + suggestions + resolver + the presets store, and owns every
+  cfg mutation (`set_model`/`clear`/`switch_preset`) plus the both-files save. `app.py` and
+  `cli.py` are both thin over it, so the rules (provider prefixing, the `none`-variant drop, the
+  GPT-only lock, config-equals-active-preset) can't fork between the two surfaces. `Session.build()`
+  is the shared production wiring. **Never import textual or app here** — `cli.py`'s lazy imports
+  depend on it. The guards moved here from `app.py` (`GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`,
+  `is_gpt_model`, `subkinds_for`, `is_no_variant`, `coerce_dict`), which re-imports them under
+  their old private names.
+- **`app.py`** — Textual two-pane App. Wraps a `Session` and keeps only what needs a UI (the undo
+  `History`, the per-target row cache, `_custom_rows`, rendering); `cfg`/`_store`/`_saved_text`/
+  `_saved_store_fp` are properties onto the session. Stable widget IDs (`#targets`, `#presets`, `#candidates`,
   `#detail`, `#providers`) and option IDs (`agent:<name>[.ultrawork|.compaction]`, `cat:<name>`, `cand:<i>`,
   `cand:add`, `preset:<i>`, `preset:new`) are a contract that pilot tests depend on — see the module
   docstring; don't rename.
-- **`cli.py`** — argparse dispatch. Imports are deliberately lazy so `--version`/`--check`/`--refresh-omo`/
-  `--refresh-models` never import Textual. Two refresh flags, one per data source: `--refresh-omo`
-  (bundled omo suggestions, via `refresh.py`) and `--refresh-models` (opencode availability, via
-  `catalog.refresh()`).
+- **`cli.py`** — argparse dispatch, two audiences. The **flat flags** (`--print`/`--check`/
+  `--restore`/`--refresh-*`/`--version`) are the human surface and are unchanged. The
+  **subcommands** are the agent surface: `agent-guide`, `targets`, `show`, `candidates`, `check`,
+  `set`, `clear`, `apply`, `preset` — all with `--json` and meaningful exit codes (0 ok / 1 omodel
+  failed / 2 usage / **3 refused by a guard**; an agent branches on 1-vs-3). Imports are
+  deliberately lazy so `--version`/`--check`/the JSON verbs never import Textual. `--config` is on
+  both the main parser and a shared `parents=` parser with `default=SUPPRESS`, so
+  `omodel --config X show` and `omodel show --config X` both work (without SUPPRESS the subparser
+  silently clobbers the main parser's value). Two refresh flags, one per data source:
+  `--refresh-omo` (bundled omo suggestions, via `refresh.py`) and `--refresh-models` (opencode
+  availability, via `catalog.refresh()`). `omodel check` (exit 3 on a problem) is deliberately
+  distinct from `--check` (always exit 0, CI-safe) — don't merge them.
 - **`refresh.py` + `tools/snapshot_omo.ts`** — maintainer-time regeneration of the bundled data. The
   extractor runs under **bun** (node can't resolve omo's extensionless `.ts` imports).
 

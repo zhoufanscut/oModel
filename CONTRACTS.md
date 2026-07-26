@@ -12,7 +12,8 @@ updating this file (others depend on it).
 | **Core logic** | `src/omodel/catalog.py`, `src/omodel/cache.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
 | **Config I/O** | `src/omodel/config_io.py` |
 | **TUI** | `src/omodel/app.py`, `src/omodel/history.py`, `src/omodel/presets.py` |
-| **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
+| **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `src/omodel/data/agent-usage.md`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
+| **Session (shared core)** | `src/omodel/session.py` — **Lead-owned**, because both TUI and CLI depend on it; a change here can break either. Propose, don't edit unilaterally. |
 | **QA / verification** | everything under `tests/` (incl. `conftest.py`) |
 
 Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operations + final wiring.
@@ -79,6 +80,49 @@ list `#add-candidates`, then the variant list `#add-variants`): `variant` was al
 `"add"` row now carries the variant picked in the modal's variant phase (still `None` when opencode
 reports no variants for the chosen `(provider, model)` via `Catalog.variants_for`), instead of being
 forced to `None`.
+
+## Agent JSON (the second frozen shape — `cli.py --json`, decision #18)
+
+Consumed by LLM agents, so it is a **public API**: additive fields are fine, renames and removals
+are not. Every payload carries `"schema": 1`; bump only on a breaking change.
+
+- **Exit codes** — `0` ok · `1` omodel failed (unwritable path, malformed config) · `2` usage ·
+  `3` **refused by a guard**. The 1-vs-3 split is the contract an agent branches on; do not
+  collapse it.
+- **Refusal shape** — `{"schema", "ok": false, "error": <slug>, "message", …context}`. `error`
+  slugs are stable: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`, `gpt_only`,
+  `unknown_preset`, `active_preset`, `bad_input`, `write_failed`.
+- **`degraded`** (on `show`/`candidates`/`check`) — `not catalog.connected`, i.e. availability is
+  UNKNOWN. Never omit it: a consumer reading `candidates: []` without it concludes "no models
+  exist" rather than "opencode is unreachable". Correspondingly `available` is `null` (not
+  `false`) when unknown.
+- **A candidate row** is the internal candidate-row dict MINUS `entry` PLUS `index`, `value`
+  (`f"{provider}/{model}"`, pre-assembled so a consumer never builds it), `current` (bool),
+  `settable` (bool) and `variants` (from `catalog.variants_for` — `[]` means "no information",
+  not "no variants"). `entry` (the raw omo `fallbackChain` dict) is **deliberately withheld**:
+  publishing it would freeze omo's internal schema into omodel's public output. `settable: false`
+  marks a row `set` would refuse — the list surfaces the target's CURRENT assignment even when it
+  is unpickable (a GPT-only agent holding a non-GPT model; a model whose provider you have since
+  disconnected), and the guide tells consumers to use `value` verbatim, so the two had to be
+  reconciled; marking beats hiding what is configured. **`settable` MUST be computed by calling
+  `_validate` itself** (with `variant=None` — a bare `set` passes no variant), never by
+  re-deriving the conditions: a hand-rolled version covered `gpt_only` and missed `unavailable`,
+  so the synthesized off-chain row advertised `settable: true` and then exited 3.
+- **`sync_conflict`** is on EVERY payload (reads and writes). True = the config matches no preset
+  because something outside omodel wrote it, and **the next write adopts it into the active
+  preset**, including targets the command never named. The TUI escalates the same decision via
+  `_ask_sync`; the CLI cannot prompt, so it must report. The prose surfaces say it too — a
+  JSON-only signal let `omodel check` print "OK" over a pending conflict.
+- **`check`'s `problem` slugs**: `unknown_target`, `unavailable`, `bad_variant`, `gpt_only`,
+  `malformed_map` (the last carries `target: null` — it belongs to the file, not a target).
+  Anything `set` refuses, `check` must report — otherwise a config `set` would never have
+  produced (a preset re-installing a non-GPT hephaestus) reads as healthy. Variant validity is
+  **not** gated on `degraded`: it comes from the cached `--verbose`, not from opencode being on
+  PATH, and gating it made `check` and `set` contradict each other on one file.
+
+The full contract, written for the agent rather than the maintainer, is
+`src/omodel/data/agent-usage.md` — shipped in the package and printed by `omodel agent-guide`.
+Keep the two in step: the doc is what agents actually read.
 
 ## Public signatures (authoritative = the stub modules)
 
@@ -160,8 +204,27 @@ The stub files ARE the signatures; implement their bodies. Summary:
   `<config_dir>/.omodel-presets.json` — next to the ACTIVE config, so a temp `--config` gets its own
   set. Non-dict `agents`/`categories` coerce to `{}` on read and write. Pure data + file IO, no
   Textual; consumed only by `app.py`. **Invariant app.py upholds:** the config on disk equals the
-  ACTIVE preset — `s` writes both files, nothing else writes either.
-- `cli.py`: `main(argv=None)->int` (console-script entrypoint).
+  ACTIVE preset. In the TUI only `s` writes, and it writes both files. `cli.py`'s mutating verbs
+  (decision #18) write both together too — config first — so the invariant holds on both surfaces;
+  nothing else anywhere writes either file.
+- `session.py`: the headless core BOTH `app.py` and `cli.py` edit through (decision #18).
+  Module-level: `SUBKINDS`, `GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`; `is_gpt_model(id)->bool`;
+  `subkinds_for(name)->tuple`; `is_no_variant(v)->bool`; `coerce_dict(parent, key)->dict`;
+  `gpt_only(target)->bool`; `target_label(target)->str`; `split_target(target)->tuple|None`
+  (shape only — existence is `Session.is_known`). `@dataclass Session(catalog, suggestions,
+  resolver, cfg, config_path, catalog_error=None)` with `__post_init__`-filled `store`,
+  `sync_conflict`, `saved_text`, `saved_store_fp`; classmethod `build(config_path=None)`;
+  `.degraded` (property, `not catalog.connected`); `.known_targets()->list`;
+  `.is_known(target)->bool`; `.node_for()`/`.ensure_node()`/`.assignment()`;
+  `.rows(target, custom_rows=())->list` (candidate-row dicts); `.variants_for(p, m)->list`;
+  `.set_model(target, provider, model, variant=None)`/`.set_row(target, row)`;
+  `.clear(target)->bool`; `.delete_subtarget(name, kind)`; `.projected_store()->Store`;
+  `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.is_dirty()`/
+  `.store_is_dirty()`; `.diff()->str`; `.save_config()->SaveResult`; `.write_store(store=None)
+  ->Store` (RAISES); `.save()->SaveResult` (both files, config first — `app.py` calls the two
+  halves instead, since its save is interactive). **MUST NOT import textual or app.**
+- `cli.py`: `main(argv=None)->int` (console-script entrypoint). Constants `SCHEMA = 1`,
+  `EXIT_OK/ERROR/USAGE/REJECTED = 0/1/2/3`.
 - `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
   data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).
 

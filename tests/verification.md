@@ -1,7 +1,7 @@
 # oModel — Verification Checklist (Lead's Merge Gate)
 
-Maps each of the 9 §Verification checks in DESIGN.md to the concrete command(s) to run.
-All checks must pass before any release.
+Maps the §Verification checks in DESIGN.md to the concrete command(s) to run, plus Check 10 for
+the agent surface (decision #18). All checks must pass before any release.
 
 ---
 
@@ -301,6 +301,100 @@ writes `/tmp/.omodel-presets.json` and never touches `~/.config/opencode/`.
 
 ---
 
+## Check 10 — Agent surface (decision #18)
+
+**Goal:** an LLM agent can inspect and change models without the TUI, gets the same guards, and
+can read the contract from the shipped binary.
+
+```sh
+# Automated
+python -m pytest tests/test_session.py tests/test_cli.py -q
+
+# Live, against a TEMP config (never the real one)
+cp ~/.config/opencode/oh-my-openagent.jsonc /tmp/omodel-agent.jsonc
+C="--config /tmp/omodel-agent.jsonc"
+
+omodel show $C --json | jq '.degraded, .active_preset'
+omodel candidates agent:sisyphus $C --json | jq -r '.candidates[].value'
+
+# --dry-run must write NOTHING
+before=$(md5sum /tmp/omodel-agent.jsonc)
+omodel set agent:sisyphus <a value from that list> $C --dry-run --json | jq .diff
+[ "$before" = "$(md5sum /tmp/omodel-agent.jsonc)" ] && echo "dry-run OK"
+
+# A real set moves BOTH files together
+omodel set agent:sisyphus <same value> $C --json | jq '.changed, .backup'
+ls /tmp/.backup/ && cat /tmp/.omodel-presets.json | jq .active
+
+# Guards: every one of these must print 3
+for a in "set agent:nope opencode/gpt-5.5" \
+         "set agent:sisyphus not-a-model" \
+         "set agent:hephaestus zhipuai/glm-5" \
+         "set agent:hephaestus zhipuai/glm-5 --force"; do
+  omodel $a $C >/dev/null 2>&1; echo "$a -> $?"
+done
+
+# Degraded mode is LABELLED, not silently empty
+# NB resolve omodel's path FIRST — it lives in ~/.local/bin, so a bare `omodel` under the
+# stripped PATH would be "command not found" and this check would silently not run.
+OMODEL=$(command -v omodel); PATH=/usr/bin:/bin "$OMODEL" show $C --json | jq .degraded   # true
+
+# The guide is reachable the way an agent reaches it — including from the binary
+omodel --help | grep agent-guide
+omodel agent-guide | head -20
+./dist/omodel agent-guide | wc -l                                 # needs Check 1's binary
+```
+
+**Pass criteria:** `--dry-run` leaves the file byte-identical; a real `set` writes the config,
+the presets file and a `.backup/` snapshot; all four guard cases exit **3** (including
+hephaestus **with** `--force` — that one is never overridable); `degraded` is `true` with
+opencode off PATH; `agent-guide` prints from both the source tree and the PyInstaller binary.
+
+**Then open the TUI on the same temp config** — it must show the model the CLI set, with **no**
+sync-conflict modal. A prompt there means the CLI broke the config-equals-active-preset
+invariant.
+
+### Known-open: concurrent mutating commands lose updates
+
+**Accepted, documented in `data/agent-usage.md` §7, NOT fixed.** Every mutating verb is an
+unlocked read-modify-write, so parallel `set` calls overwrite each other: each process reports
+`"ok": true` and only the last write survives. Files stay *consistent* (no corruption, no
+conflict) — it is lost-update, not damage. It matters because firing independent tool calls in
+parallel is how an LLM agent naturally operates.
+
+Kept here as a manual check because it cannot be a CI test (it needs real concurrent processes
+and is inherently racy). Re-run it if locking is ever added — it is the acceptance test.
+
+```sh
+# 6 concurrent sets on 6 DIFFERENT targets, against a temp config
+C=/tmp/omodel-conc.jsonc
+printf '{"agents":{},"categories":{}}' > $C
+omodel set cat:quick opencode/glm-5 --config $C >/dev/null    # materialize the preset first
+for t in agent:sisyphus agent:oracle agent:librarian cat:deep cat:quick cat:artistry; do
+  omodel set "$t" opencode/glm-5 --config $C --json >/dev/null 2>&1 &
+done; wait
+# Count how many of the 6 actually landed:
+python - "$C" <<'PY'
+import sys
+import json5
+cfg = json5.load(open(sys.argv[1]))
+maps = [cfg.get("agents") or {}, cfg.get("categories") or {}]
+landed = sum(
+    1
+    for m in maps
+    for v in m.values()
+    if isinstance(v, dict) and v.get("model") == "opencode/glm-5"
+)
+print("landed:", landed, "of 6")
+PY
+```
+
+**Expected TODAY:** all 6 processes exit 0, typically only 2–4 writes land. **If locking is
+added:** either all 6 land, or the losers report a non-zero exit — silent success with a lost
+write is the thing to prevent.
+
+---
+
 ## Running all automated checks at once
 
 ```sh
@@ -311,6 +405,7 @@ Expected outcome — every test file passes:
 - `test_detect_family.py`, `test_catalog_parse.py`, `test_resolve.py`, `test_config_io.py`
 - `test_app_pilot.py` (the full Textual pilot suite — much the slowest; it dominates wall clock)
 - `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py`, `test_refresh.py`
+- `test_session.py` (the headless core both surfaces edit through)
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
-plus the 9 checks above run clean on the integration branch.
+plus the 10 checks above run clean on the integration branch.

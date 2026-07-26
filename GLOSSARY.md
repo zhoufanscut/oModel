@@ -97,7 +97,23 @@ line when a new one does.
 - **cache** — the 24h on-disk cache of `opencode` CLI output (`~/.cache/omodel`). A perf layer, *not*
   an availability source. → cache.py
 
+## The two surfaces
+
+- **session** — the *headless core* (`session.py`): the editable state (cfg + catalog + resolver
+  + presets store) and every mutation, with no UI. Both surfaces below edit through it, which is
+  what stops them answering "what may I set here?" two different ways. NOT an "opencode session"
+  and not a shell session. → session.py
+- **agent surface** — the JSON subcommands (`show`, `candidates`, `set`, …) an LLM agent calls.
+  Contrast the **flat flags** (`--print`, `--check`, …), which are the *human surface* and are
+  unchanged. → DESIGN §CLI
+- **agent guide** — `data/agent-usage.md`, the contract written *for* an agent, printed by
+  `omodel agent-guide`. Distinct from **AGENTS.md**, which is for agents editing oModel's own
+  source. One is about USING omodel, the other about BUILDING it.
+- **degraded** — `opencode` is absent/unreadable, so availability is **unknown**. Not the same as
+  "no candidates": an empty pick list while degraded means *we can't tell*, never *nothing works*.
+
 ## Docs
 
 - **DESIGN.md** = the spec / design-of-record · **CONTRACTS.md** = frozen shapes + signatures ·
-  **this file** = the vocabulary index that points at both.
+  **data/agent-usage.md** = the contract for agents *using* omodel · **AGENTS.md** = guidance for
+  agents *editing* omodel · **this file** = the vocabulary index that points at them all.

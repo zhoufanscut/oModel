@@ -1,10 +1,16 @@
 """Textual two-pane App.  DESIGN.md §Textual two-pane contract / §Layout.
 
-FROZEN CONTRACT — owned by the TUI specialist. Consumes catalog / suggestions / resolve /
-config_io against their frozen signatures. Implements the App class `OModelApp` and the
+FROZEN CONTRACT — owned by the TUI specialist. Implements the App class `OModelApp` and the
 module entrypoint `run_app` (== `create_app(config_path).run()` — `create_app` is the testable
-construction half, building catalog/suggestions/resolver/cfg without launching the Textual
-event loop).
+construction half, building the session without launching the Textual event loop).
+
+The editable state is NOT owned here: `self.session` (session.py) holds cfg / catalog /
+suggestions / resolver / the presets store and performs every cfg mutation and every write,
+because `cli.py` edits through the same object — the TUI and the agent surface must not drift
+into two answers for "what may I set here?" or "what does a save write?". What stays in this
+module is everything that is only meaningful inside a running UI: the undo `History`, the
+per-target row cache, `_custom_rows`, and all rendering. `cfg` / `_store` / `_saved_text` /
+`_saved_store_fp` are PROPERTIES onto the session (see §session state).
 
 STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do not rename):
   * Static#providers      — "oModel: <id · id · …>" from catalog.connected (first-seen);
@@ -96,7 +102,7 @@ duplicate of '(none)' (_is_no_variant) — never offered, never written. GPT-onl
 list to GPT models.
 Add-sub (`a` on an agent): an agent that supports more than one sub-kind (only Sisyphus — ultrawork
 + compaction) opens a chooser modal, an OptionList (`#sub-list`, IDs 'sub:ultrawork' /
-'sub:compaction') with one row per kind valid for that agent (see _ULTRAWORK_AGENTS), naming each
+'sub:compaction') with one row per kind valid for that agent (see session.ULTRAWORK_AGENTS), naming each
 kind + what it's for; a kind already on the agent is disabled ('✓ added'); `u`/`c` shortcut or enter
 picks one, esc cancels. An agent with a single sub-kind (every non-Sisyphus agent → compaction only)
 has no choice, so `a` adds it directly — no modal. Every supported kind present → `a` bells.
@@ -104,7 +110,6 @@ has no choice, so `a` adds it directly — no modal. Every supported kind presen
 from __future__ import annotations
 
 import asyncio
-import copy
 import threading
 from typing import ClassVar
 
@@ -123,26 +128,21 @@ from textual.widgets.option_list import Option
 from . import __version__, config_io
 from . import catalog as catalog_mod
 from . import presets as presets_mod
-from . import suggestions as suggestions_mod
+from . import session as session_mod
 from .catalog import Catalog, CatalogUnavailable
 from .history import History
 from .resolve import Resolver
+
+# The editable state, the guards, and the target-id vocabulary live in session.py now — the
+# headless core `cli.py` edits through too, so the TUI and the agent surface can't drift into two
+# answers for "what may I set here?". Aliased to their historical private names: the rest of this
+# module (and its pilot tests) address them that way, and only the OWNER moved.
+from .session import SUBKINDS as _SUBKINDS
+from .session import Session
+from .session import is_gpt_model as _is_gpt_model
+from .session import is_no_variant as _is_no_variant
+from .session import subkinds_for as _subkinds_for
 from .suggestions import Suggestions
-
-# Sub-targets an agent may carry beyond its top-level `model`.
-_SUBKINDS = ("ultrawork", "compaction")
-
-# Agents omo locks to a single model family. Hephaestus is GPT-exclusive: omo's
-# `no-hephaestus-non-gpt` hook reassigns the session to Sisyphus for any non-GPT model. We
-# mirror that — the chain + add-model are both restricted to GPT models for these agents.
-_GPT_ONLY_AGENTS = frozenset({"hephaestus"})
-
-# Agents for which omo actually honors an `ultrawork` sub-model. The `ultrawork`/`ulw` keyword
-# only swaps the model on Sisyphus; on any other agent an `ultrawork` block is dead config (omo
-# never reads it). We mirror that — only Sisyphus can add an `ultrawork` sub-target (and so only it
-# gets an add-sub chooser; every other agent has just `compaction`, which `a` adds directly).
-# `compaction` is valid on every agent. Hard-coded agent key, like `_GPT_ONLY_AGENTS`, not a data field.
-_ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
 # Cells a preset name may occupy in a row: the 32-wide pane, less its border (2), less
 # OptionList's own DEFAULT_CSS `padding: 0 1` (2), less the always-reserved scrollbar gutter (2)
@@ -194,18 +194,6 @@ def _shift_active(active, removed: int):
     return active - 1 if active > removed else active
 
 
-def _is_gpt_model(model_id: str) -> bool:
-    """omo's `isGptModel` (model-core): the model name (after the LAST '/'), lowercased,
-    contains 'gpt'. Used to gate the add-model modal for GPT-only agents (Hephaestus)."""
-    return "gpt" in model_id.rsplit("/", 1)[-1].lower()
-
-
-def _subkinds_for(name: str) -> tuple:
-    """Sub-target kinds addable to agent `name`, in `_SUBKINDS` order: `compaction` for every
-    agent; `ultrawork` only for the agents omo honors it on (`_ULTRAWORK_AGENTS` — Sisyphus)."""
-    return tuple(k for k in _SUBKINDS if k != "ultrawork" or name in _ULTRAWORK_AGENTS)
-
-
 def _warn_str(warn: list) -> str:
     """Render the candidate-row warn list as trailing ⚠ markers."""
     if not warn:
@@ -243,14 +231,6 @@ def _esc(text: str) -> str:
     return _escape_markup(str(text))
 
 
-def _is_no_variant(variant) -> bool:
-    """True when `variant` means "no variant → drop the key": None, empty/whitespace, or the
-    literal "none" (any case). opencode's `--verbose` lists a "none" variant that is identical to
-    the synthetic "(none)" clear row the pickers append, so omodel never offers it and never writes
-    it — a "none" pick just removes the `variant` key (same as (none))."""
-    return not variant or str(variant).strip().lower() == "none"
-
-
 def _row_label(row: dict) -> str:
     """One-line rendering of a candidate-row dict for OptionList#candidates.
     A same-line substitute (substitute_for set) is suffixed `(≈ omo <id>)` so it reads
@@ -260,19 +240,6 @@ def _row_label(row: dict) -> str:
     sub = row.get("substitute_for")
     subtext = f"  (≈ omo {sub})" if sub else ""
     return f"{row['provider']}/{row['model']}{vtext}{subtext}{_warn_str(row['warn'])}"
-
-
-def _coerce_dict(parent: dict, key: str) -> dict:
-    """`parent[key]`, creating `{}` on demand — and, mirroring the defensive `isinstance` reads
-    in `_node_for`, REPLACING a present non-dict value (e.g. a hand-edited `"agents": null` or
-    `"sisyphus": null`) with a fresh `{}` written back into `parent`, rather than handing the
-    caller a non-dict node (or crashing, for a plain `dict.setdefault` on a non-dict parent) to
-    write `model`/`variant` into. Used by `_ensure_node` at every level it creates on demand."""
-    value = parent.get(key)
-    if not isinstance(value, dict):
-        value = {}
-        parent[key] = value
-    return value
 
 
 async def _to_thread_daemon(func, *args, **kwargs):
@@ -1400,59 +1367,44 @@ class OModelApp(App):
 
     def __init__(
         self,
-        catalog: Catalog,
-        suggestions: Suggestions,
-        resolver: Resolver | None,
-        cfg: dict,
-        config_path: str,
+        catalog: Catalog | None = None,
+        suggestions: Suggestions | None = None,
+        resolver: Resolver | None = None,
+        cfg: dict | None = None,
+        config_path: str | None = None,
         catalog_error: BaseException | None = None,
+        session: Session | None = None,
     ) -> None:
         super().__init__()
-        self.catalog = catalog
-        self.suggestions = suggestions
-        self.resolver = resolver
-        self.cfg = cfg
-        self.config_path = config_path
-        self.catalog_error = catalog_error
-        # In-session undo/redo (mis-press recovery). `_history` holds cfg snapshots; every
-        # config mutation routes through `_record` (and `_stage_row`), which pushes one, so any
-        # operation can be reverted with `u` / re-applied with `ctrl+r` (see history.py).
-        # `_saved_text` is the serialization last written to (or loaded from) disk: dirtiness is
-        # computed against it (`_is_dirty`), NOT a bool flag — so undoing back to the saved
-        # state reads as clean, and a structural-but-unserialized change (an empty
-        # ultrawork/compaction sub-object) is undoable yet never marks the file dirty.
-        self._saved_text = config_io.serialize(cfg)
-        # The presets store for THIS config (presets.py; decision #17): any number of named
-        # assignment sets, exactly one ACTIVE, under the invariant that the config on disk equals the
-        # active preset — never a fourth, orphan state. Read best-effort; a missing or mangled
-        # file is SEEDED in memory from the config you already have, so there is always at least
-        # one preset and the invariant holds from the first frame. NOTHING here is written until
-        # `s` (one write rule) — the seed materializes with your first save.
-        self._store = presets_mod.load(config_path)
-        if self._store.is_empty():
-            self._store = presets_mod.seeded(cfg)
-        # Launch reconciliation. If the config matches a DIFFERENT preset, just activate it —
-        # no conflict, nothing to ask, and re-deriving it each launch is idempotent (which is
-        # why the dirtiness baseline is taken AFTER this, so a re-point alone reads clean).
-        # If it matches NONE (hand-edited config, or another tool wrote it), on_mount asks which
-        # way to sync — the one case where the invariant was broken from outside.
-        # NB: prefer the RECORDED active when it also matches. `matching_index` returns the
-        # FIRST match, and a fork creates a byte-identical duplicate by construction — so
-        # scanning first would silently move you back to preset 1 on every relaunch after the
-        # most common flow (fork → save → quit), with nothing dirty to correct it.
-        current = self._store.current()
-        if current is not None and presets_mod.fingerprint(
-            current.agents, current.categories
-        ) == presets_mod.fingerprint(cfg.get("agents"), cfg.get("categories")):
-            match = self._store.active
-        else:
-            match = presets_mod.matching_index(self._store, cfg)
-        if match is not None:
-            self._store.active = match
-        self._sync_conflict = match is None and self._store.current() is not None
-        # Dirtiness baseline for the presets file — what `s` would have to change. Paired with
-        # `_saved_text` for the config: `s` writes both, quitting discards both.
-        self._saved_store_fp = presets_mod.store_fingerprint(self._store)
+        # The headless core (session.py): cfg + catalog + suggestions + resolver + the presets
+        # store, plus every cfg mutation and the save. `cli.py` edits through the same object, so
+        # the TUI can't drift from the agent surface. Accepting a prebuilt `session` is what
+        # `create_app` uses; building one from loose parts is the test/embedding path, and both
+        # run the identical presets load / seed / launch-reconcile (Session.__post_init__).
+        self.session = session if session is not None else Session(
+            catalog=catalog,
+            suggestions=suggestions,
+            resolver=resolver,
+            cfg=cfg,
+            config_path=config_path,
+            catalog_error=catalog_error,
+        )
+        # `suggestions` and `config_path` are never reassigned after construction, so aliasing
+        # them is safe. `catalog` / `resolver` / `catalog_error` are NOT — `r` (_refresh_catalog)
+        # replaces all three — so they are properties onto the session below, or a refresh would
+        # leave the app fresh and the session stale and `_build_rows` (which delegates to
+        # `session.rows`) would keep resolving against the pre-refresh catalog.
+        self.suggestions = self.session.suggestions
+        self.config_path = self.session.config_path
+        self._sync_conflict = self.session.sync_conflict
+        # In-session undo/redo (mis-press recovery) — a UI concern, so it stays here rather than
+        # moving into Session: a CLI process edits once and exits, with no stack to unwind.
+        # `_history` holds cfg snapshots; every config mutation routes through `_record` (and
+        # `_stage_row`), which pushes one, so any operation can be reverted with `u` / re-applied
+        # with `ctrl+r` (see history.py). Dirtiness is computed against `_saved_text` (the
+        # session's baseline), NOT a bool flag — so undoing back to the saved state reads as
+        # clean, and a structural-but-unserialized change (an empty ultrawork/compaction
+        # sub-object) is undoable yet never marks the file dirty.
         # Cache of the candidate-row dicts currently rendered, keyed by target id; rebuilt from
         # the resolver (+ merged _custom_rows) on a cache miss. Dropped by a refresh AND a
         # state restore (undo/redo), since the `●` current-pick depends on cfg.
@@ -1464,8 +1416,9 @@ class OModelApp(App):
         # row, redoing brings it back. A refresh clears it (stored availability ⚠ would be stale).
         self._custom_rows: dict = {}
         # Built last: entry 0's `aux` needs `_custom_rows` and the reconciled `_store` (see
-        # _aux — the active preset index rides with every undo step).
-        self._history = History(cfg, aux=self._aux())
+        # _aux — the active preset index rides with every undo step). Reads self.cfg, not the
+        # `cfg` parameter, which is None on the prebuilt-session path.
+        self._history = History(self.cfg, aux=self._aux())
         # The target id currently shown in the right pane.
         self._current_target: str | None = None
         # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
@@ -1495,6 +1448,76 @@ class OModelApp(App):
         # (last finisher wins regardless of press order). action_refresh checks this instead of
         # spawning a second worker; set/cleared by _refresh_catalog itself (try/finally).
         self._refresh_inflight = False
+
+    # ----- session state -----------------------------------------------------------------
+    #
+    # The four pieces of editable state live on `self.session`, not here, so `cli.py` mutates
+    # exactly what the TUI mutates. These properties keep the historical attribute names working
+    # unchanged across the ~50 sites (and the pilot tests) that use them. `cfg` and `_store` are
+    # both REASSIGNED in places — `_restore_state` swaps cfg for a history snapshot, a preset
+    # switch and a store write replace the store — so neither can simply be aliased at
+    # construction; the setters have to reach through to the session or the two would fork.
+
+    @property
+    def cfg(self) -> dict:
+        return self.session.cfg
+
+    @cfg.setter
+    def cfg(self, value: dict) -> None:
+        self.session.cfg = value
+
+    # `r` (_refresh_catalog) replaces all three of these mid-session. They MUST reach the session
+    # rather than shadow it: `_build_rows` delegates to `session.rows()`, so an app-only refresh
+    # would redraw the header with the new providers while the pick list kept resolving against
+    # the old catalog — the one thing `r` exists to do, silently not done.
+
+    @property
+    def catalog(self) -> Catalog:
+        return self.session.catalog
+
+    @catalog.setter
+    def catalog(self, value: Catalog) -> None:
+        self.session.catalog = value
+
+    @property
+    def resolver(self):
+        return self.session.resolver
+
+    @resolver.setter
+    def resolver(self, value) -> None:
+        self.session.resolver = value
+
+    @property
+    def catalog_error(self):
+        return self.session.catalog_error
+
+    @catalog_error.setter
+    def catalog_error(self, value) -> None:
+        self.session.catalog_error = value
+
+    @property
+    def _store(self):
+        return self.session.store
+
+    @_store.setter
+    def _store(self, value) -> None:
+        self.session.store = value
+
+    @property
+    def _saved_text(self) -> str:
+        return self.session.saved_text
+
+    @_saved_text.setter
+    def _saved_text(self, value: str) -> None:
+        self.session.saved_text = value
+
+    @property
+    def _saved_store_fp(self) -> str:
+        return self.session.saved_store_fp
+
+    @_saved_store_fp.setter
+    def _saved_store_fp(self, value: str) -> None:
+        self.session.saved_store_fp = value
 
     # ----- composition -----------------------------------------------------------------
 
@@ -1545,8 +1568,14 @@ class OModelApp(App):
     # ----- left pane: targets ----------------------------------------------------------
 
     def _agent_subtargets(self, name: str) -> list:
-        """Present sub-target kinds for an agent (in config), as ('ultrawork'|'compaction')."""
-        agent = (self.cfg.get("agents") or {}).get(name) or {}
+        """Present sub-target kinds for an agent (in config), as ('ultrawork'|'compaction').
+
+        `read_map`, not `(cfg.get("agents") or {})`: that rescues `null` but not a TRUTHY
+        non-dict, so a hand-edited `"agents": "oops"` reached `.get` on a str and killed the app
+        during the first render — while `omodel check` called the same config healthy."""
+        agent = session_mod.read_map(self.cfg, "agents").get(name)
+        if not isinstance(agent, dict):
+            return []
         return [k for k in _SUBKINDS if isinstance(agent.get(k), dict)]
 
     def _populate_targets(self, select: str | None = None) -> None:
@@ -1608,25 +1637,11 @@ class OModelApp(App):
 
     def _projected_store(self) -> presets_mod.Store:
         """The store as it would be WRITTEN: a copy whose ACTIVE entry carries the live cfg.
-
-        The active preset's content is never stored twice — `self.cfg` IS it. Everything that
-        needs the whole store (dirtiness, saving, switching away) goes through here, so the two
-        can't drift, and "your edits go into the preset you're on" is structural rather than
-        something each edit path has to remember to do."""
-        store = copy.deepcopy(self._store)
-        current = store.current()
-        if current is not None:
-            fresh = presets_mod.capture(current.name, self.cfg)
-            same = presets_mod.fingerprint(
-                current.agents, current.categories
-            ) == presets_mod.fingerprint(fresh.agents, fresh.categories)
-            if same:
-                fresh.saved_at = current.saved_at  # unchanged content keeps its stamp
-            store.presets[store.active] = fresh
-        return store
+        → `Session.projected_store` (the invariant it upholds is documented there)."""
+        return self.session.projected_store()
 
     def _store_is_dirty(self) -> bool:
-        return presets_mod.store_fingerprint(self._projected_store()) != self._saved_store_fp
+        return self.session.store_is_dirty()
 
     @staticmethod
     def _fit_cells(text: str, limit: int) -> str:
@@ -1784,11 +1799,7 @@ class OModelApp(App):
             self.notify(f"Already editing '{preset.name}'.")
             return
         came_from = self._store.active
-        self._store = self._projected_store()  # bank the in-flight edits into the old preset
-        self._store.active = index
-        agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
-        self.cfg["agents"] = agents
-        self.cfg["categories"] = categories
+        self.session.switch_preset(index)  # banks the in-flight edits into the preset you leave
         # `_record` no-ops when the two presets hold identical models; the active index has
         # still changed, so re-render either way — and only take the aux-restoring path when a
         # snapshot was actually pushed (a no-op push would leave the old active in aux).
@@ -1907,61 +1918,25 @@ class OModelApp(App):
     # ----- target → cfg node helpers ---------------------------------------------------
 
     def _node_for(self, target: str):
-        """Return the dict node holding {model, variant} for `target` in self.cfg, or None if
-        its parent agent/category isn't present. Does NOT create nodes."""
-        cfg = self.cfg
-        if target.startswith("agent:"):
-            rest = target[len("agent:"):]
-            if "." in rest:
-                name, kind = rest.split(".", 1)
-                agent = (cfg.get("agents") or {}).get(name)
-                if not isinstance(agent, dict):
-                    return None
-                sub = agent.get(kind)
-                return sub if isinstance(sub, dict) else None
-            return (cfg.get("agents") or {}).get(rest)
-        if target.startswith("cat:"):
-            name = target[len("cat:"):]
-            return (cfg.get("categories") or {}).get(name)
-        return None
+        """The dict node holding {model, variant} for `target` in cfg, or None if its parent
+        agent/category isn't present. Does NOT create nodes. → `Session.node_for`."""
+        return self.session.node_for(target)
 
     def _ensure_node(self, target: str) -> dict:
-        """Return (creating if needed) the cfg node for `target`. agents/categories maps and
-        the agent object / sub-object are created on demand so staged edits can land. Every level
-        goes through `_coerce_dict`, so a hand-edited config's non-dict value anywhere along the
-        path (e.g. `"agents": null` or `"sisyphus": null`) is coerced back to `{}` instead of
-        crashing (`setdefault` on a non-dict parent) or handing back a non-dict node for the
-        caller to write `model`/`variant` into."""
-        if target.startswith("agent:"):
-            rest = target[len("agent:"):]
-            agents = _coerce_dict(self.cfg, "agents")
-            if "." in rest:
-                name, kind = rest.split(".", 1)
-                agent = _coerce_dict(agents, name)
-                return _coerce_dict(agent, kind)
-            return _coerce_dict(agents, rest)
-        # cat:
-        name = target[len("cat:"):]
-        cats = _coerce_dict(self.cfg, "categories")
-        return _coerce_dict(cats, name)
+        """The cfg node for `target`, creating it if needed. → `Session.ensure_node`."""
+        return self.session.ensure_node(target)
 
     def _current_assignment(self, target: str):
         """(model_str, variant) currently assigned in cfg for `target`; ('', None) if unset.
-        model_str is the full 'provider/model' as stored."""
-        node = self._node_for(target)
-        if not isinstance(node, dict):
-            return "", None
-        return node.get("model", "") or "", node.get("variant")
+        model_str is the full 'provider/model' as stored. → `Session.assignment`."""
+        return self.session.assignment(target)
 
     @staticmethod
     def _gpt_only(target: str) -> bool:
         """True if `target` (incl. its sub-targets) belongs to a GPT-exclusive agent —
-        currently Hephaestus (see _GPT_ONLY_AGENTS). Such agents hide the add-model escape
+        currently Hephaestus (see session.GPT_ONLY_AGENTS). Such agents hide the add-model escape
         hatch and show a tip; the fallbackChain is the only valid source."""
-        if not target.startswith("agent:"):
-            return False
-        name = target[len("agent:"):].split(".", 1)[0]
-        return name in _GPT_ONLY_AGENTS
+        return session_mod.gpt_only(target)
 
     # ----- right pane: detail + candidates ---------------------------------------------
 
@@ -1975,44 +1950,12 @@ class OModelApp(App):
         below tracks cfg."""
         if target in self._rows:
             return self._rows[target]
-        rows: list = []
-        if self.resolver is not None:
-            rows = list(self.resolver.candidates(target))
-        # Re-merge session-added custom rows (typed in the add-model modal) the chain doesn't
-        # already cover, so a typed model stays a pickable row — _custom_rows is the store
-        # (snapshotted with the undo history); this cache and the resolver list rebuild around it.
-        existing = {f"{r['provider']}/{r['model']}" for r in rows}
-        for cr in self._custom_rows.get(target, []):
-            key = f"{cr['provider']}/{cr['model']}"
-            if key not in existing:
-                rows.append(cr)
-                existing.add(key)
-        # Surface the target's CURRENT off-chain assignment as its own pickable row when neither
-        # the chain nor a typed custom already covers it — e.g. a model set in a prior session, a
-        # hand-edited config, or one that has since dropped off the chain. Derived straight from
-        # cfg (the source of truth), so it always reflects what's set: it carries the `●` marker,
-        # is re-selectable, and — because the per-target cache is dropped whenever the assignment
-        # changes — appears/vanishes in lockstep with cfg across set/clear/undo/redo. Appended
-        # LAST so it renders right before `+ add model…`. Skips a bare id with no `provider/` (a
-        # malformed value) rather than rendering it as `/model`.
-        current, current_variant = self._current_assignment(target)
-        if current and "/" in current and current not in existing:
-            provider, model = current.split("/", 1)
-            # ⚠ unavailable only when the catalog is readable and no connected provider serves the
-            # model; never in degraded mode (empty `connected`), where availability is unknown and
-            # an unqualified ⚠ would mislead. source 'add' = off-chain pick (CONTRACTS enum).
-            warn = []
-            if self.catalog.connected and provider not in self.catalog.providers_for(model):
-                warn.append("unavailable")
-            rows.append({
-                "source": "add",
-                "model": model,
-                "provider": provider,
-                "variant": current_variant,
-                "entry": None,
-                "substitute_for": None,
-                "warn": warn,
-            })
+        # `_custom_rows` is the TUI's own store (snapshotted with the undo history), so it is
+        # passed IN rather than owned by the session — a CLI process has no add-model modal.
+        # The per-target cache below is likewise a UI concern: it exists so staged edits survive
+        # a re-highlight, and it is what makes the synthesized current-assignment row appear and
+        # vanish in lockstep with cfg (every mutation drops it).
+        rows = self.session.rows(target, self._custom_rows.get(target, []))
         self._rows[target] = rows
         return rows
 
@@ -2309,21 +2252,14 @@ class OModelApp(App):
     def _target_label(target: str) -> str:
         """Short human name for a target id, for undo/redo notifications:
         'agent:sisyphus' → 'sisyphus', 'agent:sisyphus.ultrawork' → 'sisyphus.ultrawork',
-        'cat:deep' → 'deep'."""
-        for prefix in ("agent:", "cat:"):
-            if target.startswith(prefix):
-                return target[len(prefix):]
-        return target
+        'cat:deep' → 'deep'. → `session.target_label`."""
+        return session_mod.target_label(target)
 
     def _is_dirty(self) -> bool:
-        """True iff a save would change anything on disk — the config (`serialize(cfg)` vs the
-        text last written/loaded) OR the presets file (the projected store vs its launch/last-save
-        baseline). Both, because `s` writes both and quitting discards both. Used by quit (`q`).
-        NB: an empty ultrawork/compaction sub-object serializes away, so adding one is undoable
-        (it's in the history) but does NOT count as dirty — there's nothing to save."""
-        if config_io.serialize(self.cfg) != self._saved_text:
-            return True
-        return self._store_is_dirty()
+        """True iff a save would change anything on disk — the config OR the presets file. Both,
+        because `s` writes both and quitting discards both. Used by quit (`q`).
+        → `Session.is_dirty`."""
+        return self.session.is_dirty()
 
     def _record(self, label: str) -> bool:
         """Snapshot the current cfg into the undo history under `label` (a no-op if nothing
@@ -2345,15 +2281,7 @@ class OModelApp(App):
     def _stage_row(self, target: str, row: dict, label: str) -> None:
         """Write the chosen candidate row into the cfg node, re-render, and record an undo
         snapshot under `label`."""
-        node = self._ensure_node(target)
-        node["model"] = f"{row['provider']}/{row['model']}"
-        # A "none"/empty variant means "no variant" — drop the key, never write variant: "none"
-        # (identical to (none)). Covers the picker, `v`, restage, and the synthesized off-chain row
-        # (which carries a pre-existing on-disk "none" straight from cfg — re-picking it cleans it).
-        if _is_no_variant(row.get("variant")):
-            node.pop("variant", None)
-        else:
-            node["variant"] = row["variant"]
+        self.session.set_row(target, row)
         # The assignment changed, so _build_rows' synthesized current-off-chain row may no longer
         # apply (picked a chain model) or now describes a different model — drop the cache so it
         # rebuilds from the new cfg value.
@@ -2461,10 +2389,7 @@ class OModelApp(App):
             name, kind = target[len("agent:"):].split(".", 1)
             self._delete_subtarget(target, name, kind)
             return
-        node = self._node_for(target)
-        if isinstance(node, dict) and ("model" in node or "variant" in node):
-            node.pop("model", None)
-            node.pop("variant", None)
+        self.session.clear(target)
         # Drop the cache so _build_rows stops synthesizing the now-cleared off-chain row.
         self._rows.pop(target, None)
         self._refresh_right(target)
@@ -2537,9 +2462,7 @@ class OModelApp(App):
         rows, so re-adding the same sub-target later starts clean rather than resurrecting a stale
         ⚠ row. Rebuilds the left pane onto the parent agent and records an undoable snapshot — the
         `_custom_rows` ride along as the entry's `aux`, so `u` restores the row in lockstep with cfg."""
-        agent = (self.cfg.get("agents") or {}).get(name)
-        if isinstance(agent, dict):
-            agent.pop(kind, None)
+        self.session.delete_subtarget(name, kind)
         self._custom_rows.pop(target, None)
         self._rows.pop(target, None)
         parent = f"agent:{name}"
@@ -2818,11 +2741,10 @@ class OModelApp(App):
         a failure is REPORTED, never swallowed (presets.write raises by contract) — but it does
         not roll the config back: see `_save` for why the config goes first."""
         try:
-            self._store = presets_mod.write(self.config_path, store)
+            self.session.write_store(store)
         except Exception as exc:
             self.notify(f"Presets could not be written: {exc}", severity="error")
             return False
-        self._saved_store_fp = presets_mod.store_fingerprint(self._store)
         self._populate_presets()
         return True
 
@@ -2868,14 +2790,13 @@ class OModelApp(App):
             if not ok:
                 return
             try:
-                result = config_io.save(self.cfg, self.config_path)
+                # Re-baselines dirtiness to what's now on disk. The undo history is intentionally
+                # preserved across a save, so you can still undo a just-saved edit (and re-save
+                # to persist the reverted state).
+                result = self.session.save_config()
             except Exception as exc:  # surface, don't crash the app
                 self.notify(f"Save failed: {exc}", severity="error")
                 return
-            # Re-baseline dirtiness to what's now on disk (== serialize(cfg) either way). The
-            # undo history is intentionally preserved across a save, so you can still undo a
-            # just-saved edit (and re-save to persist the reverted state).
-            self._saved_text = config_io.serialize(self.cfg)
             # Config first — it is the artifact with the backup and the diff you just approved,
             # so a failure there aborts before the presets file moves. If the presets write then
             # fails, the config is ahead of the store: `_write_store` says so plainly, and a
@@ -2990,40 +2911,15 @@ class OModelApp(App):
 
 
 def create_app(config_path: str | None = None) -> OModelApp:
-    """Build catalog / suggestions / resolver / config and construct (but do NOT run) an
-    OModelApp — the production wiring, factored out of `run_app` so it's directly testable
-    without launching the Textual event loop.
+    """Build the session and construct (but do NOT run) an OModelApp — the production wiring,
+    factored out of `run_app` so it's directly testable without launching the Textual event loop.
 
-    Degrades gracefully: on CatalogUnavailable the app still launches with a banner + `r`
-    retry and suggestions/add-model only (no resolver candidates until catalog is back). The
-    resolver is built UNCONDITIONALLY — over the real catalog, or over the empty degraded-mode
-    one on CatalogUnavailable — so add-model (the only route to a model while degraded) stays
-    live; only a genuine Resolver.build() failure (e.g. corrupt bundled suggestions data) leaves
-    it None."""
-    suggestions = suggestions_mod.load()
-    cfg, resolved_path = config_io.load_config(config_path)
-
-    catalog_error: BaseException | None = None
-    try:
-        catalog = catalog_mod.load()
-    except CatalogUnavailable as exc:
-        catalog_error = exc
-        catalog = Catalog(available={}, connected=[])
-
-    resolver: Resolver | None = None
-    try:
-        resolver = Resolver.build(catalog, suggestions)
-    except Exception:
-        resolver = None
-
-    return OModelApp(
-        catalog=catalog,
-        suggestions=suggestions,
-        resolver=resolver,
-        cfg=cfg,
-        config_path=resolved_path,
-        catalog_error=catalog_error,
-    )
+    The loading itself is `Session.build` (session.py), which `cli.py` also calls: the TUI and
+    the agent surface open the same state the same way. It degrades gracefully — on
+    CatalogUnavailable the app still launches with a banner + `r` retry and suggestions/
+    add-model only, and the resolver is built even over the empty catalog so add-model (the only
+    route to a model while degraded) stays live."""
+    return OModelApp(session=Session.build(config_path))
 
 
 def run_app(config_path: str | None = None) -> None:
