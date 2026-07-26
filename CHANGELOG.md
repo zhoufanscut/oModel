@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-26
+
 ### Added
 - **oModel can now be driven by an LLM agent.** New subcommands emit JSON and return meaningful
   exit codes, so an agent can ask what's set, ask what you can run, and change it — through the
@@ -18,7 +20,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ```
   Also `targets`, `show`, `check`, `clear`, `apply` (many assignments, one save) and
   `preset ls|use|new|rm`. Every one takes `--json` and `--config`; the mutating ones take
-  `--dry-run`. Exit `3` means "refused — pick something else", `1` means "oModel failed".
+  `--dry-run` and `--force`. Exit `3` means "refused — pick something else", `1` means "oModel
+  failed". `--force` writes despite an unavailable model or an invalid variant; it never
+  overrides the GPT-only lock on `hephaestus`, because omo's own hook would reassign the session
+  and the config could not take effect anyway.
+  One limitation worth knowing before you parallelise: the mutating verbs are an unlocked
+  read-modify-write, so two `set` calls running at once can lose one of the two writes — both
+  still report success. Batch them into a single `apply` instead. Documented in
+  `omodel agent-guide` §7 rather than fixed.
 - `omodel agent-guide` prints the agent contract — target ids, the candidates→set loop, the JSON
   shapes, the exit codes, and what oModel won't do. It ships inside the binary, so an agent that
   finds `omodel` on `PATH` can read it without the repo.
@@ -35,6 +44,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   together — so quitting without saving leaves both exactly as they were.
 - Deleting a preset closes the gap, and undo keeps up: models restored from a preset you deleted
   say where they landed instead of quietly ending up in a different one.
+- If your config changed outside oModel — a hand edit, another tool — the next launch says so and
+  asks which way to sync: adopt the config into the preset you were using, or put the preset's
+  models back. Nothing is written either way until you press `s`, and `esc` leaves the question
+  for later. The JSON surface reports the same thing as `sync_conflict` on every payload.
 
 ### Changed
 - Internally, the editable state moved into a new headless `session.py` that both the TUI and the
@@ -53,10 +66,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scrolling.
 - The hint bar reads `s save · q quit · ? help` — save and quit next to each other, `?` at the end
   as the pointer to everything else.
-
 - Confirmation dialogs now take `←`/`→` (and `h`/`l`) to move between buttons, not just `Tab`, and
   the highlight actually moves with you — previously one button stayed coloured whichever was
   selected, so it was easy to confirm the wrong thing.
+- Bundled omo suggestions refreshed to v4.19.1 (from v4.13.0), so the suggested chains now carry
+  omo's current picks — `gpt-5.6-sol` / `-terra` / `-luna`, `claude-opus-4-8`, `kimi-k3` and
+  `glm-5.2`. Still 11 agents, 8 categories, 15 families.
+- Housekeeping with no change in behaviour: the ruff version cap was lifted and its 0.16 default
+  rule set adopted (two exclusions, each explained in `pyproject.toml`); the test suite lost its
+  vacuous and duplicated cases and two sources of flakiness; and the weekly suggestion-refresh PR
+  no longer carries a stale "tests failed" banner after the failure has been fixed.
 
 ### Fixed
 - Piping a JSON verb into something that stops reading — `omodel show --json | head`, or a pager
@@ -69,7 +88,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rid of that row at all. `x` reads the row under the cursor now: on a row you added it removes it
   (and unsets the model too, if that's the one that was set — `u` brings both back); on any other
   row it clears the target as before.
-
 - A model id containing square brackets no longer crashes oModel. Typing one in the add-model box
   took the app down on the keystroke, and one saved in your config (or a preset) took it down on
   every launch, before anything was drawn. Ids are now shown exactly as they are, brackets and all.

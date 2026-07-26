@@ -25,7 +25,7 @@ verbatim (timestamped backups each save).
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
 └────────────────────┘└────────────────────────────────────────────┘
- s save · q quit · ? help                                     v0.2.0
+ s save · q quit · ? help                                     v0.3.0
 ```
 
 ## Requirements

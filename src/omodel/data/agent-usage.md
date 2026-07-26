@@ -107,7 +107,7 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
 
 ```json
 // omodel show --json
-{ "schema": 1, "omodel_version": "0.2.0", "config_path": "/home/you/.config/opencode/oh-my-openagent.jsonc",
+{ "schema": 1, "omodel_version": "0.3.0", "config_path": "/home/you/.config/opencode/oh-my-openagent.jsonc",
   "degraded": false, "providers": ["opencode", "zhipuai"],
   "active_preset": {"index": 0, "name": "default"},
   "presets": [{"index": 0, "name": "default", "models": 12, "active": true}],
