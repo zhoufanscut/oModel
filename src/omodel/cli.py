@@ -23,6 +23,7 @@ Textual — it is a heavy import and none of them draws a UI.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 # JSON payload version. Bump ONLY on a breaking shape change; additive fields do not bump it.
@@ -38,7 +39,48 @@ EXIT_REJECTED = 3   # rejected by a guard — unknown target, unavailable model,
 
 
 def main(argv: list | None = None) -> int:
-    """Parse argv and dispatch. Returns the process exit code (see EXIT_* above)."""
+    """Parse argv and dispatch. Returns the process exit code (see EXIT_* above).
+
+    A thin wrapper over `_main` that keeps a CLOSED STDOUT inside the exit-code contract.
+    `omodel show --json | head` leaves ~1 KB of a 9 KB payload in the stdio buffer; without
+    this, the failure lands in the interpreter's shutdown flush — too late for any caller to
+    catch — which prints `Exception ignored on flushing sys.stdout` and exits **120**. On the
+    surface whose whole promise is that 0/1/2/3 mean four specific things, a fifth code that
+    reads like a crash is exactly the ambiguity the contract exists to remove.
+
+    Flushing HERE turns that into a catchable BrokenPipeError, and the reader stopping early is
+    not a failure: omodel did its work, so this is EXIT_OK and silent."""
+    try:
+        code = _main(argv)
+        sys.stdout.flush()
+        return code
+    except BrokenPipeError:
+        _drop_stdout()
+        return EXIT_OK
+
+
+def _drop_stdout() -> None:
+    """Point fd 1 at os.devnull so the shutdown flush can't hit the dead pipe a second time —
+    that flush is what turns a caught BrokenPipeError back into stderr noise and exit 120.
+    Best-effort: under pytest's capture (and anywhere else stdout is not a real fd)
+    `fileno()` raises io.UnsupportedOperation, which is both an OSError and a ValueError.
+
+    The devnull fd is closed once dup2 has copied it — `main` is importable, so a caller that
+    invokes it in-process and keeps running must not leak one per call."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
+    finally:
+        os.close(devnull)
+
+
+def _main(argv: list | None = None) -> int:
+    """Parse argv and dispatch. The real body; `main` wraps it (see there)."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 

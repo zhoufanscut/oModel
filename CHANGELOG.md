@@ -59,6 +59,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   selected, so it was easy to confirm the wrong thing.
 
 ### Fixed
+- Piping a JSON verb into something that stops reading — `omodel show --json | head`, or a pager
+  you quit early — no longer exits `120` with `Exception ignored on flushing sys.stdout` on
+  stderr. It reads like a crash, and `120` is a fifth exit code on a surface whose contract says
+  there are four. The reader stopping is not a failure: you get `0`, and nothing on stderr.
 - `x` on a model you added now deletes that row, instead of clearing whichever model happened to
   be set. Adding a model, picking a different one, then pressing `x` on the row you added used to
   unset the model you'd just picked and leave the added row in place — and there was no way to get

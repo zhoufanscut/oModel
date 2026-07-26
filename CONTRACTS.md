@@ -224,7 +224,9 @@ The stub files ARE the signatures; implement their bodies. Summary:
   ->Store` (RAISES); `.save()->SaveResult` (both files, config first — `app.py` calls the two
   halves instead, since its save is interactive). **MUST NOT import textual or app.**
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint). Constants `SCHEMA = 1`,
-  `EXIT_OK/ERROR/USAGE/REJECTED = 0/1/2/3`.
+  `EXIT_OK/ERROR/USAGE/REJECTED = 0/1/2/3` — and those FOUR are the whole range: `main` flushes
+  stdout itself and maps a closed one (`… | head`) to `EXIT_OK`, so the interpreter's shutdown
+  flush can't add a fifth code (120). See DESIGN §Exit codes.
 - `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
   data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).
 

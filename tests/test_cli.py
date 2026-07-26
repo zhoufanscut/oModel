@@ -1184,3 +1184,65 @@ class TestMalformedMapIsReported:
         rc, payload = _run_json(["check", "--config", str(path), "--json"])
         assert not any(p["problem"] == "malformed_map" for p in payload["problems"])
         assert rc == 0
+
+
+class TestClosedStdout:
+    """`omodel show --json | head` — the reader stops early and ~1 KB of the 9 KB payload never
+    lands. Python's stdio buffer is 8 KB, so the failure does NOT surface in `print`; it waits
+    for the interpreter's shutdown flush, which is past any caller's reach — it prints
+    `Exception ignored on flushing sys.stdout` and exits **120**. A fifth exit code, reading
+    like a crash, on the one surface whose contract is that there are exactly four (0/1/2/3).
+
+    `main` flushes while it can still catch, and a reader that stopped reading is not a failure:
+    EXIT_OK, silent. Every test here keeps `sys.stdout` monkeypatched to an object with no real
+    fileno — `_drop_stdout` dup2s /dev/null onto fd 1, which under `pytest -s` would be the live
+    terminal for the rest of the session."""
+
+    @staticmethod
+    def _dead(where: str):
+        import errno
+        import io
+
+        class _DeadPipe(io.StringIO):
+            flushes = 0
+
+            def flush(self):
+                type(self).flushes += 1
+                if where == "flush":
+                    raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+            def write(self, s):
+                if where == "write":
+                    raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+                return super().write(s)
+
+        return _DeadPipe()
+
+    def test_main_flushes_while_it_can_still_catch(self, tmp_path, monkeypatch):
+        """The load-bearing half, and it must be asserted as a FLUSH HAPPENING — not merely as
+        "a raising flush is absorbed". The latter passes against code that never flushes at all,
+        which is the whole bug: the leftover buffer then fails at interpreter shutdown, where
+        EXIT_OK is no longer anyone's to return."""
+        pipe = self._dead("flush")
+        monkeypatch.setattr("sys.stdout", pipe)
+        assert _run(["show", "--config", _agent_cfg(tmp_path), "--json"]) == cli.EXIT_OK
+        assert type(pipe).flushes >= 1
+
+    def test_a_pipe_dying_mid_print_is_ok_not_120(self, tmp_path, monkeypatch):
+        """The same pipe, dying while the command is still writing rather than at the end."""
+        monkeypatch.setattr("sys.stdout", self._dead("write"))
+        assert _run(["show", "--config", _agent_cfg(tmp_path), "--json"]) == cli.EXIT_OK
+
+    def test_the_four_real_codes_are_untouched(self, tmp_path):
+        """The guard must absorb a dead pipe and nothing else — a refusal is still a 3."""
+        cfg = _agent_cfg(tmp_path)
+        assert _run(["set", "agent:nope", "opencode/glm-5", "--config", cfg]) == cli.EXIT_REJECTED
+        assert _run(["targets", "--config", cfg]) == cli.EXIT_OK
+
+    def test_drop_stdout_survives_a_stdout_with_no_fileno(self, monkeypatch):
+        """Captured stdout raises io.UnsupportedOperation from fileno() — both an OSError and a
+        ValueError. Swallowed, or the guard would trade 120 for a traceback."""
+        import io
+
+        monkeypatch.setattr("sys.stdout", io.StringIO())
+        cli._drop_stdout()

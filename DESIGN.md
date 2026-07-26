@@ -142,6 +142,13 @@ omodel preset ls|use <name|index>|new <name>|rm <name> [--json]
 `3` **refused by a guard**). The 1-vs-3 split is load-bearing: an agent that can't distinguish
 them either retries a broken tool or abandons a fixable pick.
 
+There are **four codes and no fifth**, which takes a guard in `main`. `omodel show --json | head`
+leaves ~1 KB of a 9 KB payload in Python's 8 KB stdio buffer, so the dead pipe surfaces not in
+`print` but in the interpreter's *shutdown* flush — past any caller's reach, printing
+`Exception ignored on flushing sys.stdout` and exiting **120**. So `main` flushes while it can
+still catch, and treats it as success: the reader chose to stop, omodel did its work. `EXIT_OK`,
+silent, with fd 1 pointed at `os.devnull` so the shutdown flush can't raise it a second time.
+
 **Strictness of `set`/`apply`** — refuse, `--force` overrides, with one exception:
 
 | Condition | Result | `--force`? |
