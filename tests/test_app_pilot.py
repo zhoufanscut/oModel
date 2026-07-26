@@ -19,7 +19,9 @@ All tests use tmp_path only — the real ~/.config/opencode/... is never touched
 from __future__ import annotations
 
 import asyncio
+import copy
 import glob
+import json
 import os
 import subprocess
 import threading
@@ -27,10 +29,12 @@ import time
 import types
 
 import pytest
+from textual.content import Content
 from textual.widgets import Input, OptionList, Static
 
 import omodel
-from omodel.app import HelpModal, OModelApp, _to_thread_daemon
+from omodel import presets as presets_mod
+from omodel.app import ConfirmModal, HelpModal, OModelApp, QuitModal, _to_thread_daemon
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
 from omodel.resolve import Resolver
@@ -2999,5 +3003,774 @@ def test_pilot_add_sub_renders_synchronously_no_stale_target(pilot_config):
             )
             detail = pilot.app.query_one("#detail", Static)
             assert "oracle.compaction" in str(detail.content), str(detail.content)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot: the 3 named presets (DESIGN §presets.py, decision #17)
+#
+# Pilot half of §Verification check #9 — the unit half is tests/test_presets.py.
+# Everything here serves ONE invariant: the config on disk always equals the ACTIVE preset,
+# never a fourth orphan state. What that implies, and what these tests pin:
+#   * launching with no presets seeds one from your config (in memory — nothing written);
+#   * your edits go into the preset you're on, and switching banks them first;
+#   * `s` writes BOTH files, and nothing else writes anything;
+#   * `x` refuses on the active preset (deleting it would strand the config);
+#   * quitting offers save / discard / cancel, and discarding leaves BOTH files untouched.
+# ---------------------------------------------------------------------------
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _preset_labels(app) -> list:
+    lst = app.query_one("#presets", OptionList)
+    return [str(lst.get_option_at_index(i).prompt) for i in range(lst.option_count)]
+
+
+def _active_row(app):
+    """Index of the row drawn with the ● marker, or None."""
+    for i, label in enumerate(_preset_labels(app)):
+        if label.startswith("● "):
+            return i
+    return None
+
+
+async def _focus_preset(pilot, index: int) -> None:
+    """`tab` into the presets card, then highlight row `index`.
+
+    `tab` is the only route in (Screen traversal targets → presets → candidates), so start from
+    `#targets` to make the hop deterministic — and skip it when the card already has focus, which
+    keeps this helper safe to call twice in a row."""
+    card = pilot.app.query_one("#presets", OptionList)
+    if pilot.app.focused is not card:
+        pilot.app.query_one("#targets", OptionList).focus()
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+    pilot.app.query_one("#presets", OptionList).highlighted = index
+    await pilot.pause()
+
+
+async def _fork_preset(pilot, index: int, name: str) -> None:
+    """`a` on preset `index` → PresetNameModal → type `name` → enter (fork + switch to it)."""
+    await _focus_preset(pilot, index)
+    await pilot.press("a")
+    await pilot.pause()
+    # Modal widgets live on the pushed screen, not the base one (pilot.app.query_one would
+    # search Screen#_default) — same access pattern the add-model tests use.
+    pilot.app.screen.query_one("#preset-name-input", Input).value = name
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+async def _switch_preset(pilot, index: int) -> None:
+    await _focus_preset(pilot, index)
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def test_pilot_first_launch_seeds_a_default_preset(pilot_config):
+    """Open a config that has never seen oModel: you get one preset, named `default`, holding
+    the models already in your config and marked active — so the invariant holds from the first
+    frame. It is IN MEMORY only (one write rule), and an untouched session is not dirty, so `q`
+    exits without a prompt."""
+    cfg_path, tmp_dir = pilot_config
+    before = _read_text(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            labels = _preset_labels(pilot.app)
+            assert labels[0] == f"● 1 {presets_mod.DEFAULT_NAME}", labels
+            assert "(empty)" in labels[1] and "(empty)" in labels[2], labels
+            assert _active_row(pilot.app) == 0
+
+            seeded = pilot.app._store.current()
+            assert seeded.agents["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+            assert not pilot.app._is_dirty(), "seeding alone must not make the app dirty"
+
+            await pilot.press("q")  # no prompt: nothing to save
+            await pilot.pause()
+
+    asyncio.run(_run())
+    # One write rule: opening and closing wrote nothing at all.
+    assert not os.path.exists(os.path.join(tmp_dir, ".omodel-presets.json"))
+    assert _read_text(cfg_path) == before
+
+
+def test_pilot_edits_flow_into_the_active_preset_and_s_writes_both(pilot_config):
+    """Change a model and the ACTIVE preset changes with it — that is what stops the config from
+    becoming a state matching no preset. `s` then publishes both files, and afterwards the
+    config equals the active preset exactly."""
+    cfg_path, tmp_dir = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert pilot.app._is_dirty()
+            # Not on disk yet — neither file.
+            assert not os.path.exists(os.path.join(tmp_dir, ".omodel-presets.json"))
+            await _save_and_confirm(pilot)
+            assert not pilot.app._is_dirty(), "a save re-baselines BOTH halves of dirtiness"
+
+    asyncio.run(_run())
+
+    store = presets_mod.load(cfg_path)
+    active = store.current()
+    assert active.name == presets_mod.DEFAULT_NAME
+    assert active.agents["sisyphus"]["model"] == "zhipuai/glm-5", "the edit went into the preset"
+
+    import json5
+
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json5.load(f)
+    assert saved["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+    # The invariant, checked directly: the config on disk matches a preset — the active one.
+    assert presets_mod.matching_index(store, saved) == store.active
+
+
+def test_pilot_fork_creates_a_preset_and_switches_to_it(pilot_config):
+    """`a` copies the models you're looking at into another row, names it, and moves you there —
+    the only way presets 2 and 3 come into being."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _fork_preset(pilot, 1, "experiment")
+
+            assert _active_row(pilot.app) == 1
+            labels = _preset_labels(pilot.app)
+            assert labels[1] == "● 2 experiment", labels
+            assert labels[0].startswith("  1 "), labels
+            store = pilot.app._projected_store()
+            # Both presets hold the models as of the fork; they diverge from here.
+            assert store.presets[1].agents["sisyphus"]["model"] == "zhipuai/glm-5"
+            assert store.presets[0].agents["sisyphus"]["model"] == "zhipuai/glm-5"
+
+    asyncio.run(_run())
+
+
+def test_pilot_switching_banks_the_edits_you_made(pilot_config):
+    """Switching preserves work: the models you changed while on preset 1 are folded INTO
+    preset 1 before preset 2 loads, so going back and forth never loses anything."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            # Preset 1 (seeded) gets glm-5; fork it to preset 2, then give 2 a different model.
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _fork_preset(pilot, 1, "experiment")
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "moonshotai-cn/kimi-k2.5"
+
+            # Back to 1: its own models return.
+            await _switch_preset(pilot, 0)
+            assert _active_row(pilot.app) == 0
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+
+            # Forward to 2: the edit made while on 2 was banked, not lost.
+            await _switch_preset(pilot, 1)
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "moonshotai-cn/kimi-k2.5"
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_moves_the_marker_back_with_the_models(pilot_config):
+    """`u` after a switch must restore the ● too. If it moved only the models, they would be
+    folded into the preset you switched TO — silently rewriting it."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _fork_preset(pilot, 1, "experiment")
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
+            await _switch_preset(pilot, 0)
+            assert _active_row(pilot.app) == 0
+
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "moonshotai-cn/kimi-k2.5"
+            assert _active_row(pilot.app) == 1, (
+                "undoing a switch must put the marker back, not just the models"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_delete_refuses_on_the_active_preset(pilot_config):
+    """`x` on the preset you're editing is refused: the config mirrors it, so deleting it would
+    strand the config as a state matching nothing. A non-active one deletes behind a confirm and
+    is staged until `s` like every other change."""
+    cfg_path, tmp_dir = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _fork_preset(pilot, 1, "experiment")  # active is now row 2
+            assert _active_row(pilot.app) == 1
+
+            await _focus_preset(pilot, 1)
+            await pilot.press("x")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "no confirm — the delete is refused outright"
+            assert pilot.app._store.presets[1] is not None
+
+            # The other one deletes.
+            await _focus_preset(pilot, 0)
+            await pilot.press("x")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1
+            await pilot.press("y")
+            await pilot.pause()
+            assert pilot.app._store.presets[0] is None
+            assert _active_row(pilot.app) == 1, "the active preset is untouched by the delete"
+
+    asyncio.run(_run())
+    # Staged only: nothing was written, because only `s` writes.
+    assert not os.path.exists(os.path.join(tmp_dir, ".omodel-presets.json"))
+
+
+def test_pilot_quit_discard_leaves_both_files_alone(pilot_config):
+    """`q` with unsaved work offers three ways out. Discarding writes nothing — the config still
+    equals the preset it did when you started."""
+    cfg_path, tmp_dir = pilot_config
+    before = _read_text(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await pilot.press("q")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, QuitModal)
+            await pilot.press("d")  # discard
+            await pilot.pause()
+
+    asyncio.run(_run())
+    assert _read_text(cfg_path) == before
+    assert not os.path.exists(os.path.join(tmp_dir, ".omodel-presets.json"))
+
+
+def test_pilot_quit_can_save_on_the_way_out(pilot_config):
+    """\"Save & quit\" runs the normal diff+confirm and only then exits — so the exit that keeps
+    your work is on the same screen as the one that drops it."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await pilot.press("q")
+            await pilot.pause()
+            await pilot.press("s")  # save & quit → the save confirm
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+
+    asyncio.run(_run())
+    import json5
+
+    with open(cfg_path, encoding="utf-8") as f:
+        saved = json5.load(f)
+    assert saved["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+    store = presets_mod.load(cfg_path)
+    assert presets_mod.matching_index(store, saved) == store.active
+
+
+def test_pilot_launch_prompts_when_the_config_matches_no_preset(pilot_config):
+    """The one case the invariant can't cover itself: something outside oModel rewrote the
+    config. On launch you're asked which way to sync, and NEITHER answer writes anything — both
+    end at `s`."""
+    cfg_path, tmp_dir = pilot_config
+    other = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    store = presets_mod.Store(presets=[other, None, None], active=0)
+    presets_mod.write(cfg_path, store)
+    before_presets = _read_text(os.path.join(tmp_dir, ".omodel-presets.json"))
+    before_cfg = _read_text(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert isinstance(pilot.app.screen, ConfirmModal), "out-of-sync must be surfaced"
+            # "Restore the preset" is the decline button.
+            await pilot.press("n")
+            await pilot.pause()
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+            assert pilot.app._is_dirty(), "the fix is staged, to be reviewed via s"
+
+    asyncio.run(_run())
+    # Neither file was touched by the prompt itself.
+    assert _read_text(cfg_path) == before_cfg
+    assert _read_text(os.path.join(tmp_dir, ".omodel-presets.json")) == before_presets
+
+
+def test_pilot_launch_activates_a_matching_preset_silently(pilot_config):
+    """No prompt when the config matches a DIFFERENT preset — there is no conflict to resolve,
+    so it just becomes the active one (and re-deriving that each launch reads clean)."""
+    cfg_path, _ = pilot_config
+    mine = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    from omodel import config_io as _config_io
+
+    cfg, _resolved = _config_io.load_config(cfg_path)
+    matching = presets_mod.capture("matching", cfg)
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[mine, matching, None], active=0))
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert len(pilot.app.screen_stack) == 1, "a match is not a conflict — no prompt"
+            assert _active_row(pilot.app) == 1
+            assert not pilot.app._is_dirty(), "re-pointing active alone must read clean"
+
+    asyncio.run(_run())
+
+
+def test_pilot_preset_keys_dispatch_on_focus(pilot_config):
+    """`a`/`x`/`v` were focus-blind before this pane existed. With #presets focused: `v` is
+    inert (no modal, no cfg change — unguarded it would retarget the hidden candidate pane),
+    and `enter` on an EMPTY preset does nothing."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            snapshot = copy.deepcopy(pilot.app.cfg)
+
+            await _focus_preset(pilot, 1)  # empty
+            await pilot.press("v")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) == 1, "`v` must not open a modal on a preset row"
+            assert pilot.app.cfg == snapshot
+
+            await pilot.press("enter")  # empty preset → bell, no switch
+            await pilot.pause()
+            assert pilot.app.cfg == snapshot
+            assert _active_row(pilot.app) == 0
+
+    asyncio.run(_run())
+
+
+def test_pilot_preset_survives_a_mangled_sidecar(pilot_config):
+    """A hand-mangled presets file must not stop you editing models: it reads as empty, so the
+    seed kicks in and you still get a working default preset."""
+    cfg_path, tmp_dir = pilot_config
+    with open(os.path.join(tmp_dir, ".omodel-presets.json"), "w", encoding="utf-8") as f:
+        f.write("{{{ not json")
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert pilot.app._store.current().name == presets_mod.DEFAULT_NAME
+            assert _active_row(pilot.app) == 0
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run())
+    store = presets_mod.load(cfg_path)
+    assert store.current().agents["sisyphus"]["model"] == "zhipuai/glm-5"
+
+
+def test_pilot_preset_row_never_wraps_the_fixed_card(pilot_config):
+    """A name at the CHARACTER cap made of WIDE (2-cell) characters must still render on one
+    line. The card is a fixed 5 lines for exactly 3 rows, so a wrapped row pushes the third
+    preset out of view — and the cap alone doesn't prevent that (24 CJK chars = 48 cells).
+    Guards the render-time cell fit against a CSS/scrollbar-gutter change: caught for real when
+    the name width was computed as 26 cells against a 28-cell content box."""
+    cfg_path, _ = pilot_config
+    wide = presets_mod.capture("設" * presets_mod.MAX_NAME, {"agents": {}})
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[wide, wide, wide], active=0))
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            if len(pilot.app.screen_stack) > 1:
+                await pilot.press("y")  # the sync prompt: adopt, we only care about layout
+                await pilot.pause()
+            lst = pilot.app.query_one("#presets", OptionList)
+            assert lst.virtual_size.height == presets_mod.PRESET_COUNT, (
+                f"a preset row wrapped: {lst.virtual_size.height} lines rendered for "
+                f"{presets_mod.PRESET_COUNT} rows — the last preset is pushed off the card"
+            )
+            # …and the fit is real truncation, not a silent overflow.
+            assert str(lst.get_option_at_index(0).prompt).endswith("…")
+            # The first render happens pre-layout (size.width == 0), which only exercises the
+            # _PRESET_NAME_CELLS fallback. Re-render now that the widget is measured, so the
+            # measured branch — the one a CSS change would move — is covered too.
+            assert lst.size.width, "the card should be laid out by now"
+            pilot.app._populate_presets()
+            await pilot.pause()
+            assert lst.virtual_size.height == presets_mod.PRESET_COUNT, "measured branch wrapped"
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot: regressions in WHO MOVES THE ● (found in review; each one reproduced first)
+#
+# `_store.active` is written from four places and only `_record` tells the undo history. Every
+# bug below was some other writer getting out of step — and because `_projected_store()` folds
+# cfg into whatever `active` points at, a misplaced ● means the next `s` rewrites the WRONG
+# preset. These are cheap tests for an expensive class of mistake.
+# ---------------------------------------------------------------------------
+
+def test_pilot_forked_preset_survives_a_relaunch(pilot_config):
+    """A fork makes a byte-identical duplicate, so at launch the config matches BOTH presets.
+    `matching_index` returns the first, so scanning naively would move you back to preset 1 on
+    every restart after the commonest flow (fork → save → quit) — with nothing dirty to correct
+    it. The recorded `active` wins when it still matches."""
+    cfg_path, _ = pilot_config
+
+    async def _run_first():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _fork_preset(pilot, 1, "max-power")
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run_first())
+    assert presets_mod.load(cfg_path).active == 1
+
+    async def _run_again():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert pilot.app._store.active == 1, "the preset you were on must survive a restart"
+            assert _active_row(pilot.app) == 1
+            assert not pilot.app._is_dirty()
+
+    asyncio.run(_run_again())
+
+
+def test_pilot_undo_after_a_fork_does_not_move_the_marker(pilot_config):
+    """A fork changes `active` without changing cfg, so it pushes no history entry. Unstamped,
+    the next `u` applies the PREVIOUS entry's index and quietly moves you off the preset you
+    just made — folding the restored models into it."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "cat:deep")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _fork_preset(pilot, 1, "forked")
+            assert _active_row(pilot.app) == 1
+
+            await pilot.press("u")
+            await pilot.pause()
+            assert _active_row(pilot.app) == 1, "an undo must not undo the fork's activation"
+
+    asyncio.run(_run())
+
+
+def test_pilot_undo_into_a_deleted_preset_says_so(pilot_config):
+    """Undo can restore models recorded while a since-deleted preset was active. They have to
+    land somewhere, so they land in the active preset — but the user is TOLD, rather than having
+    a preset they never touched silently rewritten."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            notes = []
+            original = pilot.app.notify
+            pilot.app.notify = lambda msg, **kw: (
+                notes.append((str(msg), kw.get("severity"))),
+                original(msg, **kw),
+            )[1]
+
+            await _fork_preset(pilot, 1, "cheap")
+            await _select_target(pilot, "cat:deep")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _switch_preset(pilot, 0)
+            await _focus_preset(pilot, 1)
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+
+            notes.clear()
+            await pilot.press("u")
+            await pilot.pause()
+            warnings = [m for m, sev in notes if sev == "warning"]
+            assert any("was deleted" in m for m in warnings), notes
+
+    asyncio.run(_run())
+
+
+def test_pilot_switch_to_an_identical_preset_drops_the_redo_tail(pilot_config):
+    """Switching between presets holding identical models pushes nothing (cfg is unchanged), so
+    the redo tail survived — and `ctrl+r` would resurrect an undone edit AND jump the ● to the
+    preset just left. A switch is an action; it invalidates the tail like any other."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _fork_preset(pilot, 1, "twin")  # identical to preset 1 by construction
+            await _select_target(pilot, "cat:deep")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await pilot.press("u")  # creates a redo tail
+            await pilot.pause()
+            await _switch_preset(pilot, 0)
+            assert not pilot.app._history.can_redo, "a switch must invalidate the redo tail"
+
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert _active_row(pilot.app) == 0
+            assert "deep" not in pilot.app.cfg.get("categories", {})
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("case", "cfg", "keys", "typed"),
+    [
+        # The one you could hit by accident: one keystroke in the add-model box.
+        (
+            "typed into add-model",
+            {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}, "categories": {}},
+            ["right", "a"],
+            "acme/[/b]",
+        ),
+        # The worse ones: persisted, so they fired on EVERY launch before anything was drawn.
+        (
+            "model id in the config",
+            {"agents": {"sisyphus": {"model": "acme/[/b]"}}, "categories": {}},
+            [],
+            None,
+        ),
+        (
+            "variant in the config",
+            {"agents": {"sisyphus": {"model": "zhipuai/glm-5", "variant": "[/i]"}},
+             "categories": {}},
+            [],
+            None,
+        ),
+        (
+            "category model in the config",
+            {"agents": {}, "categories": {"deep": {"model": "acme/[/u]"}}},
+            [],
+            None,
+        ),
+    ],
+)
+def test_pilot_markup_shaped_data_does_not_crash(tmp_path, case, cfg, keys, typed):
+    """Textual parses content markup in every plain string it renders — an `Option` prompt, a
+    `Static`, a toast. Model ids, variants and typed input are all data we don't control, so a
+    `[` in one was an opening tag and an unmatched close (`acme/[/b]`) raised MarkupError from
+    inside the render pass, where no call site can catch it. Widgets carrying data are now built
+    `markup=False`, option prompts are literal `Content`, and `#detail` (the one widget that
+    renders markup on purpose) escapes what it splices in."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            for key in keys:
+                await pilot.press(key)
+                await pilot.pause()
+            if typed is not None:
+                pilot.app.screen.query_one("#add-input", Input).value = typed
+                await pilot.pause()
+
+    asyncio.run(_run())  # the assertion IS "no MarkupError escaped the render pass"
+
+
+def test_pilot_markup_shaped_data_renders_literally(tmp_path):
+    """Not crashing isn't enough: a WELL-FORMED tag (`[red]…[/red]`) parses fine and would
+    silently vanish into styling, so an id you can't run would read as one you can. Every route
+    that shows a model id must show its brackets."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"agents": {"sisyphus": {"model": "acme/[red]glm[/red]", "variant": "[b]hi"}},
+             "categories": {}},
+            f,
+        )
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            # `.content` is the PRE-parse string, so run Textual's own markup parse over
+            # it to get what the pane actually shows (#detail is the one markup widget).
+            raw = str(pilot.app.query_one("#detail", Static).content)
+            detail = Content.from_markup(raw).plain
+            assert "acme/[red]glm[/red]" in detail, detail
+            assert "[b]hi" in detail, detail
+            cands = pilot.app.query_one("#candidates", OptionList)
+            labels = [
+                str(cands.get_option_at_index(i).prompt) for i in range(cands.option_count)
+            ]
+            assert any("acme/[red]glm[/red]" in label for label in labels), labels
+
+    asyncio.run(_run())
+
+
+def test_pilot_notify_renders_markup_literally(pilot_config):
+    """Toasts quote model ids, preset names, undo labels and `str(exc)` (file paths) — ~20 call
+    sites, any of which can carry a `[`. `OModelApp.notify` defaults `markup=False` so none of
+    them has to remember: a toast must never take the app down while reporting something."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            pilot.app.notify("Save failed: /tmp/[/b].jsonc")  # would raise MarkupError
+            await pilot.pause()
+            # The toast rack isn't mounted headless, so assert on the queued Notification —
+            # `markup=False` there IS what stops the parse, and the message stays verbatim.
+            note = list(pilot.app._notifications)[-1]
+            assert note.markup is False, note
+            assert note.message == "Save failed: /tmp/[/b].jsonc", note
+
+            # …and a caller that means it can still opt back in.
+            pilot.app.notify("plain", markup=True)
+            await pilot.pause()
+            assert list(pilot.app._notifications)[-1].markup is True
+
+    asyncio.run(_run())
+
+
+def test_pilot_a_markup_shaped_preset_name_does_not_crash(pilot_config):
+    """Textual parses plain strings as content markup, so a preset named `[/b]` raised
+    MarkupError from the compositor — and being persisted, it took the app down on EVERY launch
+    afterwards. Names are stripped of brackets on the way in and on the way back off disk."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _fork_preset(pilot, 1, "[/b]")
+            assert "[" not in "".join(_preset_labels(pilot.app))
+            await _save_and_confirm(pilot)
+
+    asyncio.run(_run())
+
+    # …and a hand-edited file carrying markup is survivable too: it must load and render.
+    store = presets_mod.load(cfg_path)
+    store.presets[0].name = "[b]hand edited"
+    with open(presets_mod.presets_path(cfg_path), "w", encoding="utf-8") as f:
+        f.write(presets_mod._payload(store))
+
+    async def _run_again():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert "[" not in "".join(_preset_labels(pilot.app))
+
+    asyncio.run(_run_again())
+
+
+def test_pilot_tab_into_the_presets_card_lands_on_a_row(pilot_config):
+    """`tab` is documented as an equal way into the card, but Textual's OptionList does not
+    auto-highlight on focus — an unseeded card swallowed `enter`/`a`/`x` entirely. The highlight
+    is seeded when the rows are built, so both routes work."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            pilot.app.query_one("#targets", OptionList).focus()
+            await pilot.press("tab")
+            await pilot.pause()
+            lst = pilot.app.query_one("#presets", OptionList)
+            assert pilot.app.focused is lst
+            assert lst.highlighted is not None, "tab must land on a live row"
+            # …and a key that acts on the highlighted row actually does something.
+            await pilot.press("a")
+            await pilot.pause()
+            assert pilot.app.screen.query_one("#preset-name-input", Input)
+
+    asyncio.run(_run())
+
+
+def test_pilot_tab_cycles_all_three_panes_both_ways(pilot_config):
+    """`tab` / `shift+tab` are the ONLY route into `#presets` — there is deliberately no `p` (or
+    any other) dedicated key, and `←`/`→` reach targets/candidates only. So the wrap-around
+    traversal is load-bearing, not a Textual detail: pin the order and both directions."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            pilot.app.query_one("#targets", OptionList).focus()
+            await pilot.pause()
+
+            seen = []
+            for _ in range(4):  # one full cycle plus the wrap back into #presets
+                await pilot.press("tab")
+                await pilot.pause()
+                seen.append(pilot.app.focused.id)
+            assert seen == ["presets", "candidates", "targets", "presets"], seen
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert pilot.app.focused.id == "targets", "shift+tab must walk back out"
+
+            # …and the pane keys still skip the card, which is why tab has to reach it.
+            for key, want in (("left", "targets"), ("right", "candidates")):
+                await pilot.press(key)
+                await pilot.pause()
+                assert pilot.app.focused.id == want
+
+    asyncio.run(_run())
+
+
+def test_pilot_no_p_binding(pilot_config):
+    """`p` shipped briefly as a presets shortcut and was removed as duplication of `tab`. It must
+    stay unbound (and inert), so it's free for a future key."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert not [b for b in app.BINDINGS if b.key == "p"], app.BINDINGS
+            targets = pilot.app.query_one("#targets", OptionList)
+            targets.focus()
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            assert pilot.app.focused is targets, "p must not move focus"
+
+    asyncio.run(_run())
+
+
+def test_pilot_escape_on_the_sync_prompt_changes_nothing(pilot_config):
+    """`esc` used to dismiss False, which the sync prompt read as "restore the preset" —
+    silently rewriting the config the user had just changed outside oModel, under a hint line
+    that said "esc cancel"."""
+    cfg_path, _ = pilot_config
+    other = presets_mod.capture("mine", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[other, None, None], active=0))
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert isinstance(pilot.app.screen, ConfirmModal)
+            before = copy.deepcopy(pilot.app.cfg)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert pilot.app.cfg == before, "esc must not rewrite the config"
+            assert len(pilot.app.screen_stack) == 1
 
     asyncio.run(_run())

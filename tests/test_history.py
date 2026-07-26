@@ -174,3 +174,57 @@ class TestLimit:
         h = History({"n": 0}, limit=1)         # clamped up to 2
         h.push({"n": 1}, "set")
         assert h.can_undo is True
+
+
+class TestAuxStampAndRedoDrop:
+    """Two escape hatches app.py needs for state that rides along with an entry but is NOT
+    undoable on its own — the active preset index (DESIGN §presets.py)."""
+
+    def test_set_aux_key_stamps_every_entry(self):
+        h = History({"n": 0}, aux={"custom_rows": {}, "active": 0})
+        h.push({"n": 1}, "one", aux={"custom_rows": {}, "active": 0})
+        h.push({"n": 2}, "two", aux={"custom_rows": {}, "active": 0})
+        h.set_aux_key("active", 2)
+        # Past AND present: an undo must not resurrect the old index.
+        assert h.current_aux()["active"] == 2
+        h.undo()
+        assert h.current_aux()["active"] == 2
+        h.undo()
+        assert h.current_aux()["active"] == 2
+        assert h.current_aux()["custom_rows"] == {}, "other aux keys survive the stamp"
+
+    def test_set_aux_key_on_entries_with_no_aux(self):
+        h = History({"n": 0})
+        h.push({"n": 1}, "one")
+        h.set_aux_key("active", 1)
+        assert h.current_aux() == {"active": 1}
+
+    def test_drop_redo_discards_the_tail(self):
+        h = History({"n": 0})
+        h.push({"n": 1}, "one")
+        h.push({"n": 2}, "two")
+        h.undo()
+        assert h.can_redo
+        h.drop_redo()
+        assert not h.can_redo
+        assert h.current_state() == {"n": 1}, "the current entry is untouched"
+
+    def test_drop_redo_is_a_no_op_with_no_tail(self):
+        h = History({"n": 0})
+        h.push({"n": 1}, "one")
+        h.drop_redo()
+        assert h.current_state() == {"n": 1} and not h.can_redo
+        assert h.can_undo
+
+    def test_clear_aux_keeps_named_keys(self):
+        h = History({"n": 0}, aux={"custom_rows": {"a": 1}, "active": 2})
+        h.push({"n": 1}, "one", aux={"custom_rows": {"b": 2}, "active": 2})
+        h.clear_aux(keep=("active",))
+        assert h.current_aux() == {"active": 2}
+        h.undo()
+        assert h.current_aux() == {"active": 2}
+
+    def test_clear_aux_with_no_keep_drops_everything(self):
+        h = History({"n": 0}, aux={"custom_rows": {"a": 1}, "active": 2})
+        h.clear_aux()
+        assert h.current_aux() == {}

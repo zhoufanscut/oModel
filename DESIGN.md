@@ -56,6 +56,7 @@ prefix and a valid variant, and saves a clean config.
 | 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). A `none` in that set is dropped as a duplicate of the synthetic `(none)` clear row (`_is_no_variant`) — never offered, never written (`none` ≡ `(none)` ≡ no `variant` key). The bundled family registry stays the source for `detect_family`/substitution; the omo-suggestion ⚠ warn (`resolve._variant_warn`) **also** prefers `--verbose` now — the heuristic family `variants` is its fallback only when opencode is silent (dedicated `{}` / uncached) — but the registry is never the source for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub/delete-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
+| 17 | Presets | **3 named presets ARE the working state**, in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json`). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` forks the current models into another row + names it; `x` refuses on the active one. **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
 
 ## Data sources
 
@@ -143,6 +144,11 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 │ CATEGORIES         ││  opencode/gpt-5.5 (medium)                 │
 │   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
 │   quick       mini ││ + add model…                               │
+└────────────────────┘│                                            │
+┌─ PRESETS ──────────┐│                                            │
+│ ● 1 daily-cheap    ││                                            │
+│   2 max-power      ││                                            │
+│   3 (empty)        ││                                            │
 └────────────────────┘└────────────────────────────────────────────┘
  s save · ? help · q quit                                     v0.1.0
 ```
@@ -152,7 +158,13 @@ panes use a muted `$surface-lighten-3` border — a theme token (not a literal),
 `$border-blurred`, which the default textual-dark theme renders near-black on a dark terminal.
 `Static#providers` / `Static#hints-bar` are full-width bars (not cards) with a neutral `$surface-lighten-1`
 fill (deliberately not the blue-gray `$panel`), and `Static#detail` is display-only — it shows the
-frame but never the focus highlight (Statics never receive focus; only `#targets` and `#candidates` do).
+frame but never the focus highlight (Statics never receive focus; only `#targets`, `#presets` and
+`#candidates` do). The left column is a `Vertical#left` (width 32) stacking `#targets` (`height: 1fr`)
+over the fixed 5-line `#presets` card (decision #17), so the three presets are always visible without
+scrolling past the ~21 target rows — **at the cost of ~5 of those rows**: in an 80×24 terminal
+`#targets` drops from ~20 visible rows to ~15 against 21 rows of content, so the list scrolls sooner
+(it already scrolled). `#presets` carries the same muted `$surface-lighten-3` border as the other
+cards and joins the focus rule (`#targets:focus, #presets:focus, #candidates:focus`).
 
 **Color depth:** the CLI pins `TEXTUAL_COLOR_SYSTEM=256` (in `cli._default_color_system`, set
 before `app` imports Textual) so the palette is consistent across terminals — a terminal with no
@@ -183,6 +195,7 @@ oModel/
     resolve.py        # prefix (prefer-dedicated), variant defaulting/validation, candidate assembly
     config_io.py      # read jsonc (json5) → dict; serialize(); diff+confirm save; .bak; scaffold
     history.py        # in-session undo/redo: snapshot stack of cfg states (u / ctrl+r)
+    presets.py        # 3 named presets of agents/categories, stored next to the config
     refresh.py        # locate omo src + bun; run extractor; write repo or user-data override
     data/
       omo-suggestions.json        # BUNDLED, committed (regenerated by --refresh-omo)
@@ -195,6 +208,7 @@ oModel/
     test_detect_family.py         # parity vs omo (kimi vs k2p#, opus vs non-opus, gpt-5 vs o-series)
     test_config_io.py             # clean rewrite preserves non-model sections; .bak; comment loss
     test_history.py               # undo/redo stack: change detection, deep-copy isolation, cap
+    test_presets.py               # preset file IO: 3 entries, name, missing/corrupt → 3 empties
     test_app_pilot.py             # Textual App.run_test() set + save + undo/redo via queryable IDs
   .github/workflows/
     ci.yml                        # lint + tests (opencode + bun mocked; no omo source needed)
@@ -475,6 +489,180 @@ oModel/
   dirty** (nothing to save). The undo history is **preserved across a save** (re-baselines
   `_saved_text` only), so a just-saved edit can still be undone (then re-saved).
 
+### `presets.py` — 3 named presets, the working state (decision #17)
+- **The model in one line:** you don't save *into* presets, you **edit one**. Three named sets of
+  assignments; exactly one is **active**; your edits go into it; `s` publishes it to
+  `oh-my-openagent.jsonc`.
+- **The invariant everything else follows from:** *the config on disk always equals the ACTIVE
+  preset* — the file is never a fourth state matching none of them. Read the rest of this section
+  as consequences of that one rule:
+  - edits must flow into the active preset, or editing itself would create the orphan state;
+  - the presets file and the config must therefore move **together** → **one write rule: only `s`
+    writes anything**, and it writes both (`a`, `x` and the first-launch seed all stage in memory);
+  - so quitting without saving discards *both*, in lockstep, leaving disk exactly as it was —
+    which is why `q` offers **save & quit / discard / cancel** rather than a bare yes/no;
+  - and `x` must refuse on the active preset — deleting the one the config mirrors would strand
+    the config. (That also makes "at least one preset, always" free.)
+- **First launch seeds one.** No presets file (or a mangled one) → preset 1 is captured from the
+  config you already have, named `default`, active. In memory only: an untouched session stays
+  clean and writes nothing, and re-seeding next launch is identical. Your first `s` materializes it.
+- **Distinct from the other two save-ish things** (GLOSSARY): a **backup** is the verbatim on-disk
+  file copy taken automatically at every save (§config_io.py, `--restore`); the **history** is the
+  in-session undo stack (§history.py); a **preset** is a named set of assignments you switch
+  between. "Slot" stays reserved for a *target* — a preset is addressed by **index** (0–2, shown
+  as 1–3).
+- **What a preset holds:** the two subtrees oModel owns — `agents` + `categories`, sub-targets
+  included — deep-copied **in and out** (`capture` / `assignments`), so the live cfg and a stored
+  preset never alias. **Never** other top-level keys (`claude_code`, `experimental`, `$schema`,
+  future) and **never** file text: switching presets must not be able to clobber the keys/comments
+  `render()` preserves (decision #2).
+- **Where:** `<config_dir>/.omodel-presets.json` — next to the config, sibling of `.backup/`. Presets
+  therefore **follow the config file**: `--config /tmp/x.jsonc` gets its own set, which is what keeps
+  the real-config safety rule satisfiable in tests with **no new env override**
+  (`tests/conftest.py` already redirects `$XDG_CONFIG_HOME`). Plain JSON:
+  ```json
+  {"version": 1, "active": 0,
+   "presets": [{"name": "daily-cheap", "saved_at": "2026-07-26T09:14:03Z",
+                "agents": {"sisyphus": {"model": "zhipuai/glm-5.1"}}, "categories": {}},
+               null, null]}
+  ```
+  Always exactly `PRESET_COUNT` (3) entries, `null` = empty; widening later is that one constant.
+- **Read = best-effort, write = loud.** `load()` never raises: missing / corrupt / wrong `version` /
+  short list → an empty store; a non-dict `agents`/`categories` → `{}`; an `active` that is out of
+  range or aimed at an empty entry → the first non-empty preset (`normalize_active`), so
+  `Store.current()` is None only for a genuinely empty store and app.py never handles "active points
+  at nothing". `write()` is atomic (temp + `os.replace`) and **does raise** on failure (read-only
+  dir, path taken by a directory); the app catches and notifies, exactly as `action_save` does.
+  That splits the repo's two conventions deliberately: `cache.py` swallows write errors because a
+  lost cache write costs only speed, while a silently-dropped preset write would be a lie about
+  durable state. **Best-effort reading has a sharp edge, so `write` guards it:** an existing file
+  that doesn't parse is moved to `<path>.corrupt` before the overwrite — otherwise a transiently
+  unreadable sidecar reads as empty, gets seeded, and the first save destroys presets the app
+  never saw.
+- **API (pure data + file IO, no Textual — a leaf like `history.py`, no omodel imports):**
+  `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass Store(presets, active)` with
+  `.current()` / `.is_empty()`; `load(config_path) -> Store`; `write(config_path, store) -> Store`
+  (**the only function here that touches disk**, returning the store as read back); plus the pure
+  helpers `capture(name, cfg)` / `assignments(preset)` (the deep-copy in / out pair),
+  `seeded(cfg, name=DEFAULT_NAME)`, `matching_index(store, cfg)`, `normalize_active(store)`,
+  `fingerprint(agents, categories)`, `store_fingerprint(store)`, `model_count(preset)`,
+  `sanitize_name(text, index)`, `timestamp()`, `presets_path(config_path)`, and the constants
+  `PRESET_COUNT` / `FILE_VERSION` / `MAX_NAME` / `DEFAULT_NAME`.
+- **The two fingerprints.** `fingerprint` answers *does the config still reflect a preset?* —
+  `json.dumps` of the two subtrees, empty `ultrawork`/`compaction` sub-objects dropped
+  (`config_io._clean_agents`' rule) and `sort_keys=True`, so neither key order nor an
+  added-but-unfilled sub-target reads as a difference. **That cleaning is necessary because a naive
+  `==` would lie:** `serialize` cleans those sub-objects for `agents` but not `categories`, so raw
+  equality reports "differs" for two states that save byte-identically. `store_fingerprint` answers
+  *does `s` have anything to persist?* — contents + names + active index, deliberately **excluding
+  `saved_at`** so a re-stamp alone never marks the app dirty. Neither decides what gets WRITTEN, so
+  a disagreement can mis-answer a question but can't corrupt a save. Both re-implement the
+  empty-sub-object rule locally rather than importing `config_io._clean_agents`, keeping this module
+  a pure leaf — the one deliberate duplication, and a contained one.
+- **App integration (`app.py`):** `OptionList#presets` — a fixed 5-line card (3 rows + border) under
+  `#targets` inside `Vertical#left`, `border_title = "PRESETS"`, option IDs `preset:0` … `preset:2`.
+  Rows read `● 1 daily-cheap` / `  3 (empty)`; **`●` = the ACTIVE preset** (the one your edits go
+  into, and the one `s` publishes).
+  - **`self.cfg` IS the active preset's content** — never stored twice. `_projected_store()` is the
+    single place that reconciles them (a copy of the store whose active entry carries the live cfg),
+    and everything needing the whole store — dirtiness, saving, switching away — goes through it. So
+    "your edits go into the preset you're on" is structural, not something each edit path remembers.
+  - **`enter` = switch.** Banks the in-flight edits into the preset you're leaving
+    (`_projected_store`), then REPLACES cfg with the target preset's assignments — a target it
+    doesn't define is cleared, because a preset is a complete state, not an overlay. `_record` +
+    `_restore_state` give it the same treatment as any edit: undoable, `_rows` cache dropped, left
+    pane rebuilt, cursor falling back off a sub-target the new preset lacks. `enter` on an empty
+    preset bells; on the active one it just says so.
+  - **`a` = fork + name + switch.** Copies the models you're looking at into that row and moves you
+    there — the only way presets 2 and 3 come into being. The name modal doubles as the overwrite
+    confirm (titled `Overwrite preset 2 "max-power"?`, hint `enter overwrite · esc cancel`), which
+    matters because `a` means *add model* in every other pane. Name: trimmed, control characters
+    and newlines **stripped**, `[`/`]` **stripped** (Textual 8 parses a plain `str` handed to a
+    widget as content markup, so a preset named `[/b]` raised `MarkupError` from the compositor —
+    and being *persisted*, it took the app down on every launch afterwards; names read off disk are
+    stripped too, so a hand-edited file can't do it either), ≤`MAX_NAME` (24) chars, truncated with `…`
+    measured in **display cells**. The cell budget is **measured, not assumed**: the card's content
+    box is 28 cells — the 32-wide pane less its border (2) and less `OptionList`'s own
+    `DEFAULT_CSS` `padding: 0 1` (2); there is *no* reserved scrollbar gutter — leaving 24 for the
+    name after the `● 1 ` prefix. Deriving it from the pane width alone (30 → 26) wrapped every row
+    of a 24-character CJK name onto two lines and pushed the third preset off the card — verified,
+    then fixed: `_populate_presets` prefers the widget's **measured** width, with
+    `_PRESET_NAME_CELLS` only as the pre-layout fallback, so a padding change can't quietly bring
+    the wrap back.
+  - **`x` = delete, behind a `ConfirmModal` — and REFUSED on the active preset** (bell + "switch to
+    another one first"), per the invariant. Staged like everything else.
+  - **Undo carries the active index — and every writer of `active` must say so.** `_record` puts
+    `{custom_rows, active}` in each history entry's `aux`, and `_restore_state` applies both:
+    undoing a switch has to move the `●` back with the models, or the restored models would be
+    folded into the preset you switched TO. A catalog refresh wipes `aux` **except** `active`
+    (`History.clear_aux(keep=("active",))`) — typed rows go stale with the catalog, the index
+    doesn't. `active` is written from four places and only `_record` reaches the history, so the
+    other three compensate — this is the feature's sharpest edge, and every one of these was a
+    real bug found in review:
+      * **fork** changes `active` without changing cfg → no entry is pushed, so it stamps the index
+        across the whole timeline (`History.set_aux_key`); otherwise the next `u` quietly moves you
+        off the preset you just made.
+      * **switch to an identical preset** pushes nothing either (cfg unchanged) → it must
+        `History.drop_redo()`, or `ctrl+r` resurrects an undone edit *and* jumps the `●` back.
+      * **delete** deliberately does NOT stamp: entries recorded while that preset was active keep
+        pointing at it, so `_restore_state` can see the destination is gone and **say so**
+        ("Preset 2 was deleted — these models are now in 'default'") rather than editing a preset
+        the user never chose in silence.
+      * **launch** prefers the *recorded* `active` when it still matches the config, falling back
+        to `matching_index` only otherwise — a fork makes a byte-identical duplicate, so scanning
+        first would silently return you to preset 1 after every fork → save → quit, with nothing
+        dirty to correct it.
+  - **Focus-dependence (new for `a`/`x`/`v`).** `action_clear` and `action_variant` are focus-*blind*
+    otherwise, so `#presets` is the first pane that makes `x` and `a` dispatch on focus — and **`v`
+    bells on a preset row**: left unspecified it would silently retarget the hidden candidate pane's
+    variant. `#presets` is the third focusable widget, and **`tab` / `shift+tab` are the only way
+    in** — Textual's own `Screen` traversal, DOM order targets → presets → candidates, wrapping, so
+    it already reaches every pane in both directions. **Deliberately no dedicated `p` key** (nor a
+    global `1`/`2`/`3` quick-switch): it shipped briefly and was pure duplication of `tab` — one
+    more key to learn, and one fewer left for a future binding. `←`/`→` stay targets-vs-candidates
+    only; widening them would cost the direct jump they exist for. The highlight is therefore seeded
+    in `_populate_presets`, never in a focus action: Textual's `OptionList` does not auto-highlight
+    on focus, and an unseeded card swallows `enter`/`a`/`x` entirely — which `tab`, the sole route
+    in, would hit every time.
+  - **Summary line = the card's own `border_subtitle`, NOT `#detail`.** Highlighting `preset:<i>`
+    sets `saved 07-24 · 12 models` (read through the projection, so the active row counts your
+    in-flight edits). `#detail` is deliberately left alone: it has two **async** writers that
+    re-render whatever `_current_target` is *at completion time* (the detail worker's tail and
+    `_refresh_catalog`), so anything a preset highlight wrote there would be silently clobbered by
+    an in-flight `opencode --verbose` — and restoring it on focus-return would need a Focus/Blur
+    hook, since Textual doesn't re-post `OptionHighlighted` when a list merely regains focus. The
+    subtitle has exactly one writer. A preset row also schedules **no** `catalog.detail` fetch,
+    leaving the one-concurrent-fetch rule (§cache.py) untouched.
+  - **`s` writes both** (`_save`): the config through the usual diff+confirm (backup, atomic
+    rename), then the presets file. Config first — it is the artifact with the backup and the diff
+    you just approved, so a failure there aborts before the store moves; if the presets write then
+    fails, the config is ahead and the app says exactly that ("Config saved — the presets file did
+    not. Press s again.", never a bare "Saved."), and a second `s` takes the **presets-only path**
+    (no config diff → nothing to confirm → write straight out) and heals it. That same path serves
+    a fork, a delete, a rename, and adopting an out-of-band config edit. `_is_dirty` is now
+    *config-dirty OR store-dirty*, so `q` prompts for either.
+  - **Launch reconciliation** (`_ask_sync`), the one case the invariant can't cover itself — the
+    config matches **no** preset because something outside oModel wrote it. If it matches a
+    *different* preset, that one silently becomes active (no conflict to resolve; the dirtiness
+    baseline is taken after, so a re-point alone reads clean). Otherwise a modal asks: **adopt the
+    config** (the active preset takes the models now in the file — already true in memory, so it
+    just needs saving) or **restore the preset** (cfg goes back to the preset's models, staged as an
+    ordinary edit with a diff you can read). Neither writes anything; both end at `s`. `esc` is a real
+    third answer here (`ConfirmModal(escape_cancels=True)`, with a matching `hints=` line): it
+    decides later, changing nothing — the default dismissal would have meant *restore*, silently
+    rewriting the config the user had just edited outside oModel.
+  - **Stale models degrade, they don't break:** a preset naming a model you no longer have switches
+    in fine; `_build_rows` surfaces it as the off-chain current-assignment row with `⚠ unavailable`
+    (warn-but-allow, decision #5) when the catalog is readable, suppressed in degraded mode.
+  - **Degraded mode + the two refreshes:** presets are cfg data, independent of availability, so
+    they work **fully** with `opencode` missing or after `CatalogUnavailable`. `r` /
+    `--refresh-models` does **not** touch the presets file.
+  - **`--restore` is orthogonal:** restoring a backup rewrites the config and leaves the presets
+    file alone — so the next launch will find the config matching a different preset (silent
+    re-point) or none (the sync prompt). Both land back on the invariant.
+- **No CLI surface in v1.** `omodel --preset <N|name>` (switch + save headless) is a plausible
+  follow-up, deliberately deferred: the TUI is where you *see* what a switch would change.
+
 ### `refresh.py` — `omodel --refresh-omo`
 - Locate omo src: `--omo-src` | `$OMO_SRC` | `~/source/oh-my-openagent` (needs
   `packages/model-core/src`). Runner: **bun only** (no node fallback — verified broken).
@@ -500,6 +688,29 @@ and prints JSON matching the §Data sources "what omo suggests" schema: each Reg
 runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 
 ### Textual two-pane contract (`app.py`)
+- **Rendering user data is never a plain `str` (hard rule).** Textual parses *content markup* in
+  every plain string it renders — a `Static`'s content, an `Option` prompt, a toast. Almost nothing
+  we render is ours: model + provider ids come from `opencode` and from the config, variants from
+  `--verbose`, preset names and the add-model box are typed. A `[` in any of them is an opening tag,
+  and an unmatched close (`acme/[/b]`) raises `MarkupError` **from inside the render pass** — where
+  no call site can catch it, so the app dies. Typing it in add-model was one keystroke; a config or
+  presets file holding such an id was fatal on **every launch**. Three mechanisms, in order of
+  preference:
+  1. **`markup=False` at construction** for any `Static`/`Label` that shows data (`#providers`,
+     `#add-preview`, `#add-title`, `#confirm-body-text`, `#quit-body`, `#preset-name-title`). It's a
+     property of the *widget*, so it also covers every future `.update()` on it — a flag can't be
+     forgotten, an escape call can.
+  2. **`_lit(text) → Content`** for `Option` prompts (`OptionList` has no such flag): a `Content` is
+     a Visual, rendered verbatim. Every option built from data uses it — `#targets`, `#candidates`,
+     `#presets`, the add-model list, both variant lists.
+  3. **`_esc(text)`** for the one widget that renders markup *on purpose*: `#detail` (`[b]` header,
+     `[dim]` pending-fetch placeholder). Its target, model, variant and catalog line are all escaped.
+  `OModelApp.notify` overrides Textual's to default **`markup=False`** — one choke point for ~20
+  call sites that quote ids, preset names, undo labels and `str(exc)`. Note the failure mode isn't
+  only a crash: a *well-formed* tag (`[red]…[/red]`) parses fine and silently vanishes into styling,
+  so an id you can't run would read as one you can — hence the "renders literally" test beside the
+  "doesn't crash" ones. Preset names additionally strip brackets at input (`presets._render_safe`),
+  belt-and-braces since they're persisted.
 - **Header** `Static#providers`: one line `oModel: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the
@@ -516,6 +727,17 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   Sisyphus has a choice of sub-kind: `a` there opens a **chooser modal** (below) — naming each kind
   + what it's for rather than blindly cycling. Every other agent has the single kind `compaction`,
   so `a` adds it **directly** (no modal — there's nothing to choose).
+- **Left (bottom)** `OptionList#presets` (decision #17 / §presets.py): a fixed 5-line card under
+  `#targets` inside `Vertical#left`, `border_title = "PRESETS"`, option IDs `preset:0` … `preset:2`,
+  rows `● 1 <name>` / `  3 (empty)` — **`●` = the ACTIVE preset**, the one your edits go into and
+  the one `s` publishes to the config. `enter` switches to a preset (a staged, undoable replace that
+  first banks your edits into the one you leave), `a` forks the current models into a row + names it
+  + switches there, `x` deletes it behind a confirm and is **refused on the active one**. Third
+  focusable widget, reached by `tab` / `shift+tab` only — no dedicated key (`←`/`→` remain
+  targets-vs-candidates).
+  Highlighting a row writes its one-line summary to **this card's `border_subtitle`,
+  never `#detail`** (which has two async writers that would clobber it — §presets.py) and schedules
+  no `catalog.detail` fetch. `v` bells here.
 - **Right**: `Static#detail` (current model/variant + `catalog.detail` line) and
   `OptionList#candidates` (IDs `cand:<i>`, last = `cand:add` — the `+ add model…` row). The `cand:<i>`
   row matching the current assignment (at launch the on-disk model; follows your pick) is prefixed
@@ -538,26 +760,40 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   bar is a floor (save/help/quit); `?` is the ceiling. Modals carry their own one-line hint
   (`Static.modal-hints`) instead. (`r` is also still advertised in the `#providers` header.)
 - **Help overlay** `HelpModal` (`?`): a read-only, scrollable `ModalScreen` (same body pattern as
-  `ConfirmModal`) listing **every** key, grouped (Navigate / Edit / Undo / Models & file / In
-  dialogs). Base-screen-only (gated in `check_action` alongside focus + undo/redo — `?` over a
+  `ConfirmModal`) listing **every** key, grouped (Navigate / Edit / Presets / Undo / Models &
+  file / In dialogs). Base-screen-only (gated in `check_action` alongside focus + undo/redo — `?` over a
   modal is pointless; `esc` closes the modal first). Closes with `?` (toggles), `esc`, or `q`.
   Its `_BODY` text and `_HINT_BAR` are the only two places keys are advertised — keep them and the
-  module KEYS docstring in sync.
+  module KEYS docstring in sync — including the keys that are *not* app bindings: **`tab` /
+  `shift+tab` are listed under Navigate**, since Textual provides them for free and they'd
+  otherwise be the one undocumented way to reach `#presets`. (The **Presets** group carries the
+  `enter`/`a`/`x` meanings on a `#presets` row — §presets.py.)
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
   `v` → push `OptionList` of the family's valid variants + `(none)`; `a` → pane-contextual: opens the
   add/edit-model modal (below) from #candidates **and** from a #targets *category* row (`enter` on
-  `cand:add` also opens it), or adds a sub-target from a #targets *agent* row (chooser on Sisyphus,
-  direct on every other agent — below); `x` → clear
+  `cand:add` also opens it), adds a sub-target from a #targets *agent* row (chooser on Sisyphus,
+  direct on every other agent — below), or saves the current assignments into the highlighted
+  `#presets` row — forking them into that preset and switching to it (name modal, §presets.py);
+  `x` → clear
   the assignment (on an ultrawork/compaction sub-target row → **delete the whole row**, parent agent
-  regains focus — clear == delete since an empty sub-object serializes away);
+  regains focus — clear == delete since an empty sub-object serializes away; on a `#presets` row →
+  **delete that preset**, behind a confirm, and REFUSED on the active one — the config mirrors it);
   `u` → undo / `ctrl+r` → redo the last edit (in-session snapshot stack, §history.py — gated to the
   base screen via `check_action`, so they don't reach through a modal that binds `u` itself);
   `s` → diff+confirm save; `r` → refresh
   (off-thread `opencode models --refresh` + rebuild cache; also retries after `CatalogUnavailable`);
-  `q` → quit (confirm if dirty); `?` → open the `HelpModal` full-key overlay (base-screen-only, same
-  `check_action` gate as focus + undo/redo); `←`/`→` → focus the targets / candidates pane (gated to
+  `q` → quit (when dirty: the three-way `QuitModal` — save & quit / discard / cancel, since a
+  discard now drops preset work as well as config work); `?` → open the `HelpModal` full-key overlay (base-screen-only, same
+  `check_action` gate as focus + undo/redo); highlight on `#presets` → one-line summary in that
+  card's own `border_subtitle` (never `#detail`; no `catalog.detail` fetch); `enter` there →
+  **switch** to that preset (a staged replace via `_restore_state`, `u`-undoable — and the undo
+  moves the `●` back too); `v` there → bell;
+  `tab` / `shift+tab` → cycle all three panes, the only route into `#presets` (Textual `Screen`
+  traversal, **not** an app binding — so it needs no `check_action` gate and inside a modal it
+  cycles that modal's widgets instead);
+  `←`/`→` → focus the targets / candidates pane (gated to
   the base screen via `check_action`, so it never grabs focus from under a modal; the add-model
   `Input` keeps its cursor arrows). **Vim aliases:** `h`/`l` mirror `←`/`→` (the *same* gated focus
   actions); `j`/`k` mirror `↓`/`↑` within whatever list is focused — bound on the `VimOptionList`
@@ -695,6 +931,26 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
    save adds a second snapshot and `--restore` lists them newest-first.
 8. **Live:** machine with `opencode`, no omo source → `omodel` launches, lists from `opencode models`,
    edits + saves a clean file OMO reloads.
+9. **Presets — the working state (Pilot + unit):** against a temp `--config`, launch with no
+   presets file → preset 1 is seeded from the config, named `default`, marked `●`, **nothing is
+   written**, and `q` exits without a prompt. Set a model → the active preset carries it; `s` →
+   confirm → **both** files land and `matching_index(store, config) == store.active` (the invariant,
+   asserted directly). `a` on row 2 → name → it holds those models and becomes `●`; edit, switch back
+   with `enter` (row 1's models return), switch forward (row 2's edits were banked, not lost); `u`
+   after a switch moves the `●` back **with** the models. `x` on the active preset is refused
+   outright (no modal); on another it confirms, and nothing reaches disk until `s`. `q` while dirty →
+   the three-way modal: `d` leaves both files byte-identical, `s` runs the diff+confirm then exits.
+   Launch with a presets file whose active preset differs from the config → the sync modal; both
+   answers write nothing. Launch where the config matches a *different* preset → no modal, that one
+   becomes active, app reads clean. Unit (`test_presets.py`): missing / corrupt / wrong-`version` /
+   short file → empty store, no exception; a non-dict `agents`/`categories` → `{}`; an out-of-range
+   or empty-pointing `active` → the first non-empty preset; `write` is atomic, raises on an
+   unwritable path and leaves no temp file; `store_fingerprint` ignores `saved_at` but sees content,
+   names and `active`; `fingerprint` is order-insensitive and treats an empty
+   `ultrawork`/`compaction` as absent. **With a readable, non-empty catalog**, a preset naming an
+   unavailable model shows the `⚠ unavailable` off-chain row — assert that precondition explicitly,
+   or a stubbed-empty catalog makes the test pass for the wrong reason. Never touches the real
+   `~/.config/opencode/` (temp `--config` only).
 
 ## Execution playbook (team fan-out)
 
@@ -710,7 +966,7 @@ Config/TUI to Haiku).
 | **Config I/O** | `config_io.py` (serialize, backups/restore, scaffold) | **Sonnet** |
 | **TUI** | `app.py` two-pane + variant/add-model/diff modals + keybindings | **Opus** |
 | **CLI + packaging** | `cli.py` · `refresh.py` · `pyproject.toml` · `install.sh` · `.github/workflows/*` · README/LICENSE/NOTICE | **Sonnet** |
-| **QA / verification** | all 5 `tests/test_*` authored **from this spec, independent of the implementations** + runs the 8 §Verification checks as the **merge gate** | **Sonnet** |
+| **QA / verification** | all 7 `tests/test_*` authored **from this spec, independent of the implementations** + runs the 9 §Verification checks as the **merge gate** | **Sonnet** |
 
 ### Sequencing (contract-first)
 0. **Lead (blocking):** freeze §Data contracts (`target` id, `source` enum, candidate-row dict) + each
@@ -721,7 +977,7 @@ Config/TUI to Haiku).
    parallel (not blocked on implementations).
 2. **Integrate (lead):** merge tracks, wire `app.py` to catalog/suggestions/resolve/config_io, reconcile
    any interface drift against the §Data contracts.
-3. **Gate (QA + lead):** QA's `test_*` green **and** all 8 §Verification checks pass (incl. a live
+3. **Gate (QA + lead):** QA's `test_*` green **and** all 9 §Verification checks pass (incl. a live
    `opencode` run + a Pilot save round-trip). Nothing ships until green.
 
 ### Notes

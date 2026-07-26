@@ -127,9 +127,37 @@ class History:
         self._index += 1
         return self.current_state(), self._entries[self._index].label
 
-    def clear_aux(self) -> None:
+    def set_aux_key(self, key, value) -> None:
+        """Stamp `key`=`value` into EVERY entry's aux, past and future.
+
+        For companion state that is deliberately *not* undoable: app.py's preset fork and delete
+        change which preset is active without changing cfg, so they push no entry — and the
+        stored index would otherwise stay behind, letting the next `u` silently move the `●`
+        (and with it, where the restored models get written)."""
+        for entry in self._entries:
+            entry.aux = dict(entry.aux or {}, **{key: value})
+
+    def drop_redo(self) -> None:
+        """Discard the redo tail without pushing.
+
+        `push` truncates the tail only when it actually records something, so an action that
+        changes state WITHOUT changing cfg (switching to a preset holding identical models)
+        would otherwise leave a stale future reachable with `ctrl+r`."""
+        del self._entries[self._index + 1:]
+
+    def clear_aux(self, keep=()) -> None:
         """Drop every entry's `aux` snapshot (cfg states, labels and the cursor are untouched).
         app.py calls this on a catalog refresh: the stored `_custom_rows` carry now-stale
-        availability, so undo/redo must not resurrect a pre-refresh snapshot of them."""
+        availability, so undo/redo must not resurrect a pre-refresh snapshot of them.
+
+        `keep` names aux keys that must SURVIVE the wipe — for entries whose aux is a dict.
+        Not every companion goes stale with the catalog: app.py's active-preset index has to
+        keep riding with each entry, or undoing a preset switch after a refresh would move the
+        models without moving the `●`."""
+        keep = tuple(keep)
         for entry in self._entries:
-            entry.aux = None
+            if keep and isinstance(entry.aux, dict):
+                kept = {k: v for k, v in entry.aux.items() if k in keep}
+                entry.aux = kept or None
+            else:
+                entry.aux = None

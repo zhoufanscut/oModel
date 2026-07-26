@@ -43,7 +43,7 @@ opencode CLI output is cached for 24h under `~/.cache/omodel/` (`cache.py`) so w
 are instant; `--refresh-models` / `r` bust it. Tests isolate the cache via `tests/conftest.py`
 (`$OMODEL_CACHE_DIR` → tmp) and must stub `subprocess.run` (each opencode call is ~3s / ~320 MB).
 
-`tests/verification.md` maps the 8 DESIGN.md verification checks to concrete commands — use it as the
+`tests/verification.md` maps the 9 DESIGN.md verification checks to concrete commands — use it as the
 pre-release gate (it covers the live `opencode` and PyInstaller-binary checks that CI can't run).
 
 ## Architecture
@@ -93,8 +93,17 @@ data/omo-suggestions.json ──────────────► suggesti
   never required to equal the on-disk bytes. Each save snapshots the prior file verbatim to
   `<config_dir>/.backup/<ts>.jsonc`; the very first save pins `original.jsonc` (never pruned, never
   counts toward the 20-snapshot cap).
-- **`app.py`** — Textual two-pane App. Stable widget IDs (`#targets`, `#candidates`, `#detail`,
-  `#providers`) and option IDs (`agent:<name>[.ultrawork|.compaction]`, `cat:<name>`, `cand:<i>`,
+- **`presets.py`** — 3 named presets, and they ARE the working state (decision #17): a leaf like
+  `history.py` (pure data + file IO, no omodel imports) over `<config_dir>/.omodel-presets.json`, so
+  presets follow the **active** config. Exactly one preset is active; **the config on disk always
+  equals it** — that invariant drives the rest: edits flow into the active preset (`app.py`'s
+  `_projected_store`), `enter` switches (banking your edits into the one you leave), `x` refuses on
+  the active one, and **only `s` writes — both files, together**, so quitting discards both in
+  lockstep. First launch with no presets seeds one from your config, in memory. Reads are
+  best-effort (missing/corrupt → empty store, `active` normalized); `write()` raises so the app can
+  notify.
+- **`app.py`** — Textual two-pane App. Stable widget IDs (`#targets`, `#presets`, `#candidates`,
+  `#detail`, `#providers`) and option IDs (`agent:<name>[.ultrawork|.compaction]`, `cat:<name>`, `cand:<i>`,
   `cand:add`) are a contract that pilot tests depend on — see the module docstring; don't rename.
 - **`cli.py`** — argparse dispatch. Imports are deliberately lazy so `--version`/`--check`/`--refresh-omo`/
   `--refresh-models` never import Textual. Two refresh flags, one per data source: `--refresh-omo`
@@ -128,6 +137,12 @@ before changing any public signature or shared shape.
 - **Real-cache safety (hard rule):** never let tests touch the real `~/.cache/omodel/`. The autouse
   `tests/conftest.py` fixture redirects `$OMODEL_CACHE_DIR` to a per-test tmp dir, and `test_app_pilot.py`
   stubs `subprocess.run` so the TUI never spawns real opencode (~320 MB/call — un-stubbed it OOM'd a box).
+- **Never render data as a plain `str` (hard rule, `app.py`):** Textual parses content markup in
+  any plain string it renders, so a `[` in a model id / provider / variant / target name / preset
+  name / `str(exc)` is a tag, and an unmatched close raises `MarkupError` *inside the render pass* —
+  uncatchable, app dies. Data-carrying `Static`/`Label` take `markup=False`; `Option` prompts go
+  through `_lit()`; only `#detail` renders markup, so what it splices in goes through `_esc()`;
+  `OModelApp.notify` defaults `markup=False`. See DESIGN §Textual contract.
 - **The model pickers (add-model + `v`) read variants from cached `opencode --verbose`**, via
   `Catalog.variants_for(provider, model)` — opencode's per-(provider, model) `variants` keys are the
   source of truth (decision #14). It prefers the first non-empty set across the picked provider then

@@ -12,6 +12,12 @@ STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do
   * OptionList#targets     — AGENTS then CATEGORIES. Option IDs: 'agent:<name>',
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
                             'cat:<name>'.
+  * OptionList#presets     — the 3 named presets (decision #17 / presets.py), a FIXED 5-line
+                            card under #targets inside Vertical#left. Option IDs 'preset:0' …
+                            'preset:2'; rows '● 1 <name>' / '  3 (empty)' ('●' = the ACTIVE
+                            preset — the one your edits go into and `s` publishes).
+                            Heading is the border TITLE; the highlighted row's summary goes to
+                            the border SUBTITLE (never #detail — see _preset_highlighted).
   * Static#detail          — current model/variant + catalog.detail() line. The detail()
                             line is a ~3s opencode subprocess, so it is fetched in a
                             background worker (cached per (provider, model)) and appears when ready —
@@ -38,16 +44,22 @@ default textual-dark theme resolves that to ~`#191919`, invisible against the `#
 `#providers`/`#hints`/`#detail` don't focus.
 
 KEYS: ↑↓ (or vim j/k) move within the focused pane · ←/→ (or vim h/l) focus
-targets/candidates (gated to the base screen via check_action) · enter set (dispatch by row:
+targets/candidates (gated to the base screen via check_action) · tab / shift+tab cycle all three
+panes including #presets (Textual's own Screen traversal — NOT an app binding; the only way into
+the presets card, which ←/→ deliberately skip) · enter set (dispatch by row:
 cand:add → add-model modal, else set
 model + default variant) · v variant · x clear (on an ultrawork/compaction sub-target row: delete
 the whole row) · a pane-contextual (candidates + targets category
-rows → add/edit-model modal; targets agent rows → add sub-target chooser) · u undo / ctrl+r redo
+rows → add/edit-model modal; targets agent rows → add sub-target chooser) ·
+on a #presets row: enter SWITCHES to that preset — a staged, undoable replace that banks
+your edits into the one you leave; a forks the current models into it + names it + switches
+there; x deletes it behind a confirm, refused on the active one; v bells · u undo / ctrl+r redo
 (in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
 CatalogUnavailable) · ? help (open HelpModal — the full key reference; base-screen-only) ·
-q quit (confirm if dirty). The hint bar (Static#hints) is minimal and static — only
+q quit (when dirty: a three-way save & quit / discard / cancel — `s` writes the config AND
+the presets file, so a discard drops both). The hint bar (Static#hints) is minimal and static — only
 `s save · ? help · q quit`; every other key is documented in the `?` overlay (HelpModal) and,
 where relevant, in per-modal hint lines. (r is also advertised in the Static#providers header.)
 
@@ -81,20 +93,25 @@ has no choice, so `a` adds it directly — no modal. Every supported kind presen
 from __future__ import annotations
 
 import asyncio
+import copy
 import threading
 from typing import ClassVar
 
+from rich.cells import cell_len
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.fuzzy import Matcher
+from textual.markup import escape as _escape_markup
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from . import __version__, config_io
 from . import catalog as catalog_mod
+from . import presets as presets_mod
 from . import suggestions as suggestions_mod
 from .catalog import Catalog, CatalogUnavailable
 from .history import History
@@ -116,6 +133,16 @@ _GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 # `compaction` is valid on every agent. Hard-coded agent key, like `_GPT_ONLY_AGENTS`, not a data field.
 _ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
+# Cells a preset name may occupy in a row: the 32-wide pane, less its border (2), less
+# OptionList's own DEFAULT_CSS `padding: 0 1` (2) — MEASURED: size.width is 28, and there is no
+# reserved scrollbar gutter — less the `● 1 ` prefix (4). Names are capped at presets.MAX_NAME
+# CHARACTERS on save; this is the render-time guard for wide (CJK) characters, which cost 2
+# cells each — 24 of them would otherwise wrap each row onto two lines and push the third preset
+# out of the fixed-height card. Used only as the fallback before layout; _populate_presets
+# prefers the widget's measured width, so a padding/CSS change can't silently reintroduce the
+# wrap. See _fit_cells.
+_PRESET_NAME_CELLS = 24
+
 
 def _is_gpt_model(model_id: str) -> bool:
     """omo's `isGptModel` (model-core): the model name (after the LAST '/'), lowercased,
@@ -134,6 +161,36 @@ def _warn_str(warn: list) -> str:
     if not warn:
         return ""
     return "  ⚠ " + " ".join(warn)
+
+
+# ----- rendering user data safely ---------------------------------------------------------
+#
+# Textual parses *content markup* in every plain `str` it renders — `Static.update`, a widget's
+# initial content, an `Option` prompt, `App.notify`. Almost nothing we render is ours: model and
+# provider ids come from `opencode` and from the config, agent/category names are config KEYS,
+# preset names and the add-model box are typed by hand. A `[` in any of them is an opening tag,
+# and an unmatched close (`acme/[/b]`) raises `MarkupError` *from inside the render pass* — which
+# is not catchable at the call site and takes the whole app down. The add-model box made that one
+# keystroke away; a config or preset holding such an id made it fatal on every launch.
+#
+# Two mechanisms, and the widget-level one is preferred:
+#   * `markup=False` at construction — a property of the WIDGET, so it covers every present and
+#     future `.update()` on it. Used for every Static/Label carrying data (`#detail` excepted).
+#   * `_lit()` / `_esc()` below — for the two places a widget flag can't reach: `Option` prompts
+#     (`OptionList` has no such flag) and `#detail`, the one widget that renders markup on purpose.
+
+
+def _lit(text: str) -> Content:
+    """`text` as a literal `Content` — a Visual, so Textual renders it verbatim instead of
+    parsing it. Every `Option` prompt built from data goes through this."""
+    return Content(str(text))
+
+
+def _esc(text: str) -> str:
+    """`text` escaped for a widget that DOES render markup — i.e. `#detail` alone (`[b]` header,
+    `[dim]` pending-fetch placeholder). Prefer `markup=False` on the widget where you can: a flag
+    can't be forgotten at the next `.update()`, an escape call can."""
+    return _escape_markup(str(text))
 
 
 def _is_no_variant(variant) -> bool:
@@ -319,11 +376,13 @@ class AddModelModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(self._MODEL_TITLE, id="add-title")
+            # markup=False: every update to this Label embeds a provider/model id (see the
+            # "rendering user data safely" note at the top of the module).
+            yield Label(self._MODEL_TITLE, id="add-title", markup=False)
             yield Input(placeholder="provider/model", id="add-input")
             yield OptionList(id="add-candidates")
             yield VimOptionList(id="add-variants")
-            yield Static("", id="add-preview")
+            yield Static("", id="add-preview", markup=False)  # shows what you typed
             yield Static(self._MODEL_HINTS, id="add-hints", classes="modal-hints")
 
     def on_mount(self) -> None:
@@ -486,7 +545,7 @@ class AddModelModal(ModalScreen):
         cands.clear_options()
         for i, row in enumerate(rows):
             label = f"{row['provider']}/{row['model']}" + _warn_str(row["warn"])
-            cands.add_option(Option(label, id=f"add-cand:{i}"))
+            cands.add_option(Option(_lit(label), id=f"add-cand:{i}"))
 
         if not rows:
             cands.display = False
@@ -582,7 +641,7 @@ class AddModelModal(ModalScreen):
         variants_list = self.query_one("#add-variants", VimOptionList)
         variants_list.clear_options()
         for v in variants:
-            variants_list.add_option(Option(v, id=f"var:{v}"))
+            variants_list.add_option(Option(_lit(v), id=f"var:{v}"))
         variants_list.add_option(Option("(none)", id="var:__none__"))
         variants_list.display = True
         # Hide the model-phase widgets now that the variant list can take focus.
@@ -670,7 +729,7 @@ class VariantModal(ModalScreen):
     def on_mount(self) -> None:
         ol = self.query_one("#variant-list", OptionList)
         for v in self._variants:
-            ol.add_option(Option(v, id=f"var:{v}"))
+            ol.add_option(Option(_lit(v), id=f"var:{v}"))
         ol.add_option(Option("(none)", id="var:__none__"))
         ol.focus()
 
@@ -686,6 +745,77 @@ class VariantModal(ModalScreen):
         self.dismiss(None)
 
 
+class PresetNameModal(ModalScreen):
+    """`a` on a preset row — name the preset being saved.
+
+    THIS MODAL IS THE OVERWRITE CONFIRM: on an occupied preset it opens prefilled and titled
+    `Overwrite preset 2 "max-power"?`.  That wording is load-bearing, not decoration — `a` means
+    "add model" in every other pane, so someone who tabs into the presets card and presses `a`
+    from habit (then `enter` reflexively) has to be told what they are about to replace, and a
+    preset write is outside the undo history.
+
+    Dismisses with the RAW typed text (the caller sanitizes via presets.sanitize_name) or None
+    on cancel."""
+
+    BINDINGS: ClassVar[list] = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    PresetNameModal {
+        align: center middle;
+    }
+    PresetNameModal > Vertical {
+        width: 54;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    PresetNameModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, index: int, existing) -> None:
+        super().__init__()
+        self._index = index
+        self._existing = existing
+
+    def compose(self) -> ComposeResult:
+        overwrite = self._existing is not None
+        with Vertical():
+            yield Label(
+                f'Overwrite preset {self._index + 1} "{self._existing.name}"?'
+                if overwrite
+                else f"Save preset {self._index + 1}",
+                id="preset-name-title",
+                markup=False,  # quotes a preset name
+            )
+            yield Input(
+                value=self._existing.name if overwrite else "",
+                placeholder=f"preset {self._index + 1}",
+                max_length=presets_mod.MAX_NAME,
+                id="preset-name-input",
+            )
+            yield Static(
+                "enter overwrite · esc cancel" if overwrite else "enter save · esc cancel",
+                id="preset-name-hints",
+                classes="modal-hints",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#preset-name-input", Input).focus()
+
+    @on(Input.Submitted, "#preset-name-input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ConfirmModal(ModalScreen):
     """Generic confirm modal — shows `body` (e.g. the save diff, with the first-save
     palette-loss warning) and Yes/No.  Dismisses True on accept, False otherwise.
@@ -696,7 +826,7 @@ class ConfirmModal(ModalScreen):
     confirm the focused button as before."""
 
     BINDINGS: ClassVar[list] = [
-        Binding("escape", "decline", "No", show=False),
+        Binding("escape", "cancel", "No", show=False),
         Binding("y", "accept", "Yes", show=False),
         Binding("n", "decline", "No", show=False),
         Binding("up", "scroll(-1)", "Scroll up", show=False),
@@ -742,10 +872,28 @@ class ConfirmModal(ModalScreen):
     }
     """
 
-    def __init__(self, title: str, body: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        yes_label: str = "Yes",
+        no_label: str = "No",
+        hints: str | None = None,
+        escape_cancels: bool = False,
+    ) -> None:
         super().__init__()
         self._title = title
         self._body = body
+        # Custom labels let a non-yes/no decision reuse this modal (the launch sync prompt names
+        # its two directions); `y`/`n` still work, since they are the screen's own bindings.
+        self._yes_label = yes_label
+        self._no_label = no_label
+        # …and then the hint line has to be overridable, or it advertises "y yes · n no" for
+        # buttons that say something else. `escape_cancels` dismisses None instead of False, so
+        # a two-direction question gets a real third answer rather than silently picking "no" —
+        # which for the sync prompt would mean rewriting the user's config on an `esc`.
+        self._hints = hints
+        self._escape_cancels = escape_cancels
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -754,12 +902,13 @@ class ConfirmModal(ModalScreen):
                 # Non-focusable so default focus stays on the Yes button (Enter still confirms);
                 # scrolling is driven by this screen's own bindings, not the scroller's focus.
                 body.can_focus = False
-                yield Static(self._body, id="confirm-body-text")
+                # markup=False: the save diff quotes model ids straight from the config.
+                yield Static(self._body, id="confirm-body-text", markup=False)
             with Horizontal(id="confirm-buttons"):
-                yield Button("Yes", variant="primary", id="confirm-yes")
-                yield Button("No", id="confirm-no")
+                yield Button(self._yes_label, variant="primary", id="confirm-yes")
+                yield Button(self._no_label, id="confirm-no")
             yield Static(
-                "↑↓/jk scroll · y yes · n no · esc cancel",
+                self._hints or "↑↓/jk scroll · y yes · n no · esc cancel",
                 id="confirm-hints",
                 classes="modal-hints",
             )
@@ -777,6 +926,11 @@ class ConfirmModal(ModalScreen):
 
     def action_decline(self) -> None:
         self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        """`esc` — False by default (a plain yes/no has no third answer), or None when the
+        caller asked for one (`escape_cancels`)."""
+        self.dismiss(None if self._escape_cancels else False)
 
     def _body_scroll(self) -> VerticalScroll:
         return self.query_one("#confirm-body", VerticalScroll)
@@ -796,6 +950,85 @@ class ConfirmModal(ModalScreen):
         big diff lands immediately rather than smooth-scrolling for a second)."""
         body = self._body_scroll()
         (body.scroll_end if direction > 0 else body.scroll_home)(animate=False)
+
+
+class QuitModal(ModalScreen):
+    """`q` with unsaved changes — THREE ways out, not two.
+
+    Discarding now costs preset work as well as config work (decision #17: the presets file and
+    the config are written together, by `s` alone), so the exit that loses both must not be the
+    only exit. Dismisses `'save'` (run the normal diff+confirm, then quit), `'discard'`, or
+    None (cancel)."""
+
+    BINDINGS: ClassVar[list] = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("c", "cancel", "Cancel", show=False),
+        Binding("s", "save", "Save & quit", show=False),
+        Binding("d", "discard", "Discard", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    QuitModal {
+        align: center middle;
+    }
+    QuitModal > Vertical {
+        width: 66;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    QuitModal #quit-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    QuitModal Button {
+        margin: 0 1;
+    }
+    QuitModal .modal-hints {
+        margin-top: 1;
+        color: $text-muted;
+        text-align: center;
+    }
+    """
+
+    def __init__(self, body: str) -> None:
+        super().__init__()
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Quit?")
+            yield Static(self._body, id="quit-body", markup=False)
+            with Horizontal(id="quit-buttons"):
+                yield Button("Save & quit", variant="primary", id="quit-save")
+                yield Button("Discard", id="quit-discard")
+                yield Button("Cancel", id="quit-cancel")
+            yield Static(
+                "s save & quit · d discard · esc cancel", id="quit-hints", classes="modal-hints"
+            )
+
+    @on(Button.Pressed, "#quit-save")
+    def _save(self) -> None:
+        self.dismiss("save")
+
+    @on(Button.Pressed, "#quit-discard")
+    def _discard(self) -> None:
+        self.dismiss("discard")
+
+    @on(Button.Pressed, "#quit-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self) -> None:
+        self.dismiss("save")
+
+    def action_discard(self) -> None:
+        self.dismiss("discard")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class AddSubModal(ModalScreen):
@@ -855,7 +1088,7 @@ class AddSubModal(ModalScreen):
             added = kind in self._present
             tag = "   ✓ added" if added else ""
             label = f"{kind[0]}  {kind:<10} — {self._BLURB[kind]}{tag}"
-            ol.add_option(Option(label, id=f"sub:{kind}", disabled=added))
+            ol.add_option(Option(_lit(label), id=f"sub:{kind}", disabled=added))
         # Hint names only the shortcuts that exist for this agent ("u/c" on Sisyphus, "c" else).
         keys = "/".join(k[0] for k in self._kinds)
         self.query_one("#sub-hints", Static).update(
@@ -932,7 +1165,9 @@ class HelpModal(ModalScreen):
         [
             "Navigate",
             "  ↑↓  jk         move within a list",
-            "  ←→  hl         switch panes",
+            "  ←→  hl         targets ⇄ candidates",
+            "  tab  ⇧tab      cycle all three panes",
+            "                 (targets → presets → candidates)",
             "",
             "Edit",
             "  enter          set the highlighted model",
@@ -940,6 +1175,12 @@ class HelpModal(ModalScreen):
             "  a              edit / add a model",
             "                 (on an agent row: adds a sub-target)",
             "  x              clear  (↳ sub-target row: delete it)",
+            "",
+            "Presets  (3 named sets of models; ● is the one you're editing)",
+            "  tab            reach the card  (see Navigate)",
+            "  enter          switch to it  (your edits are kept in the one you leave)",
+            "  a              fork the current models into it + name it",
+            "  x              delete it  (not the one you're using)",
             "",
             "Undo",
             "  u              undo the last edit",
@@ -1008,9 +1249,16 @@ class OModelApp(App):
     #main {
         height: 1fr;
     }
+    #left {
+        width: 32;                       /* the width moved here from #targets: the left column now stacks the targets list over the presets card */
+    }
     #targets {
-        width: 32;
+        height: 1fr;
         border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
+    }
+    #presets {
+        height: 5;                       /* FIXED: 3 preset rows + border. Never grows — the card is a bounded 3, and #targets takes the rest (DESIGN decision #17). */
+        border: solid $surface-lighten-3;
     }
     #right {
         width: 1fr;
@@ -1025,7 +1273,7 @@ class OModelApp(App):
         height: 1fr;
         border: solid $surface-lighten-3;  /* muted blurred border — theme token (not a literal); NOT $border-blurred, which textual-dark resolves to ~#191919, invisible on the #1E1E1E surface. See class docstring. */
     }
-    #targets:focus, #candidates:focus {
+    #targets:focus, #presets:focus, #candidates:focus {
         border: solid $primary;
     }
     #hints-bar {
@@ -1083,8 +1331,38 @@ class OModelApp(App):
         # computed against it (`_is_dirty`), NOT a bool flag — so undoing back to the saved
         # state reads as clean, and a structural-but-unserialized change (an empty
         # ultrawork/compaction sub-object) is undoable yet never marks the file dirty.
-        self._history = History(cfg)
         self._saved_text = config_io.serialize(cfg)
+        # The presets store for THIS config (presets.py; decision #17): 3 named assignment sets,
+        # exactly one ACTIVE, under the invariant that the config on disk always equals the
+        # active preset — never a fourth, orphan state. Read best-effort; a missing or mangled
+        # file is SEEDED in memory from the config you already have, so there is always at least
+        # one preset and the invariant holds from the first frame. NOTHING here is written until
+        # `s` (one write rule) — the seed materializes with your first save.
+        self._store = presets_mod.load(config_path)
+        if self._store.is_empty():
+            self._store = presets_mod.seeded(cfg)
+        # Launch reconciliation. If the config matches a DIFFERENT preset, just activate it —
+        # no conflict, nothing to ask, and re-deriving it each launch is idempotent (which is
+        # why the dirtiness baseline is taken AFTER this, so a re-point alone reads clean).
+        # If it matches NONE (hand-edited config, or another tool wrote it), on_mount asks which
+        # way to sync — the one case where the invariant was broken from outside.
+        # NB: prefer the RECORDED active when it also matches. `matching_index` returns the
+        # FIRST match, and a fork creates a byte-identical duplicate by construction — so
+        # scanning first would silently move you back to preset 1 on every relaunch after the
+        # most common flow (fork → save → quit), with nothing dirty to correct it.
+        current = self._store.current()
+        if current is not None and presets_mod.fingerprint(
+            current.agents, current.categories
+        ) == presets_mod.fingerprint(cfg.get("agents"), cfg.get("categories")):
+            match = self._store.active
+        else:
+            match = presets_mod.matching_index(self._store, cfg)
+        if match is not None:
+            self._store.active = match
+        self._sync_conflict = match is None and self._store.current() is not None
+        # Dirtiness baseline for the presets file — what `s` would have to change. Paired with
+        # `_saved_text` for the config: `s` writes both, quitting discards both.
+        self._saved_store_fp = presets_mod.store_fingerprint(self._store)
         # Cache of the candidate-row dicts currently rendered, keyed by target id; rebuilt from
         # the resolver (+ merged _custom_rows) on a cache miss. Dropped by a refresh AND a
         # state restore (undo/redo), since the `●` current-pick depends on cfg.
@@ -1095,6 +1373,9 @@ class OModelApp(App):
         # _restore_state, so it moves in lockstep with undo/redo: undoing an add-model drops its
         # row, redoing brings it back. A refresh clears it (stored availability ⚠ would be stale).
         self._custom_rows: dict = {}
+        # Built last: entry 0's `aux` needs `_custom_rows` and the reconciled `_store` (see
+        # _aux — the active preset index rides with every undo step).
+        self._history = History(cfg, aux=self._aux())
         # The target id currently shown in the right pane.
         self._current_target: str | None = None
         # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
@@ -1128,9 +1409,14 @@ class OModelApp(App):
     # ----- composition -----------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="providers")
+        # markup=False: provider names come from `opencode` (see the module-top note).
+        yield Static("", id="providers", markup=False)
         with Horizontal(id="main"):
-            yield VimOptionList(id="targets")
+            # Left column: the targets list (1fr) over the fixed 5-line presets card, so the
+            # three presets are always visible without scrolling past ~21 target rows.
+            with Vertical(id="left"):
+                yield VimOptionList(id="targets")
+                yield VimOptionList(id="presets")
             with Vertical(id="right"):
                 yield Static("", id="detail")
                 yield VimOptionList(id="candidates")
@@ -1141,6 +1427,12 @@ class OModelApp(App):
     def on_mount(self) -> None:
         self._render_providers()
         self._populate_targets()
+        # The card's heading lives in its border (not an in-list disabled row like #targets'
+        # AGENTS/CATEGORIES headers), so all 3 rows fit the fixed 5 lines.
+        self.query_one("#presets", OptionList).border_title = "PRESETS"
+        self._populate_presets()
+        if self._sync_conflict:
+            self._ask_sync()
         # The hint bar is static (see _HINT_BAR) — set it once. Everything it used to advertise
         # pane-by-pane now lives in the `?` help overlay (HelpModal).
         self.query_one("#hints", Static).update(_HINT_BAR)
@@ -1183,12 +1475,12 @@ class OModelApp(App):
         targets.clear_options()
         targets.add_option(Option("AGENTS", id="hdr:agents", disabled=True))
         for name in self.suggestions.agents:
-            targets.add_option(Option(f"  {name}", id=f"agent:{name}"))
+            targets.add_option(Option(_lit(f"  {name}"), id=f"agent:{name}"))
             for kind in self._agent_subtargets(name):
-                targets.add_option(Option(f"    ↳ {kind}", id=f"agent:{name}.{kind}"))
+                targets.add_option(Option(_lit(f"    ↳ {kind}"), id=f"agent:{name}.{kind}"))
         targets.add_option(Option("CATEGORIES", id="hdr:categories", disabled=True))
         for name in self.suggestions.categories:
-            targets.add_option(Option(f"  {name}", id=f"cat:{name}"))
+            targets.add_option(Option(_lit(f"  {name}"), id=f"cat:{name}"))
 
         # Restore highlight to the prior id if it still exists, else first selectable row.
         restored = False
@@ -1213,6 +1505,258 @@ class OModelApp(App):
             if option_list.get_option_at_index(i).id == option_id:
                 return i
         raise KeyError(option_id)
+
+    # ----- left pane (bottom): presets --------------------------------------------------
+
+    def _aux(self) -> dict:
+        """The out-of-cfg companion snapshot that must ride with every undo step: the typed
+        off-chain rows, AND which preset is active. The second one is load-bearing — undoing a
+        preset switch has to put the `●` back too, or the restored models would be folded into
+        the preset you switched TO (see _projected_store)."""
+        return {"custom_rows": self._custom_rows, "active": self._store.active}
+
+    def _projected_store(self) -> presets_mod.Store:
+        """The store as it would be WRITTEN: a copy whose ACTIVE entry carries the live cfg.
+
+        The active preset's content is never stored twice — `self.cfg` IS it. Everything that
+        needs the whole store (dirtiness, saving, switching away) goes through here, so the two
+        can't drift, and "your edits go into the preset you're on" is structural rather than
+        something each edit path has to remember to do."""
+        store = copy.deepcopy(self._store)
+        current = store.current()
+        if current is not None:
+            fresh = presets_mod.capture(current.name, self.cfg)
+            same = presets_mod.fingerprint(
+                current.agents, current.categories
+            ) == presets_mod.fingerprint(fresh.agents, fresh.categories)
+            if same:
+                fresh.saved_at = current.saved_at  # unchanged content keeps its stamp
+            store.presets[store.active] = fresh
+        return store
+
+    def _store_is_dirty(self) -> bool:
+        return presets_mod.store_fingerprint(self._projected_store()) != self._saved_store_fp
+
+    @staticmethod
+    def _fit_cells(text: str, limit: int) -> str:
+        """Truncate to `limit` terminal CELLS (not code points — 24 CJK chars are 48 cells).
+        A row that overflows the 32-wide pane wraps onto a second line, which would push the
+        third preset out of the fixed 5-line card."""
+        if cell_len(text) <= limit:
+            return text
+        out = ""
+        for ch in text:
+            if cell_len(out + ch) > limit - 1:
+                break
+            out += ch
+        return out + "…"
+
+    def _populate_presets(self, select: int | None = None) -> None:
+        """Render the three preset rows (`preset:0` … `preset:2`).  `● ` marks the **active**
+        preset — the one your edits are going into and the one `s` publishes to the config; an
+        unset one reads `(empty)`.  Called on mount and after every cfg mutation (via _record /
+        _rerender_all), since a switch moves the marker."""
+        try:
+            lst = self.query_one("#presets", OptionList)
+        except Exception:
+            return  # not mounted yet (a cfg edit during construction) — on_mount renders it
+        prior = lst.highlighted if select is None else select
+        lst.clear_options()
+        # Measured content width (already excludes border + scrollbar gutter) less the
+        # `● 1 ` prefix; the constant covers the pre-layout first render.
+        room = max(8, lst.size.width - 4) if lst.size.width else _PRESET_NAME_CELLS
+        for i, preset in enumerate(self._store.presets):
+            if preset is None:
+                lst.add_option(Option(f"  {i + 1} (empty)", id=f"preset:{i}"))
+                continue
+            active = i == self._store.active
+            name = self._fit_cells(preset.name, room)
+            lst.add_option(
+                Option(_lit(f"{'● ' if active else '  '}{i + 1} {name}"), id=f"preset:{i}")
+            )
+        if prior is None and lst.option_count:
+            # Seed the cursor when the rows are built, not on focus: `tab` is the only way in and
+            # Textual's OptionList does not auto-highlight on focus — an unseeded card swallows
+            # `enter`/`a`/`x` entirely.
+            prior = 0
+        if prior is not None and 0 <= prior < lst.option_count:
+            lst.highlighted = prior
+
+    @staticmethod
+    def _preset_index(option_id):
+        """`preset:<i>` → i, or None for anything else / out of range."""
+        if not option_id or not option_id.startswith("preset:"):
+            return None
+        try:
+            idx = int(option_id[len("preset:"):])
+        except ValueError:
+            return None
+        return idx if 0 <= idx < presets_mod.PRESET_COUNT else None
+
+    def _highlighted_preset_index(self):
+        lst = self.query_one("#presets", OptionList)
+        hi = lst.highlighted
+        if hi is None:
+            return None
+        try:
+            return self._preset_index(lst.get_option_at_index(hi).id)
+        except Exception:
+            return None
+
+    def _presets_focused(self) -> bool:
+        """Whether `#presets` owns focus — `a`/`x`/`v` dispatch on this (they were focus-blind
+        before this pane existed)."""
+        try:
+            return self.focused is self.query_one("#presets", OptionList)
+        except Exception:
+            return False
+
+    def _ask_sync(self) -> None:
+        """Launch reconciliation, the one case the invariant can't cover on its own: the config
+        on disk matches NO preset, because something outside oModel wrote it.
+
+        Both answers end at `s` — neither writes anything here, so the app never changes a file
+        you didn't ask it to. Adopting is already true in memory (the active preset's content IS
+        cfg), so it just needs saving; restoring replaces cfg with the preset's models, which
+        then shows up as an ordinary staged edit with a diff you can read before it lands."""
+        preset = self._store.current()
+        if preset is None:
+            return
+
+        def _choice(adopt) -> None:
+            if adopt is None:
+                # esc — decide later. Adopting is already true in memory (the active preset's
+                # content IS cfg), so this leaves everything exactly as it is.
+                return
+            if adopt:
+                self.notify(
+                    f"'{preset.name}' will take your config's models — press s to save.",
+                )
+                return
+            agents, categories = presets_mod.assignments(preset)
+            self.cfg["agents"] = agents
+            self.cfg["categories"] = categories
+            if self._record(f"restore preset '{preset.name}' over the config"):
+                self._restore_state(self._history.current_state())
+            else:
+                self._rerender_all()
+            self.notify(f"Config will be rewritten from '{preset.name}' — press s to save.")
+
+        self.push_screen(
+            ConfirmModal(
+                "Your config changed outside oModel",
+                f"It no longer matches any preset. The one you were using is "
+                f"'{preset.name}'.\n\n"
+                "  • Adopt the config — that preset takes the models now in the file.\n"
+                "  • Restore the preset — the file goes back to the preset's models.\n\n"
+                "Nothing is written either way until you press s.",
+                yes_label="Adopt the config",
+                no_label="Restore the preset",
+                hints="y adopt · n restore · esc decide later",
+                escape_cancels=True,
+            ),
+            _choice,
+        )
+
+    def _switch_preset(self, index: int) -> None:
+        """`enter` — make preset `index` the one you're editing.
+
+        The edits you made while on the OLD preset are folded into it first (via
+        _projected_store), so switching back and forth never loses work. Then cfg is REPLACED by
+        this preset's assignments — a target it doesn't define is cleared, because a preset is a
+        complete state, not an overlay. Staged only: the config on disk still reflects the
+        preset you came from until you press `s`, which is what keeps "the config always equals
+        one of the presets" true at rest."""
+        preset = self._store.presets[index]
+        if preset is None:
+            self.bell()
+            self.notify(f"Preset {index + 1} is empty — press a to put your models in it.")
+            return
+        if index == self._store.active:
+            self.notify(f"Already editing '{preset.name}'.")
+            return
+        self._store = self._projected_store()  # bank the in-flight edits into the old preset
+        self._store.active = index
+        agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
+        self.cfg["agents"] = agents
+        self.cfg["categories"] = categories
+        # `_record` no-ops when the two presets hold identical models; the active index has
+        # still changed, so re-render either way — and only take the aux-restoring path when a
+        # snapshot was actually pushed (a no-op push would leave the old active in aux).
+        if self._record(f"switch to preset '{preset.name}'"):
+            self._restore_state(self._history.current_state())
+        else:
+            # Identical models, so nothing was pushed — but the switch IS an action, and an
+            # untruncated redo tail would let `ctrl+r` resurrect an undone edit AND jump the `●`
+            # to a preset the user just left.
+            self._history.drop_redo()
+            self._history.set_aux_key("active", self._store.active)
+            self._rerender_all()
+        self.notify(f"Now editing '{preset.name}' — s writes it to your config.")
+
+    def _fork_preset(self, index: int) -> None:
+        """`a` — copy the models you're looking at into preset `index`, name it, and switch to
+        it. This is how presets 2 and 3 come into being: fork the one you're on, then diverge.
+
+        The name modal doubles as the overwrite confirm. Staged like everything else — `s`
+        persists it, quitting without saving drops it."""
+        def _named(text) -> None:
+            if text is None:
+                return
+            name = presets_mod.sanitize_name(text, index)
+            self._store = self._projected_store()  # bank in-flight edits into the old preset
+            self._store.presets[index] = presets_mod.capture(name, self.cfg)
+            self._store.active = index
+            # A fork changes `active` without changing cfg, so it pushes no history entry —
+            # stamp the index across the timeline or the next `u` would quietly move the `●`
+            # back (and fold the restored models into the preset you'd left).
+            self._history.set_aux_key("active", index)
+            self._populate_presets(select=index)
+            self.notify(f"Now editing '{name}' (preset {index + 1}) — s to save.")
+
+        self.push_screen(PresetNameModal(index, self._store.presets[index]), _named)
+
+    def _delete_preset(self, index: int) -> None:
+        """`x` — drop preset `index`, behind a confirm.
+
+        REFUSED on the active preset: the config on disk mirrors it, so deleting it would strand
+        the config as a state matching no preset — exactly the orphan the whole design exists to
+        prevent. Switch somewhere else first. (That also guarantees you can never reach zero
+        presets.)"""
+        preset = self._store.presets[index]
+        if preset is None:
+            self.bell()
+            return
+        if index == self._store.active:
+            self.bell()
+            self.notify(
+                f"'{preset.name}' is the preset you're editing — switch to another one first.",
+                severity="warning",
+            )
+            return
+
+        def _confirm(ok) -> None:
+            if not ok:
+                return
+            self._store.presets[index] = None
+            presets_mod.normalize_active(self._store)
+            # Deliberately NOT stamped like the fork is: history entries recorded while that
+            # preset was active keep pointing at it, so `_restore_state` can SEE that the
+            # destination is gone and say so, rather than moving models into a preset the user
+            # never chose without a word.
+            self._populate_presets(select=index)
+            self.notify(f"Deleted preset {index + 1} — s to save.")
+
+        count = presets_mod.model_count(preset)
+        self.push_screen(
+            ConfirmModal(
+                f"Delete preset {index + 1}?",
+                f"'{preset.name}' — {count} model{'' if count == 1 else 's'}, saved "
+                f"{preset.saved_at or 'unknown'}.\n\n"
+                "Takes effect on your next save; quitting without saving keeps it.",
+            ),
+            _confirm,
+        )
 
     # ----- target → cfg node helpers ---------------------------------------------------
 
@@ -1331,10 +1875,13 @@ class OModelApp(App):
         model, variant = self._current_assignment(target)
         # Header mirrors the `label: value` spacing below it — give `agent:`/`cat:` the same
         # space after the colon as `model: `/`variant: ` so the values line up.
-        lines = [f"[b]{target.replace(':', ': ', 1)}[/b]"]
+        # This is the ONE widget rendered with markup on (`[b]`, `[dim]`), so every value spliced
+        # in is `_esc`aped: the target is a config KEY and the model/variant are config VALUES —
+        # a `[` in any of them would be parsed as a tag (module-top note).
+        lines = [f"[b]{_esc(target.replace(':', ': ', 1))}[/b]"]
         if model:
-            lines.append(f"model: {model}")
-            lines.append("variant: " + (variant if variant else "—"))
+            lines.append(f"model: {_esc(model)}")
+            lines.append("variant: " + (_esc(variant) if variant else "—"))
             # Detail line from catalog (display only); the assignment splits on the first '/'
             # into provider + bare id, and the PROVIDER rides along so the pane describes the
             # (provider, model) actually assigned — an `opencode/x` assignment shows the
@@ -1347,7 +1894,7 @@ class OModelApp(App):
             bare = model.split("/", 1)[1] if "/" in model else model
             info = self._detail_info(target, prov, bare)
             if info:
-                lines.append(self._detail_line(info))
+                lines.append(_esc(self._detail_line(info)))
             elif self._detail_key(prov, bare) in self._detail_cache:
                 lines.append("")  # fetch done, no detail available — keep the slot blank
             else:
@@ -1455,7 +2002,7 @@ class OModelApp(App):
         for i, row in enumerate(rows):
             matched = bool(current) and f"{row['provider']}/{row['model']}" == current
             label = ("● " if matched else "  ") + _row_label(row)
-            cands.add_option(Option(label, id=f"cand:{i}"))
+            cands.add_option(Option(_lit(label), id=f"cand:{i}"))
         cands.add_option(Option("+ add model…", id="cand:add"))
         # clear_options() reset the cursor to None; put it back where this target last had it.
         self._restore_cand_highlight(target, rows)
@@ -1537,6 +2084,36 @@ class OModelApp(App):
             if ident is not None:
                 self._cand_choice[target] = ident
 
+    @on(OptionList.OptionHighlighted, "#presets")
+    def _preset_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Summarise the highlighted preset in THIS CARD's border subtitle — deliberately not in
+        `#detail`, which has two ASYNC writers (the detail worker's tail and _refresh_catalog)
+        that re-render whatever `_current_target` is at completion time and would silently
+        clobber it.  The subtitle has exactly one writer, and a preset row schedules no
+        catalog.detail fetch, so the one-concurrent-fetch rule (cache.py) is untouched."""
+        lst = self.query_one("#presets", OptionList)
+        idx = self._preset_index(event.option_id)
+        # Read through the projection so the ACTIVE row's count reflects your in-flight edits
+        # (its content is cfg, not what the store last held).
+        store = self._projected_store()
+        preset = store.presets[idx] if idx is not None else None
+        if preset is None:
+            lst.border_subtitle = ""
+            return
+        # '2026-07-26T09:14:03Z' → '07-26'; a hand-written/absent stamp falls through as-is.
+        # _esc: a border subtitle is parsed as markup too, and saved_at comes off a JSON file a
+        # user can hand-edit (module-top note).
+        stamp = preset.saved_at[5:10] if len(preset.saved_at) >= 10 else preset.saved_at
+        count = presets_mod.model_count(preset)
+        prefix = f"saved {_esc(stamp)} · " if stamp else ""
+        lst.border_subtitle = f"{prefix}{count} model{'' if count == 1 else 's'}"
+
+    @on(OptionList.OptionSelected, "#presets")
+    def _preset_selected(self, event: OptionList.OptionSelected) -> None:
+        idx = self._preset_index(event.option_id)
+        if idx is not None:
+            self._switch_preset(idx)
+
     @on(OptionList.OptionSelected, "#candidates")
     def _candidate_selected(self, event: OptionList.OptionSelected) -> None:
         oid = event.option_id
@@ -1579,19 +2156,31 @@ class OModelApp(App):
         return target
 
     def _is_dirty(self) -> bool:
-        """True iff the in-memory cfg would change the saved file — `serialize(cfg)` differs
-        from the text last written/loaded (`_saved_text`). Used by quit (`q`). NB: an empty
-        ultrawork/compaction sub-object serializes away, so adding one is undoable (it's in the
-        history) but does NOT count as dirty — there's nothing to save."""
-        return config_io.serialize(self.cfg) != self._saved_text
+        """True iff a save would change anything on disk — the config (`serialize(cfg)` vs the
+        text last written/loaded) OR the presets file (the projected store vs its launch/last-save
+        baseline). Both, because `s` writes both and quitting discards both. Used by quit (`q`).
+        NB: an empty ultrawork/compaction sub-object serializes away, so adding one is undoable
+        (it's in the history) but does NOT count as dirty — there's nothing to save."""
+        if config_io.serialize(self.cfg) != self._saved_text:
+            return True
+        return self._store_is_dirty()
 
-    def _record(self, label: str) -> None:
+    def _record(self, label: str) -> bool:
         """Snapshot the current cfg into the undo history under `label` (a no-op if nothing
         actually changed). Call after ANY cfg mutation — this single chokepoint is what makes
-        every operation undoable. The current `_custom_rows` (off-chain typed models) rides along
-        as the entry's `aux` so a restore moves typed rows in lockstep with cfg — undoing an
-        add-model drops its row, not just its assignment."""
-        self._history.push(self.cfg, label, aux=self._custom_rows)
+        every operation undoable. `_custom_rows` (off-chain typed models) and the active preset
+        index ride along as the entry's `aux` (see `_aux`), so a restore moves both in lockstep
+        with cfg — undoing an add-model drops its row, and undoing a preset switch moves the `●`
+        back with the models.
+
+        Returns whether a snapshot was actually pushed. `_switch_preset` needs that: a no-op
+        push leaves the previous entry's aux in place, and restoring from it would undo the very
+        switch that called this."""
+        pushed = self._history.push(self.cfg, label, aux=self._aux())
+        # Your edits go into the preset you're on, and its row shows their model count — so the
+        # pane follows every staged edit, through the one chokepoint they all pass through.
+        self._populate_presets()
+        return pushed
 
     def _stage_row(self, target: str, row: dict, label: str) -> None:
         """Write the chosen candidate row into the cfg node, re-render, and record an undo
@@ -1635,6 +2224,11 @@ class OModelApp(App):
         """`→` / `l` — focus the candidates (right) pane."""
         self.query_one("#candidates", OptionList).focus()
 
+    # NOTE: `#presets` has NO dedicated focus action/key. `tab` / `shift+tab` (Textual's own
+    # Screen traversal, DOM order targets → presets → candidates, wrapping) already reach every
+    # pane in both directions, so a `p` shortcut was pure duplication — one more key to learn and
+    # to keep out of the way of a future binding. `←`/`→` stay targets-vs-candidates only.
+
     def check_action(self, action: str, parameters) -> bool:
         """Gate the base-screen-only keys — pane-crossing (`←`/`→` + vim `h`/`l`), undo/redo, and
         the `?` help overlay — to the base screen: a ModalScreen manages its own focus and keys, so
@@ -1648,7 +2242,13 @@ class OModelApp(App):
             # App down, before the key reaches the modal — only check_action can gate it). The
             # palette stays available everywhere else; Ctrl-N is not an app binding.
             return False
-        if action in ("focus_targets", "focus_candidates", "undo", "redo", "help"):
+        if action in (
+            "focus_targets",
+            "focus_candidates",
+            "undo",
+            "redo",
+            "help",
+        ):
             # Pane-crossing focus, undo/redo, AND the `?` help overlay are base-screen-only: a
             # ModalScreen manages its own focus and keys (e.g. AddSubModal binds `u` to pick
             # ultrawork), so the app's `u`/`ctrl+r` must not reach down through a modal; and `?`
@@ -1657,13 +2257,34 @@ class OModelApp(App):
             return len(self.screen_stack) <= 1
         return True
 
+    def notify(self, message: str, **kwargs) -> None:
+        """Every toast, rendered LITERALLY (`markup=False` unless a caller insists otherwise).
+
+        A one-line choke point rather than escaping at ~20 call sites: the messages quote model
+        ids, preset names, undo labels and `str(exc)` (which carries file paths), so any of them
+        can contain `[` — and a toast that raises `MarkupError` takes the app down while merely
+        reporting something. See the "rendering user data safely" note at the top of the module."""
+        kwargs.setdefault("markup", False)
+        super().notify(message, **kwargs)
+
     def action_clear(self) -> None:
         """`x` — clear/delete the current target. On a base agent/category row it clears the
         assignment (drops model/variant, keeps the row). On an ↳ ultrawork/compaction SUB-target
         it deletes the whole row: a cleared sub-object serializes away anyway (config_io drops
         empty sub-objects), so a model-less placeholder isn't worth keeping — for a sub-target
         clear == delete, which is also how you undo a stray `a` add without reaching for `u`.
-        Undoable (`u`) either way — a fat-fingered `x` is one keystroke from being reverted."""
+        Undoable (`u`) either way — a fat-fingered `x` is one keystroke from being reverted.
+
+        On a `#presets` row it deletes that PRESET instead, behind a confirm — the one `x` that
+        is not undoable (the presets file lives outside the cfg history). This action was
+        focus-blind before the presets card existed."""
+        if self._presets_focused():
+            idx = self._highlighted_preset_index()
+            if idx is None:
+                self.bell()
+            else:
+                self._delete_preset(idx)
+            return
         target = self._current_target
         if target is None:
             return
@@ -1700,7 +2321,13 @@ class OModelApp(App):
         """`v` — pick from the variants opencode reports for the highlighted candidate's
         (provider, model) (catalog.variants_for — the cached `--verbose` map). A model opencode
         lists with no variants (kimi) — or whose verbose isn't cached anywhere — has nothing to
-        pick, so `v` just bells (no fallback: variant validity is opencode's, not the heuristic's)."""
+        pick, so `v` just bells (no fallback: variant validity is opencode's, not the heuristic's).
+
+        Bells on a `#presets` row too: a variant is meaningless there, and this action reads the
+        (now hidden) candidate pane's highlight, so unguarded it would silently retarget it."""
+        if self._presets_focused():
+            self.bell()
+            return
         target = self._current_target
         if target is None:
             return
@@ -1759,7 +2386,17 @@ class OModelApp(App):
         """`a` — pane-contextual, one key (see HelpModal / DESIGN §Textual contract). Only a
         #targets *agent* row does "sub" (add an ultrawork/compaction sub-target); everywhere else
         — #candidates, or a #targets *category* row (categories have no sub-targets) — `a` opens
-        the add/edit-model modal ("edit")."""
+        the add/edit-model modal ("edit").
+
+        On a `#presets` row it forks the current assignments into that preset and switches to it
+        (the name modal doubles as the overwrite confirm)."""
+        if self._presets_focused():
+            idx = self._highlighted_preset_index()
+            if idx is None:
+                self.bell()
+            else:
+                self._fork_preset(idx)
+            return
         on_targets_agent = (
             self.focused is self.query_one("#targets", OptionList)
             and (self._current_target or "").startswith("agent:")
@@ -1886,17 +2523,40 @@ class OModelApp(App):
         (detail + the `●` current-pick marker). Mirrors the per-session cache handling a
         refresh does, minus the catalog rebuild — the candidate rows' `●` follows cfg, so the
         per-target row cache is dropped and rebuilt; `_cand_choice` (highlight memory) and
-        `_detail_cache` (keyed by model id) are unaffected and kept. `_custom_rows` IS restored
-        (from the entry's `aux`) so typed off-chain rows move in lockstep with undo/redo."""
+        `_detail_cache` (keyed by model id) are unaffected and kept. `_custom_rows` AND the
+        active preset are restored (from the entry's `aux`) so typed off-chain rows and the `●`
+        move in lockstep with undo/redo."""
         self.cfg = state
-        self._rows.clear()  # resolver rows rebuild around the restored _custom_rows below
-        # Move typed (off-chain) rows in lockstep with undo/redo: load the _custom_rows snapshot
-        # this cfg state was pushed with, so undoing an add-model drops its row and redoing brings
-        # it back — not just the bare cfg value. (Empty {} for entries pushed before any add.)
-        self._custom_rows = self._history.current_aux()
-        # Pick a target that still exists after the restore: a sub-target whose node is gone
-        # (an undone add-sub) falls back to its parent agent; top-level agent/category rows
-        # always exist (they come from suggestions, not cfg).
+        # Move the out-of-cfg companions in lockstep with undo/redo: the _custom_rows snapshot
+        # this state was pushed with (so undoing an add-model drops its row and redoing brings it
+        # back), and which preset was active (so undoing a switch moves the `●` back with the
+        # models — otherwise the restored models would be folded into the preset you switched TO).
+        aux = self._history.current_aux() or {}
+        self._custom_rows = aux.get("custom_rows") or {}
+        active = aux.get("active")
+        if isinstance(active, int) and 0 <= active < presets_mod.PRESET_COUNT:
+            if self._store.presets[active] is not None:
+                self._store.active = active
+            elif active != self._store.active:
+                # This state was recorded while a preset that has since been DELETED was active.
+                # The models still come back (undo must undo), but they land in whichever preset
+                # is active now — so say so, rather than editing it silently.
+                target = self._store.current()
+                self.notify(
+                    f"Preset {active + 1} was deleted — these models are now in "
+                    f"'{target.name if target else 'the active preset'}'.",
+                    severity="warning",
+                )
+        self._rerender_all()
+
+    def _rerender_all(self) -> None:
+        """Re-render everything that depends on cfg / the store: the row cache, the presets
+        card, the LEFT pane (sub-targets appear and vanish with cfg) and the RIGHT pane."""
+        self._rows.clear()  # resolver rows rebuild around the restored _custom_rows
+        self._populate_presets()
+        # Pick a target that still exists: a sub-target whose node is gone (an undone add-sub,
+        # or one the preset you switched to doesn't define) falls back to its parent agent;
+        # top-level agent/category rows always exist (they come from suggestions, not cfg).
         target = self._current_target
         if target and "." in target and self._node_for(target) is None:
             target = "agent:" + self._target_label(target).split(".", 1)[0]
@@ -1909,11 +2569,41 @@ class OModelApp(App):
         if target is not None:
             self._refresh_right(target)
 
+    def _write_store(self, store) -> bool:
+        """Persist the presets file and re-baseline its dirtiness. Best-effort in the sense that
+        a failure is REPORTED, never swallowed (presets.write raises by contract) — but it does
+        not roll the config back: see `_save` for why the config goes first."""
+        try:
+            self._store = presets_mod.write(self.config_path, store)
+        except Exception as exc:
+            self.notify(f"Presets could not be written: {exc}", severity="error")
+            return False
+        self._saved_store_fp = presets_mod.store_fingerprint(self._store)
+        self._populate_presets()
+        return True
+
     def action_save(self) -> None:
-        """`s` — diff + confirm modal (incl. first-save palette-loss warning) → config_io.save."""
+        """`s` — write the config AND the presets file, together (decision #17's one write
+        rule)."""
+        self._save()
+
+    def _save(self, then=None) -> None:
+        """The save flow. `then` is invoked after a successful save (quit-and-save uses it).
+
+        `s` publishes BOTH files, because the invariant is that the config on disk equals the
+        active preset: letting one land without the other is exactly the orphan state the design
+        exists to prevent. A presets-only change (fork, delete, rename, or adopting an
+        out-of-band config edit) has no config diff to confirm, so it writes straight out."""
         diff = config_io.diff_text(self.cfg, self.config_path)
+        store = self._projected_store()
+        store_dirty = presets_mod.store_fingerprint(store) != self._saved_store_fp
         if not diff.strip():
-            self.notify("Nothing to save.")
+            if not store_dirty:
+                self.notify("Nothing to save.")
+                return
+            # Presets-only: the config isn't being touched, so there's nothing to diff-confirm.
+            if self._write_store(store) and then is not None:
+                then()
             return
         body = diff
         # First save deletes the commented-out palette (decision #13) — warn explicitly.
@@ -1942,7 +2632,22 @@ class OModelApp(App):
             # undo history is intentionally preserved across a save, so you can still undo a
             # just-saved edit (and re-save to persist the reverted state).
             self._saved_text = config_io.serialize(self.cfg)
-            self.notify("Saved." if result.changed else "Nothing to save.")
+            # Config first — it is the artifact with the backup and the diff you just approved,
+            # so a failure there aborts before the presets file moves. If the presets write then
+            # fails, the config is ahead of the store: `_write_store` says so plainly, and a
+            # second `s` takes the presets-only path above and heals it.
+            wrote_store = self._write_store(store)
+            if not wrote_store:
+                # Don't contradict the error toast _write_store just raised: the config landed,
+                # the store didn't, and `_is_dirty()` stays True so a second `s` heals it.
+                self.notify(
+                    "Config saved — the presets file did not. Press s again.",
+                    severity="warning",
+                )
+            else:
+                self.notify("Saved." if result.changed else "Nothing to save.")
+            if wrote_store and then is not None:
+                then()
 
         self.push_screen(ConfirmModal("Save changes?", body), _confirm)
 
@@ -1989,7 +2694,9 @@ class OModelApp(App):
             # typed row.
             self._rows.clear()
             self._custom_rows.clear()
-            self._history.clear_aux()
+            # Keep the active-preset index: unlike the typed rows, it doesn't go stale with the
+            # catalog, and dropping it would let an undo move the models without moving the `●`.
+            self._history.clear_aux(keep=("active",))
             self._detail_cache.clear()
             self._detail_generation += 1
             self._render_providers()
@@ -2000,18 +2707,29 @@ class OModelApp(App):
             self._refresh_inflight = False
 
     def action_quit_confirm(self) -> None:
-        """`q` — quit; confirm if there are unsaved edits (`_is_dirty`: serialize(cfg) differs
-        from what's on disk — so undoing back to the saved state quits without a prompt)."""
+        """`q` — quit; if anything is unsaved (`_is_dirty`: the config OR the presets file),
+        offer three ways out rather than two. Discarding now drops preset work as well as config
+        work — they are written together — so "save & quit" has to be on the same screen as the
+        exit that loses both. Undoing back to the saved state still quits without a prompt."""
         if not self._is_dirty():
             self.exit()
             return
 
-        def _confirm(ok) -> None:
-            if ok:
+        def _choice(choice) -> None:
+            if choice == "discard":
                 self.exit()
+            elif choice == "save":
+                # Runs the normal diff+confirm; exits only once the save actually lands, so a
+                # declined confirm or a failed write leaves you in the app with your edits.
+                self._save(then=self.exit)
 
         self.push_screen(
-            ConfirmModal("Quit?", "You have unsaved changes. Quit without saving?"), _confirm
+            QuitModal(
+                "Unsaved changes to your models and presets.\n\n"
+                "Saving writes both your config and the presets file. Discarding leaves both "
+                "exactly as they are on disk."
+            ),
+            _choice,
         )
 
 

@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Three named **presets** in a card under the agent list — and they're what you edit. One is
+  always active (`●`): your model changes go into it, and `s` writes it to your config. `Enter`
+  switches presets (your edits stay in the one you leave), `a` forks the current models into
+  another row and names it, `x` deletes one; `tab` / `shift+tab` reach the card. First run seeds a `default`
+  preset from the config you already have, so **your config always matches one of the three** —
+  never a fourth state you can't get back to.
+- Presets live next to your config in `.omodel-presets.json` (a `--config` override keeps its own
+  set). Nothing is written until you press `s`, which writes the config and the presets file
+  together — so quitting without saving leaves both exactly as they were.
+
+### Changed
+- Quitting with unsaved work now offers **save & quit / discard / cancel** instead of a bare
+  yes/no, since discarding drops preset changes as well as config changes.
+- The `?` overlay now lists `Tab` / `Shift+Tab`, which cycle all three panes and are the way to
+  reach the presets card. They always worked; they were just never written down.
+
+### Fixed
+- A model id containing square brackets no longer crashes oModel. Typing one in the add-model box
+  took the app down on the keystroke, and one saved in your config (or a preset) took it down on
+  every launch, before anything was drawn. Ids are now shown exactly as they are, brackets and all.
+
 ## [0.2.0] — 2026-07-04
 
 ### Added

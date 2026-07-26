@@ -1,6 +1,6 @@
 # oModel — Verification Checklist (Lead's Merge Gate)
 
-Maps each of the 8 §Verification checks in DESIGN.md to the concrete command(s) to run.
+Maps each of the 9 §Verification checks in DESIGN.md to the concrete command(s) to run.
 All checks must pass before any release.
 
 ---
@@ -210,7 +210,7 @@ python -m omodel --config /tmp/omodel-live-test.jsonc
 #   1. Verify oModel: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
 #   2. Verify the bottom hint bar shows "s save · ? help · q quit" (left) with the version "v<version>"
 #      right-aligned at the far right; press '?' — the key
-#      overlay opens (Navigate/Edit/Undo/Models/dialogs); '?'/esc/q closes it
+#      overlay opens (Navigate/Edit/Presets/Undo/Models/dialogs); '?'/esc/q closes it
 #   3. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
 #   4. Pick a model from the candidate list
 #   5. Press 'r' — header shows "Refreshing…", then updates; ~/.cache/omodel/ is rebuilt
@@ -235,6 +235,54 @@ automated checks pass and the user explicitly chooses to run against it.
 
 ---
 
+## Check 9 — Presets (the working state)
+
+**Goal:** the invariant holds — the config on disk always equals the ACTIVE preset, never a
+fourth orphan state — and only `s` ever writes. DESIGN §presets.py / decision #17.
+
+Automated (both halves):
+
+```sh
+python -m pytest tests/test_presets.py -q                    # unit: store IO, active, fingerprints
+python -m pytest tests/test_app_pilot.py -q -k "preset or quit or launch or fork or switch"
+```
+
+Expected: all pass. The pilot half covers the first-launch seed, edits flowing into the active
+preset, `s` writing both files (asserting `matching_index(store, config) == store.active`), fork +
+switch banking your edits, undo moving the `●` back with the models, `x` refused on the active
+preset, the three-way quit, both launch-reconciliation paths, focus dispatch (`v` inert), a mangled
+sidecar, and the fixed-card row-wrap guard.
+
+Manual (run inside the Check 8 live session, before quitting):
+
+```sh
+# In the TUI, against the TEMP config:
+#   1. First launch: the PRESETS card shows "● 1 default" seeded from your config, and
+#        ls <config_dir>/.omodel-presets.json     # ABSENT — the seed is in memory (one write rule)
+#      Press 'q' immediately: it exits with NO prompt (nothing to save).
+#   2. Relaunch. Set a model, press 'p' then 'a' on row 2, name it → row 2 is now ● and holds
+#      those models. Change another model: it goes into row 2, not row 1.
+#   3. Press enter on row 1 → its models come back. Enter on row 2 → your row-2 edits are still
+#      there (switching banks them, it never drops them).
+#   4. Press 'u' right after a switch → the models AND the ● both go back.
+#   5. Press 'x' on the ● row → refused ("switch to another one first"), no modal. On a
+#      non-active row → confirm; nothing is on disk yet.
+#   6. Press 's', confirm → NOW both files land:
+#        cat <config_dir>/.omodel-presets.json    # version/active/presets, active = the ● row
+#        cat <config_dir>/oh-my-openagent.jsonc   # matches that preset's models exactly
+#   7. Make one more change, press 'q' → three buttons. 'd' discards; relaunch and confirm BOTH
+#      files are exactly as step 6 left them. Then repeat and use "Save & quit" instead.
+#   8. Hand-edit the config's sisyphus model outside oModel, relaunch → the sync modal appears.
+#      Neither answer writes anything; press 's' afterwards to land your choice.
+#   9. With a very long / CJK preset name, all three rows still render — the card never grows
+#      past 5 lines.
+```
+
+**Real-config safety:** presets live next to the ACTIVE config, so a `--config /tmp/...` run
+writes `/tmp/.omodel-presets.json` and never touches `~/.config/opencode/`.
+
+---
+
 ## Running all automated checks at once
 
 ```sh
@@ -247,7 +295,7 @@ Expected outcome:
 - `test_resolve.py` — **PASS**
 - `test_config_io.py` — **PASS**
 - `test_app_pilot.py` — **PASS** (full Textual pilot suite, ~60 tests)
-- `test_cache.py`, `test_cli.py`, `test_history.py` — **PASS**
+- `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py` — **PASS**
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
-plus the 8 checks above run clean on the integration branch.
+plus the 9 checks above run clean on the integration branch.

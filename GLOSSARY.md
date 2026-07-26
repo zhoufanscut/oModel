@@ -17,7 +17,8 @@ line when a new one does.
 
 ## Targets — *what you edit*
 
-- **target** — one editable slot. Four id shapes: `agent:<name>`, `agent:<name>.ultrawork`,
+- **target** — one editable slot (**"slot" means a target and nothing else** — a *preset* is
+  addressed by index, see below). Four id shapes: `agent:<name>`, `agent:<name>.ultrawork`,
   `agent:<name>.compaction`, `cat:<name>` (== the `#targets` option IDs). → CONTRACTS.md "Shared shapes"
 - **agent / category** — a named omo agent (sisyphus, hephaestus…; 11) / task category (deep,
   quick…; 8). → DESIGN §Problem
@@ -73,9 +74,19 @@ line when a new one does.
 - **active-only / clean config** — the *canonical clean form* (`serialize`): JSON, *no comments*. Used
   for dirtiness + as the from-scratch/fallback writer; the first save drops omo's commented **palette**
   *inside* agents/categories (preserved verbatim in `original.jsonc`). → config_io.py `serialize`
-- **backup vs history** — *backup* = verbatim `.backup/<ts>.jsonc` copy at each save (on disk,
-  cross-session, `--restore`); *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`).
-  → config_io.py / history.py
+- **backup vs history vs preset** — the three save-ish things, don't conflate. *backup* = verbatim
+  `.backup/<ts>.jsonc` copy taken automatically at each save (on disk, cross-session, `--restore`);
+  *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`); *preset* = one of 3 **named sets
+  of assignments you switch between**, one of which is always active and mirrored by the config.
+  → config_io.py / history.py / presets.py
+- **preset / active preset** — one of **3** named sets of assignments in the `#presets` card; the
+  **active** one (`●`) is what your edits go into and what `s` publishes to the config. `enter`
+  switches (a staged, undoable replace), `a` forks, `x` deletes but never the active one. Addressed
+  by **index** (0–2, shown 1–3) — ⚠ **never a "slot"**: that word means a *target*. Stored beside the
+  active config as `.omodel-presets.json`. → DESIGN decision #17, presets.py
+- **the presets invariant** — *the config on disk always equals the active preset*, never a fourth
+  orphan state. Source of the **one write rule**: only `s` writes, and it writes **both** files
+  (so quitting discards both, and `x` refuses on the active preset). → DESIGN §presets.py
 - **the two refreshes** — `--refresh-omo` rebuilds *"what omo suggests"* (bun + omo checkout);
   `--refresh-models` / `r` rebuilds *"what you have"* (re-runs opencode, busts the cache).
   → refresh.py vs catalog.refresh()

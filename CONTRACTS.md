@@ -11,7 +11,7 @@ updating this file (others depend on it).
 |---|---|
 | **Core logic** | `src/omodel/catalog.py`, `src/omodel/cache.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
 | **Config I/O** | `src/omodel/config_io.py` |
-| **TUI** | `src/omodel/app.py`, `src/omodel/history.py` |
+| **TUI** | `src/omodel/app.py`, `src/omodel/history.py`, `src/omodel/presets.py` |
 | **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
 | **QA / verification** | everything under `tests/` (incl. `conftest.py`) |
 
@@ -28,10 +28,18 @@ Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operat
    runtime PEP-585 generics; annotations-as-strings make `dict | None` in signatures fine.
 4. **REAL-CONFIG SAFETY (hard rule).** The live `~/.config/opencode/oh-my-openagent.jsonc`
    is the user's real file. Never read-then-write it in tests or examples. Every test passes an
-   explicit temp `path`/`--config`. The Lead's gate enforces this.
+   explicit temp `path`/`--config`. The Lead's gate enforces this. **Nothing may write anywhere
+   under the real config dir** — that now covers `.backup/` *and* `.omodel-presets.json`
+   (§presets.py), not just the config file itself.
 5. **Tests/imports run in a venv** with `textual json5 pytest` installed (PyPI reachable). Do
    not assume system-wide installs.
-6. **REAL-CACHE SAFETY (hard rule).** The opencode-output cache lives at `~/.cache/omodel/`
+6. **NEVER RENDER DATA AS A PLAIN `str` (hard rule, `app.py`).** Textual parses content markup in
+   any plain string it renders, so a `[` in a model id, provider, variant, agent/category name,
+   preset name or `str(exc)` is a tag — and an unmatched close raises `MarkupError` inside the
+   render pass, which kills the app. Build data-carrying `Static`/`Label` with `markup=False`, wrap
+   `Option` prompts in `_lit()`, `_esc()` anything spliced into `#detail` (the one markup widget),
+   and leave `OModelApp.notify`'s `markup=False` default alone. → DESIGN §Textual contract
+7. **REAL-CACHE SAFETY (hard rule).** The opencode-output cache lives at `~/.cache/omodel/`
    (`$OMODEL_CACHE_DIR` → `$XDG_CACHE_HOME/omodel` → `~/.cache/omodel`). Tests must never touch
    the real cache: the autouse `conftest.py` fixture points `$OMODEL_CACHE_DIR` at a tmp dir, and
    any test exercising the TUI/catalog must stub `subprocess.run` (no real `opencode` — each call
@@ -120,18 +128,45 @@ The stub files ARE the signatures; implement their bodies. Summary:
   label="loaded", limit=200, aux=None)` with `.push(state, label, aux=None)->bool` (no-op when
   `state` unchanged; `aux` rides along), `.undo()`/`.redo()->(state, label)|None`,
   `.current_state()->dict`, `.current_aux()->dict` (the cursor entry's `aux`, `{}` if none),
-  `.clear_aux()->None` (drop all entries' `aux`), `.matches_current(state)->bool`, and the
+  `.clear_aux(keep=())->None` (drop all entries' `aux`, preserving the named keys for dict-shaped
+  aux — app.py keeps `active` across a catalog refresh), `.set_aux_key(key, value)->None` (stamp a
+  key into EVERY entry, for companion state that is deliberately not undoable — app.py's preset
+  fork), `.drop_redo()->None` (discard the redo tail without pushing, for an action that changes
+  state without changing cfg — switching to a preset holding identical models),
+  `.matches_current(state)->bool`, and the
   `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. `aux` is an out-of-cfg companion
   snapshot (app.py stores `_custom_rows`). Pure data; snapshots deep-copied in and out. Consumed
   only by `app.py`.
+- `presets.py`: `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass
+  Store(presets, active)` with `.current()->Preset|None` and `.is_empty()->bool`;
+  `load(config_path)->Store` (always `PRESET_COUNT` entries; missing/corrupt/wrong-version/short →
+  empty store, never raises; `active` normalized to a real preset);
+  `write(config_path, store)->Store` (**the ONLY disk write in this module** — atomic, RAISES on
+  failure so app.py notifies, returns the store as read back; an existing file that does not parse
+  is moved to `<path>.corrupt` first, since `load` degrades it to an empty store the app would
+  otherwise clobber). Pure helpers: `capture(name, cfg)` /
+  `assignments(preset)` (deep-copy IN / OUT — the live cfg and a stored Preset never alias),
+  `seeded(cfg, name=DEFAULT_NAME)`, `matching_index(store, cfg)`, `normalize_active(store)`,
+  `fingerprint(agents, categories)` (does the config still reflect a preset?),
+  `store_fingerprint(store)` (has `s` anything to persist? — excludes `saved_at`),
+  `model_count(preset)`, `sanitize_name(text, index)` (also strips `[`/`]` — Textual parses plain
+  strings as markup, and a persisted name crashed every launch), `timestamp()`,
+  `presets_path(config_path)`;
+  constants `PRESET_COUNT = 3`, `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. Stored at
+  `<config_dir>/.omodel-presets.json` — next to the ACTIVE config, so a temp `--config` gets its own
+  set. Non-dict `agents`/`categories` coerce to `{}` on read and write. Pure data + file IO, no
+  Textual; consumed only by `app.py`. **Invariant app.py upholds:** the config on disk equals the
+  ACTIVE preset — `s` writes both files, nothing else writes either.
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint).
 - `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
   data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).
 
 ## Cross-module dependencies
 - `resolve.py` → `suggestions.py` + `catalog.py`.  `refresh.py` → `tools/snapshot_omo.ts`.
-- `app.py` → all four modules + `history.py` (Lead wires final).  `config_io.py` + CLI+packaging
-  are near-independent.  `history.py` is a pure leaf (no omodel imports).
+- `app.py` → all four modules + `history.py` + `presets.py` (Lead wires final).  `config_io.py` +
+  CLI+packaging are near-independent.  `history.py` and `presets.py` are pure leaves (no omodel
+  imports) — which is why `presets.fingerprint` re-implements `config_io._clean_agents`' empty-sub-
+  object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
 ## Bundled data (already generated by Lead — do not regenerate)
 - `data/omo-suggestions.json` — omo v4.13.0 @ f31c735: 11 agents, 8 categories, 15
