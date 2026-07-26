@@ -31,22 +31,18 @@ def sugg():
 class TestNormalizeModelId:
     r"""re.sub(r'\.(\d+)', r'-\1', s).lower() — kimi-k2.7 → kimi-k2-7."""
 
-    def test_dot_version_replaced(self):
-        # re.sub(r'\.(\d+)', r'-\1', s).lower() -> 'kimi-k2.7' -> 'kimi-k2-7'
-        assert normalize_model_id("kimi-k2.7") == "kimi-k2-7"
-
-    def test_multiple_dots(self):
-        assert normalize_model_id("claude-3.5.1") == "claude-3-5-1"
-
-    def test_lowercased(self):
-        assert normalize_model_id("GPT-5.5") == "gpt-5-5"
-
-    def test_no_change(self):
-        assert normalize_model_id("deepseek-v4-pro") == "deepseek-v4-pro"
-
-    def test_k2p5_unchanged(self):
-        # k2p5 has no dots — stays as-is (lowercased)
-        assert normalize_model_id("k2p5") == "k2p5"
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("kimi-k2.7", "kimi-k2-7"),         # dot-version → hyphen
+            ("claude-3.5.1", "claude-3-5-1"),   # every dot-version
+            ("GPT-5.5", "gpt-5-5"),             # …and lowercased
+            ("deepseek-v4-pro", "deepseek-v4-pro"),  # no dots → unchanged
+            ("k2p5", "k2p5"),                   # no dots → unchanged
+        ],
+    )
+    def test_normalize(self, raw, expected):
+        assert normalize_model_id(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -55,64 +51,36 @@ class TestNormalizeModelId:
 
 class TestDetectFamilyParity:
 
-    def test_kimi_k2_5_is_kimi(self, sugg):
-        """kimi-k2.5 → family 'kimi' (not kimi-thinking; no 'max' variant)."""
-        fam = sugg.detect_family("kimi-k2.5")
-        assert fam is not None
-        assert fam.family == "kimi"
-        assert "max" not in fam.variants
-
-    def test_k2p5_is_kimi_thinking(self, sugg):
-        """k2p5 → family 'kimi-thinking' (kimi-thinking before kimi in ordering)."""
-        fam = sugg.detect_family("k2p5")
-        assert fam is not None
-        assert fam.family == "kimi-thinking"
-
-    def test_claude_opus_4_7_is_claude_opus(self, sugg):
-        """claude-opus-4-7 → family 'claude-opus'; has 'max' variant."""
-        fam = sugg.detect_family("claude-opus-4-7")
-        assert fam is not None
-        assert fam.family == "claude-opus"
-        assert "max" in fam.variants
-
-    def test_gpt_5_5_is_gpt_5(self, sugg):
-        """gpt-5.5 → family 'gpt-5'; has 'xhigh' variant."""
-        fam = sugg.detect_family("gpt-5.5")
-        assert fam is not None
-        assert fam.family == "gpt-5"
-        assert "xhigh" in fam.variants
-
-    def test_glm_5_is_glm(self, sugg):
-        """glm-5 → family 'glm'; no 'max' variant."""
-        fam = sugg.detect_family("glm-5")
-        assert fam is not None
-        assert fam.family == "glm"
-        assert "max" not in fam.variants
-
-    def test_deepseek_v4_pro_is_deepseek(self, sugg):
-        """deepseek-v4-pro → family 'deepseek'; has 'max' variant."""
-        fam = sugg.detect_family("deepseek-v4-pro")
-        assert fam is not None
-        assert fam.family == "deepseek"
-        assert "max" in fam.variants
+    @pytest.mark.parametrize(
+        ("model_id", "family", "has", "lacks"),
+        [
+            ("kimi-k2.5", "kimi", (), ("max",)),
+            ("kimi-k2.6", "kimi", (), ("max",)),
+            # kimi-thinking is ordered BEFORE kimi, so k2p5 must not fall through to kimi.
+            ("k2p5", "kimi-thinking", (), ()),
+            # claude-opus is ordered BEFORE claude-non-opus (more specific wins).
+            ("claude-opus-4-7", "claude-opus", ("max",), ()),
+            ("claude-sonnet-4-6", "claude-non-opus", (), ("max",)),
+            ("gpt-5.5", "gpt-5", ("xhigh",), ()),
+            ("glm-5", "glm", (), ("max",)),
+            ("deepseek-v4-pro", "deepseek", ("max",), ()),
+        ],
+    )
+    def test_family_and_variants(self, sugg, model_id, family, has, lacks):
+        """Each REAL omo suggestion id resolves to its family, carrying that family's
+        variant list (the `max`/`xhigh` membership resolve's ⚠ warn keys on)."""
+        fam = sugg.detect_family(model_id)
+        assert fam is not None, f"{model_id} must resolve to a family"
+        assert fam.family == family
+        for v in has:
+            assert v in fam.variants, f"{family} should offer {v!r}: {fam.variants}"
+        for v in lacks:
+            assert v not in fam.variants, f"{family} should NOT offer {v!r}: {fam.variants}"
 
     def test_unknown_model_returns_none(self, sugg):
         """An unrecognised model ID → None (e.g. opencode's big-pickle)."""
         fam = sugg.detect_family("big-pickle")
         assert fam is None
-
-    def test_kimi_k2_6_is_kimi(self, sugg):
-        """kimi-k2.6 → kimi (not thinking)."""
-        fam = sugg.detect_family("kimi-k2.6")
-        assert fam is not None
-        assert fam.family == "kimi"
-
-    def test_claude_sonnet_is_claude_non_opus(self, sugg):
-        """claude-sonnet-4-6 → claude-non-opus (not claude-opus; no 'max')."""
-        fam = sugg.detect_family("claude-sonnet-4-6")
-        assert fam is not None
-        assert fam.family == "claude-non-opus"
-        assert "max" not in fam.variants
 
 
 # ---------------------------------------------------------------------------
@@ -121,32 +89,19 @@ class TestDetectFamilyParity:
 
 class TestFamilyOrdering:
 
-    def test_openai_reasoning_before_gpt5(self, sugg):
-        """openai-reasoning family appears earlier in families list than gpt-5."""
+    @pytest.mark.parametrize(
+        ("earlier", "later"),
+        [
+            ("openai-reasoning", "gpt-5"),
+            ("kimi-thinking", "kimi"),
+            ("claude-opus", "claude-non-opus"),
+        ],
+    )
+    def test_specific_family_precedes_general(self, sugg, earlier, later):
+        """detect_family is first-match-wins, so the more specific family must sort first."""
         families = [f.family for f in sugg.families]
-        idx_reasoning = families.index("openai-reasoning")
-        idx_gpt5 = families.index("gpt-5")
-        assert idx_reasoning < idx_gpt5, (
-            f"openai-reasoning ({idx_reasoning}) must precede gpt-5 ({idx_gpt5})"
-        )
-
-    def test_kimi_thinking_before_kimi(self, sugg):
-        """kimi-thinking appears earlier than kimi in families list."""
-        families = [f.family for f in sugg.families]
-        idx_kt = families.index("kimi-thinking")
-        idx_k = families.index("kimi")
-        assert idx_kt < idx_k, (
-            f"kimi-thinking ({idx_kt}) must precede kimi ({idx_k})"
-        )
-
-    def test_claude_opus_before_claude_non_opus(self, sugg):
-        """claude-opus before claude-non-opus ensures more-specific match wins."""
-        families = [f.family for f in sugg.families]
-        idx_opus = families.index("claude-opus")
-        idx_non = families.index("claude-non-opus")
-        assert idx_opus < idx_non, (
-            f"claude-opus ({idx_opus}) must precede claude-non-opus ({idx_non})"
-        )
+        i, j = families.index(earlier), families.index(later)
+        assert i < j, f"{earlier} ({i}) must precede {later} ({j})"
 
 
 # ---------------------------------------------------------------------------

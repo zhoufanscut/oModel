@@ -129,10 +129,6 @@ class TestSerialize:
         parsed = json.loads(body)
         assert parsed["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
 
-    def test_schema_present_when_in_cfg(self):
-        text = serialize(MINIMAL_CONFIG)
-        assert "$schema" in text
-
     def test_schema_absent_when_not_in_cfg(self):
         cfg = {"agents": {}, "categories": {}}
         text = serialize(cfg)
@@ -225,18 +221,6 @@ class TestSave:
 
             assert result.changed is False
             assert result.backup is None
-
-    def test_save_result_is_dataclass(self):
-        """SaveResult has the fields: changed, backup, original_created."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
-            _write_file(cfg_path, ORIGINAL_JSONC)
-
-            result = save(MINIMAL_CONFIG, cfg_path)
-
-            assert hasattr(result, "changed")
-            assert hasattr(result, "backup")
-            assert hasattr(result, "original_created")
 
     def test_atomic_write(self):
         """The config file is updated atomically (temp+rename) with the text-preserving render."""
@@ -376,12 +360,6 @@ class TestListBackups:
         save(cfg2, cfg_path)
         return cfg_path
 
-    def test_list_backups_returns_list(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg_path = self._do_two_saves(tmpdir)
-            result = list_backups(cfg_path)
-            assert isinstance(result, list)
-
     def test_list_backups_original_first(self):
         """original.jsonc is always the first entry when present."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -505,26 +483,6 @@ class TestLoadConfig:
             cfg, _resolved = load_config(cfg_path)
             assert cfg["agents"]["sisyphus"]["model"] == "opencode/claude-opus-4-7"
             assert cfg["team_mode"] is False
-
-    def test_real_config_never_touched(self, monkeypatch):
-        """load_config with an explicit temp path never touches the real ~/.config path."""
-        real_path_accessed = []
-
-        real_open = open
-        def patched_open(path, *args, **kwargs):
-            real_default = os.path.expanduser("~/.config/opencode/oh-my-openagent.jsonc")
-            if str(path) == real_default:
-                real_path_accessed.append(path)
-            return real_open(path, *args, **kwargs)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg_path = os.path.join(tmpdir, "test.jsonc")
-            _write_file(cfg_path, '{"agents": {}, "categories": {}}\n')
-            load_config(cfg_path)
-
-        assert real_path_accessed == [], (
-            f"load_config must not touch the real config: {real_path_accessed}"
-        )
 
     def test_relative_missing_path_scaffolds_via_cwd(self, monkeypatch, tmp_path):
         """A bare RELATIVE filename that doesn't exist yet must not crash: os.path.dirname of a

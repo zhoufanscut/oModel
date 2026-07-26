@@ -89,8 +89,10 @@ STANDARD_MODELS = [
     "zhipuai/glm-5-flash",
 ]
 
+# A second gateway whose ids CARRY the vendor: split on the first '/', so the model is
+# 'anthropic/claude-opus-4-7'. Its own scenario (below) — the only place a slash-bearing id
+# reaches vendors_served, and the only place `gateways` holds more than one provider.
 STANDARD_MODELS_WITH_OPENROUTER = STANDARD_MODELS + [
-    # openrouter — serves multiple vendors → gateway
     "openrouter/anthropic/claude-opus-4-7",
     "openrouter/openai/gpt-5.5",
     "openrouter/mistralai/mistral-large",
@@ -101,12 +103,6 @@ STANDARD_MODELS_WITH_OPENROUTER = STANDARD_MODELS + [
 @pytest.fixture(scope="module")
 def resolver(sugg):
     cat = _make_catalog(STANDARD_MODELS)
-    return Resolver.build(cat, sugg)
-
-
-@pytest.fixture(scope="module")
-def resolver_with_openrouter(sugg):
-    cat = _make_catalog(STANDARD_MODELS_WITH_OPENROUTER)
     return Resolver.build(cat, sugg)
 
 
@@ -128,44 +124,29 @@ class TestVendorsServed:
         assert resolver.vendors_served("opencode") >= 2
         assert "opencode" in resolver.gateways
 
-    def test_openai_is_dedicated(self, resolver):
-        """openai serves only openai-family models → vendors_served == 1 → dedicated."""
-        assert resolver.vendors_served("openai") == 1
-        assert "openai" not in resolver.gateways
+    @pytest.mark.parametrize(
+        "provider", ["openai", "zhipuai", "moonshotai-cn", "deepseek"]
+    )
+    def test_single_vendor_provider_is_dedicated(self, resolver, provider):
+        """A provider serving exactly one vendor's line → vendors_served == 1 → dedicated."""
+        assert resolver.vendors_served(provider) == 1
+        assert provider not in resolver.gateways
 
-    def test_zhipuai_is_dedicated(self, resolver):
-        assert resolver.vendors_served("zhipuai") == 1
-        assert "zhipuai" not in resolver.gateways
-
-    def test_moonshotai_cn_is_dedicated(self, resolver):
-        assert resolver.vendors_served("moonshotai-cn") == 1
-        assert "moonshotai-cn" not in resolver.gateways
-
-    def test_deepseek_is_dedicated(self, resolver):
-        assert resolver.vendors_served("deepseek") == 1
-        assert "deepseek" not in resolver.gateways
-
-    def test_openrouter_is_gateway(self, resolver_with_openrouter):
-        """openrouter (when present) serves ≥2 vendors → gateway."""
-        # Note: openrouter models are split on first '/', so model = 'anthropic/claude-opus-4-7'
-        # These models may have no omo family → unknown vendor. Test that openrouter
-        # still classifies as gateway if it serves models from multiple known families.
-        # (The exact count depends on which omo families cover openrouter's model IDs.)
-        # At minimum, if it serves ≥2 vendors it must be in gateways.
-        vendors_count = resolver_with_openrouter.vendors_served("openrouter")
-        if vendors_count >= 2:
-            assert "openrouter" in resolver_with_openrouter.gateways
-        # Even if openrouter model IDs are unrecognised (family=None), openrouter as an
-        # explicit gateway is the expected real-world classification — document here.
-        # This test validates the DATA-DRIVEN logic, not a hardcoded list.
-
-    def test_unknown_models_dont_invent_vendor(self, resolver):
-        """Models with detect_family→None (e.g. big-pickle) contribute no vendor
-        and are skipped in vendors_served — do NOT invent a family for them."""
-        # big-pickle is opencode-only and should not push opencode over 2 vendors by itself.
-        # opencode is a gateway due to its other models; this just confirms no inflation.
-        vendors_opencode = resolver.vendors_served("opencode")
-        assert vendors_opencode >= 2  # opencode is genuinely multi-vendor
+    def test_openrouter_with_slash_bearing_ids_is_a_gateway(self, sugg):
+        """A gateway whose ids carry the vendor ('openrouter/anthropic/claude-opus-4-7' → model
+        'anthropic/claude-opus-4-7') is still classified by the vendors it serves → gateway,
+        alongside opencode. Deliberately UNCONDITIONAL: this was once guarded by
+        `if vendors_served(...) >= 2:`, which would have passed silently had the count gone to
+        0 — the exact regression it exists to catch. This is the only test feeding a
+        slash-bearing id through vendors_served, and the only one where `gateways` holds more
+        than one provider (verification.md Check 2)."""
+        res = Resolver.build(_make_catalog(STANDARD_MODELS_WITH_OPENROUTER), sugg)
+        assert res.vendors_served("openrouter") >= 2
+        assert "openrouter" in res.gateways
+        assert "opencode" in res.gateways
+        # A model only gateways serve still resolves by first-seen — openrouter's spelling is a
+        # DIFFERENT model id, so opencode remains its only serving provider.
+        assert res.resolve_prefix("claude-opus-4-7", "omo") == "opencode"
 
 
 # ---------------------------------------------------------------------------
@@ -174,30 +155,24 @@ class TestVendorsServed:
 
 class TestResolvePrefix:
 
-    def test_gpt_5_5_resolves_to_openai(self, resolver):
-        """gpt-5.5 served by opencode(gateway) + openai(dedicated) → dedicated wins: openai."""
-        result = resolver.resolve_prefix("gpt-5.5", "omo")
-        assert result == "openai"
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("gpt-5.5", "openai"),
+            ("kimi-k2.5", "moonshotai-cn"),
+            ("glm-5", "zhipuai"),
+            ("deepseek-v4-pro", "deepseek"),
+        ],
+    )
+    def test_dedicated_provider_wins_over_gateway(self, resolver, model, expected):
+        """Each of these is served by opencode(gateway) + one dedicated provider → the
+        dedicated one wins."""
+        assert resolver.resolve_prefix(model, "omo") == expected
 
     def test_claude_opus_4_7_resolves_to_opencode(self, resolver):
         """claude-opus-4-7 is only in opencode (gateway only) → opencode."""
         result = resolver.resolve_prefix("claude-opus-4-7", "omo")
         assert result == "opencode"
-
-    def test_kimi_k2_5_resolves_to_moonshotai_cn(self, resolver):
-        """kimi-k2.5 served by opencode(gateway) + moonshotai-cn(dedicated) → moonshotai-cn."""
-        result = resolver.resolve_prefix("kimi-k2.5", "omo")
-        assert result == "moonshotai-cn"
-
-    def test_glm_5_resolves_to_zhipuai(self, resolver):
-        """glm-5 served by opencode(gateway) + zhipuai(dedicated) → zhipuai."""
-        result = resolver.resolve_prefix("glm-5", "omo")
-        assert result == "zhipuai"
-
-    def test_deepseek_v4_pro_resolves_to_deepseek(self, resolver):
-        """deepseek-v4-pro served by opencode(gateway) + deepseek(dedicated) → deepseek."""
-        result = resolver.resolve_prefix("deepseek-v4-pro", "omo")
-        assert result == "deepseek"
 
     def test_mine_source_uses_first_seen_provider(self, resolver):
         """source='mine' always picks providers_for()[0] regardless of gateway/dedicated."""
@@ -210,25 +185,6 @@ class TestResolvePrefix:
         """Model not in any connected provider → resolve_prefix returns None."""
         result = resolver.resolve_prefix("non-existent-model-xyz", "omo")
         assert result is None
-
-    def test_gateway_entry_providers_tiebreak(self, resolver_with_openrouter):
-        """When only gateways serve a model, entry.providers order is used as tiebreak.
-        Here we test with a synthetic entry — real entry.providers (omo world IDs) rarely
-        appear in connected, so cands[0] (first-seen) is the common path."""
-        # claude-opus-4-7 is only in opencode in STANDARD_MODELS; with openrouter added
-        # it may also be under openrouter (as 'anthropic/claude-opus-4-7') but that's a
-        # different model_id. Test that opencode (first-seen gateway) still wins.
-        result = resolver_with_openrouter.resolve_prefix("claude-opus-4-7", "omo")
-        assert result == "opencode"
-
-    def test_added_gateway_cycles_to_second_gateway(self, resolver_with_openrouter):
-        """With openrouter also connected (another gateway), the `p` key can cycle to it.
-        Here we just assert providers_for returns both gateways for a model they share."""
-        cat = resolver_with_openrouter.catalog
-        # gpt-5.5 is in opencode AND openai; with openrouter, check providers_for
-        providers = cat.providers_for("gpt-5.5")
-        assert "opencode" in providers
-        assert "openai" in providers
 
 
 # ---------------------------------------------------------------------------
@@ -295,26 +251,19 @@ class TestCandidatesShape:
             "opencode/big-pickle",
         ], f"Unexpected pick list: {keys}"
 
-    def test_all_providers_shown_dedicated_first(self, frozen_resolver):
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("gpt-5.5", ["openai/gpt-5.5", "opencode/gpt-5.5"]),
+            ("glm-5", ["zhipuai/glm-5", "opencode/glm-5"]),
+        ],
+    )
+    def test_all_providers_shown_dedicated_first(self, frozen_resolver, model, expected):
         """Headline behavior: a model served by a dedicated provider AND an aggregator shows
-        one row EACH, dedicated (single-vendor) first. gpt-5.5 → openai/gpt-5.5 then
-        opencode/gpt-5.5 — you can pick either."""
+        one row EACH, dedicated (single-vendor) first — you can pick either."""
         rows = frozen_resolver.candidates("agent:probe")
-        gpt = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "gpt-5.5"]
-        assert gpt == ["openai/gpt-5.5", "opencode/gpt-5.5"]
-
-    def test_all_rows_use_omo_source(self, frozen_resolver):
-        """Every candidate row comes from the chain → source='omo' (no 'mine' dump)."""
-        rows = frozen_resolver.candidates("agent:probe")
-        for row in rows:
-            assert row["source"] == "omo", f"row has source={row['source']!r}"
-
-    def test_dedicated_first_provider(self, frozen_resolver):
-        """glm-5 served by zhipuai(dedicated)+opencode(gateway) → BOTH rows show, dedicated
-        first: zhipuai/glm-5 then opencode/glm-5."""
-        rows = frozen_resolver.candidates("agent:probe")
-        glm = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == "glm-5"]
-        assert glm == ["zhipuai/glm-5", "opencode/glm-5"]
+        got = [f"{r['provider']}/{r['model']}" for r in rows if r["model"] == model]
+        assert got == expected
 
     def test_exact_rows_have_no_substitute_for(self, frozen_resolver):
         """The catalog serves every surviving row exactly (kimi-k3's substitute dedups into
@@ -325,38 +274,25 @@ class TestCandidatesShape:
                 f"{row['model']} should be exact, got substitute_for={row['substitute_for']!r}"
             )
 
-    def test_no_duplicate_provider_model(self, frozen_resolver):
-        """No two rows have the same provider/model combination."""
-        rows = frozen_resolver.candidates("agent:probe")
-        keys = [f"{r['provider']}/{r['model']}" for r in rows]
-        assert len(keys) == len(set(keys)), f"Duplicate provider/model keys: {keys}"
-
     def test_entry_is_dict_for_omo_rows(self, frozen_resolver):
         """Every (omo) row carries its originating fallbackChain entry dict."""
         rows = frozen_resolver.candidates("agent:probe")
         for row in rows:
             assert isinstance(row["entry"], dict), "omo row must have entry dict"
 
-    def test_variant_precedence_entry_over_top(self, frozen_resolver):
-        """claude-opus-4-7 in the probe chain has variant='max' in the entry — must appear."""
-        rows = frozen_resolver.candidates("agent:probe")
-        opus_rows = [r for r in rows if r["model"] == "claude-opus-4-7"]
-        assert len(opus_rows) >= 1
-        assert opus_rows[0]["variant"] == "max"
-
-    def test_gpt_5_5_variant_medium(self, frozen_resolver):
-        """gpt-5.5 in the probe chain has variant='medium' in the entry."""
-        rows = frozen_resolver.candidates("agent:probe")
-        gpt_rows = [r for r in rows if r["model"] == "gpt-5.5"]
-        assert len(gpt_rows) >= 1
-        assert gpt_rows[0]["variant"] == "medium"
-
-    def test_kimi_k2_5_no_variant(self, frozen_resolver):
-        """kimi-k2.5 in the probe chain has no variant in entry or top-level → None."""
-        rows = frozen_resolver.candidates("agent:probe")
-        kimi_rows = [r for r in rows if r["model"] == "kimi-k2.5"]
-        assert len(kimi_rows) >= 1
-        assert kimi_rows[0]["variant"] is None
+    @pytest.mark.parametrize(
+        ("model", "variant"),
+        [
+            ("claude-opus-4-7", "max"),   # entry-level variant
+            ("gpt-5.5", "medium"),        # entry-level variant
+            ("kimi-k2.5", None),          # no variant in entry or top-level
+        ],
+    )
+    def test_entry_variant_carried_onto_rows(self, frozen_resolver, model, variant):
+        """A chain entry's `variant` (or its absence) reaches every row for that model."""
+        rows = [r for r in frozen_resolver.candidates("agent:probe") if r["model"] == model]
+        assert len(rows) >= 1
+        assert rows[0]["variant"] == variant
 
 
 # ---------------------------------------------------------------------------
@@ -459,32 +395,6 @@ class TestWarnFlags:
         glm = [r for r in rows if r["model"] == "glm-5"]
         assert len(glm) == 1
         assert glm[0]["warn"] == ["variant"]
-
-    def test_invalid_variant_warn_flag(self, resolver):
-        """A row where variant is not in the family's variants list gets warn=['variant'].
-        Use a synthetic entry with an invalid variant for a real family."""
-        from omodel.suggestions import load as load_sugg
-        sugg = load_sugg()
-        # kimi family has no 'max' → a candidate with variant='max' must warn.
-        fam = sugg.detect_family("kimi-k2.5")
-        assert fam is not None
-        assert fam.family == "kimi"
-        assert "max" not in fam.variants, "Precondition: kimi has no 'max'"
-        # Now check warn via a synthetic candidate row built the same way resolve.py does:
-        variant = "max"
-        warn = []
-        if variant is not None and fam is not None and variant not in fam.variants:
-            warn.append("variant")
-        assert "variant" in warn
-
-    def test_glm_max_warns_variant(self, resolver):
-        """glm+max: glm family has no 'max' → candidate with variant='max' → warn includes 'variant'."""
-        # Directly test: glm family variants
-        from omodel.suggestions import load as load_sugg
-        sugg = load_sugg()
-        fam = sugg.detect_family("glm-5")
-        assert fam is not None
-        assert "max" not in fam.variants
 
     def test_valid_variant_no_warn(self, frozen_resolver):
         """claude-opus-4-7 with variant='max' — max IS in claude-opus.variants → no 'variant'

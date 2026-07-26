@@ -28,6 +28,15 @@ def _mock_run(stdout: str, returncode: int = 0):
     return m
 
 
+def _load_from(stdout: str) -> Catalog:
+    """load() over a mocked `opencode models` stdout — the patch nest every parsing test
+    needs, in one place. The conftest gives each test an empty cache, so this always
+    reaches the (mocked) subprocess."""
+    with patch("subprocess.run", return_value=_mock_run(stdout)):
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            return load()
+
+
 # ---------------------------------------------------------------------------
 # `opencode models` parsing — DESIGN §Data sources
 # ---------------------------------------------------------------------------
@@ -61,87 +70,42 @@ opencode/kimi-k2.5
 
 class TestCatalogLoad:
 
-    def test_connected_is_a_list_not_a_set(self):
-        """catalog.connected must be a list in first-seen order, never a set."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        assert isinstance(cat.connected, list)
-
     def test_connected_first_seen_order(self):
-        """Providers appear in connected in the order they first appear in output."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        # opencode, deepseek, moonshotai-cn, openai, zhipuai — in first-seen order
+        """Providers appear in connected as a LIST in the order they first appear in output
+        (never a set — the `==` against an ordered literal pins both)."""
+        cat = _load_from(MOCK_MODELS_OUTPUT)
         assert cat.connected == ["opencode", "deepseek", "moonshotai-cn", "openai", "zhipuai"]
 
-    def test_available_dict_structure(self):
-        """available maps each provider to its model list in first-seen order."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        assert "opencode" in cat.available
-        assert "claude-opus-4-7" in cat.available["opencode"]
+    def test_available_maps_provider_to_model_list(self):
+        """available maps each provider to its models as a LIST in first-seen order."""
+        cat = _load_from(MOCK_MODELS_OUTPUT)
+        assert cat.available["opencode"][:2] == ["claude-opus-4-7", "claude-opus-4-8"]
         assert "kimi-k2.5" in cat.available["opencode"]
-        # Models are LISTS (first-seen order), not sets
-        assert isinstance(cat.available["opencode"], list)
 
     def test_split_on_first_slash_only(self):
         """Lines like 'openrouter/anthropic/claude-opus-4-7' split on the FIRST '/'.
         Provider = 'openrouter'; model = 'anthropic/claude-opus-4-7'."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT_SLASH_IN_MODEL)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
+        cat = _load_from(MOCK_MODELS_OUTPUT_SLASH_IN_MODEL)
         assert "openrouter" in cat.available
         assert "anthropic/claude-opus-4-7" in cat.available["openrouter"]
         assert "openai/gpt-5.5" in cat.available["openrouter"]
 
-    def test_providers_for_returns_list(self):
-        """providers_for() returns a list, not a set."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        result = cat.providers_for("kimi-k2.5")
-        assert isinstance(result, list)
-
-    def test_providers_for_first_seen_order(self):
-        """providers_for('kimi-k2.5') = ['opencode','moonshotai-cn'] in first-seen order."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        assert cat.providers_for("kimi-k2.5") == ["opencode", "moonshotai-cn"]
-
-    def test_providers_for_gpt_5_5(self):
-        """gpt-5.5 served by opencode AND openai — first-seen order."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        assert cat.providers_for("gpt-5.5") == ["opencode", "openai"]
-
-    def test_providers_for_unknown_model(self):
-        """Model not in any provider → empty list."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        assert cat.providers_for("does-not-exist") == []
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("kimi-k2.5", ["opencode", "moonshotai-cn"]),
+            ("gpt-5.5", ["opencode", "openai"]),
+            ("does-not-exist", []),
+        ],
+    )
+    def test_providers_for_is_a_first_seen_list(self, model, expected):
+        """providers_for() returns a list in first-seen order; unknown model → []."""
+        assert _load_from(MOCK_MODELS_OUTPUT).providers_for(model) == expected
 
     def test_no_duplicate_models_per_provider(self):
         """Same line appearing twice should not duplicate the model in the list."""
-        dup_output = "opencode/gpt-5.5\nopencode/gpt-5.5\n"
-        with patch("subprocess.run", return_value=_mock_run(dup_output)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
+        cat = _load_from("opencode/gpt-5.5\nopencode/gpt-5.5\n")
         assert cat.available["opencode"].count("gpt-5.5") == 1
-
-    def test_count_not_hardasserted(self):
-        """Model count may vary — tests do NOT pin a specific number."""
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
-        # Just assert > 0 — never a specific total
-        total = sum(len(v) for v in cat.available.values())
-        assert total > 0
 
 
 # ---------------------------------------------------------------------------
@@ -166,19 +130,10 @@ class TestCatalogErrorRules:
                     load()
 
     def test_zero_parsed_lines_raises_catalog_unavailable(self):
-        """Zero provider/model lines (even if exit 0) → CatalogUnavailable."""
+        """Zero provider/model lines (even if exit 0) → CatalogUnavailable. There is no
+        partial-success state: either a Catalog with data, an empty Catalog, or this."""
         empty_output = "Some header line with no slash\n\n"
         with patch("subprocess.run", return_value=_mock_run(empty_output, returncode=0)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    load()
-
-    def test_no_partial_state(self):
-        """There is no partial success state: either Catalog with data, empty Catalog,
-        or CatalogUnavailable — nothing in between."""
-        # Lines that yield zero valid provider/model pairs → must raise
-        bad_output = "not-a-model-line\nstill-no-slash\n"
-        with patch("subprocess.run", return_value=_mock_run(bad_output)):
             with patch("shutil.which", return_value="/usr/bin/opencode"):
                 with pytest.raises(CatalogUnavailable):
                     load()
@@ -329,21 +284,33 @@ class TestVerboseParsing:
         connected = ["opencode"]
         return Catalog(available=available, connected=connected)
 
-    def test_detail_returns_correct_context(self):
-        """detail() extracts limit.context correctly."""
+    def _detail(self, model: str) -> dict:
         cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
         with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("claude-opus-4-7")
-        assert result is not None
-        assert result["context"] == 200000
+            result = cat.detail(model)
+        assert result is not None, f"no detail record parsed for {model!r}"
+        return result
 
-    def test_detail_returns_cost_dict(self):
-        """detail() returns cost as whatever the JSON block has (a nested dict)."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("claude-opus-4-7")
-        assert result is not None
-        assert result["cost"] is not None
+    def test_detail_extracts_every_field_of_the_queried_record(self):
+        """detail() returns EXACTLY {context, cost, reasoning, image}, picking the record that
+        matches the queried model out of the 3-record blob — never `--verbose.variants`
+        (decision #14). RECORD_1 (claude-opus-4-7) and RECORD_2 (gpt-5.5) between them cover
+        both bools, a plain cost and a cache-bearing one."""
+        opus = self._detail("claude-opus-4-7")
+        assert set(opus) == {"context", "cost", "reasoning", "image"}
+        assert "variants" not in opus, "detail() must NEVER expose --verbose.variants"
+        assert opus["context"] == 200000
+        assert opus["cost"] == {"input": 3, "output": 15}
+        assert opus["reasoning"] is False
+        assert opus["image"] is True
+
+        gpt = self._detail("gpt-5.5")
+        assert gpt["reasoning"] is True
+        assert gpt["image"] is False
+        assert gpt["cost"]["cache"] == {"read": 0.3, "write": 0.5}, "cache cost nests in cost"
+
+        # A third record proves the multi-block scan isn't just returning the first match.
+        assert self._detail("glm-5")["context"] == 64000
 
     def test_detail_line_renders_numeric_cost(self):
         """app._detail_line renders the (numeric-cost) detail dict as '$in/$out' and never
@@ -359,67 +326,11 @@ class TestVerboseParsing:
         assert "$$" not in line
         assert "image" in line
 
-    def test_detail_extracts_reasoning_capability(self):
-        """detail() extracts capabilities.reasoning as a bool."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            # gpt-5.5 has reasoning=True
-            result = cat.detail("gpt-5.5")
-        assert result is not None
-        assert result["reasoning"] is True
-
-    def test_detail_extracts_image_capability(self):
-        """detail() extracts capabilities.input.image as a bool."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("claude-opus-4-7")
-        assert result is not None
-        assert result["image"] is True
-
-    def test_detail_does_not_read_verbose_variants(self):
-        """Variant logic NEVER uses --verbose.variants (decision #14).
-        detail() must NOT include 'variants' in its return dict."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("claude-opus-4-7")
-        assert result is not None
-        assert "variants" not in result, (
-            "detail() must NEVER expose --verbose.variants (decision #14)"
-        )
-
-    def test_detail_picks_correct_record_from_multi_block(self):
-        """With 3 records, detail() picks the one matching the queried model."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            glm_result = cat.detail("glm-5")
-        assert glm_result is not None
-        # glm-5 has context 64000 and no cache cost
-        assert glm_result["context"] == 64000
-
     def test_detail_returns_none_for_unknown_model(self):
         """Model not in any connected provider → detail() returns None."""
         cat = self._make_catalog_with_opencode(["claude-opus-4-7"])
         result = cat.detail("non-existent-model")
         assert result is None
-
-    def test_detail_result_keys(self):
-        """detail() always returns exactly: context, cost, reasoning, image."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("claude-opus-4-7")
-        assert result is not None
-        assert set(result.keys()) == {"context", "cost", "reasoning", "image"}
-
-    def test_detail_cache_cost_in_cost_dict(self):
-        """Records with cache costs carry them inside the cost dict (not top-level)."""
-        cat = self._make_catalog_with_opencode(["claude-opus-4-7", "gpt-5.5", "glm-5"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_VERBOSE_OUTPUT)):
-            result = cat.detail("gpt-5.5")
-        # gpt-5.5 has cache cost nested in cost
-        assert result is not None
-        cost = result["cost"]
-        assert cost is not None
-        assert "cache" in cost
 
     def test_detail_provider_param_selects_that_providers_record(self):
         """detail(model, provider=p) describes (p, model) when p serves the model — the detail

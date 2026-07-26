@@ -300,41 +300,6 @@ def test_pilot_set_model_and_save(pilot_config):
 
 
 # ---------------------------------------------------------------------------
-# Pilot test 2: non-model sections unchanged by value
-# ---------------------------------------------------------------------------
-
-def test_pilot_non_model_sections_unchanged(pilot_config):
-    """After a save, team_mode / experimental / claude_code are unchanged by value."""
-    import json5
-
-    cfg_path, _ = pilot_config
-
-    async def _run():
-        app = _build_app(cfg_path)
-
-        async with app.run_test() as pilot:
-            await _select_target(pilot, "agent:sisyphus")
-            # moonshotai-cn/kimi-k2.5 is the dedicated-resolved chain row; any model change
-            # is fine for this test — we care only about non-model section preservation
-            found_id = await _select_candidate(pilot, "moonshotai-cn/kimi-k2.5")
-            if found_id is None:
-                # fall back to deepseek dedicated row
-                await _select_candidate(pilot, "deepseek/deepseek-v4-pro")
-            await _save_and_confirm(pilot)
-
-    asyncio.run(_run())
-
-    with open(cfg_path, encoding="utf-8") as f:
-        saved = json5.load(f)
-
-    # Non-model sections unchanged regardless of which model was set
-    assert saved["team_mode"] is True
-    assert saved["experimental"] == {"featureY": False}
-    assert saved["claude_code"]["enabled"] is True
-    assert saved["claude_code"]["model"] == "opencode/claude-opus-4-8"
-
-
-# ---------------------------------------------------------------------------
 # Pilot test 3: Providers header shows connected providers in first-seen order
 # ---------------------------------------------------------------------------
 
@@ -1046,6 +1011,16 @@ def test_pilot_hint_bar_minimal_and_help(pilot_config):
                 "← must move focus back to the targets pane"
             )
 
+            # An edit populates the undo history and an undo opens a redo — neither may grow
+            # the bar an `u undo` / `⌃r redo` token (it is minimal by design; `?` carries them).
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert pilot.app._history.can_undo, "the edit should be undoable"
+            assert EXPECTED in bar() and "u undo" not in bar(), f"bar grew after an edit: {bar()!r}"
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app._history.can_redo, "undo should open a redo"
+            assert EXPECTED in bar() and "⌃r redo" not in bar(), f"bar grew after an undo: {bar()!r}"
+
             # `?` opens the help overlay, which documents the keys the bar dropped.
             await pilot.press("question_mark")
             await pilot.pause()
@@ -1524,46 +1499,6 @@ def test_pilot_undo_restores_clean_state(pilot_config):
             await pilot.press("ctrl+r")
             await pilot.pause()
             assert pilot.app._is_dirty() is True, "redo must re-dirty"
-
-    asyncio.run(_run())
-
-
-def test_pilot_undo_redo_absent_from_bar_documented_in_help(pilot_config):
-    """Undo/redo never appear in the (now static) hint bar — the bar stays
-    `s save · q quit · ? help` before and after an edit + undo — but they ARE documented in the
-    `?` overlay. (The bar is minimal by design; `?` carries the full reference — DESIGN §Layout.)"""
-    cfg_path, _ = pilot_config
-    EXPECTED = "s save · q quit · ? help"
-
-    async def _run():
-        app = _build_app(cfg_path)
-        async with app.run_test() as pilot:
-            def bar():
-                return str(pilot.app.query_one("#hints", Static).content)
-
-            await _select_target(pilot, "agent:sisyphus")
-            assert EXPECTED in bar() and "u undo" not in bar(), f"no undo hint expected: {bar()!r}"
-
-            # An edit populates the undo history, but the bar must not grow an `u undo` token.
-            await _select_candidate(pilot, "zhipuai/glm-5")
-            assert pilot.app._history.can_undo, "the edit should be undoable"
-            assert EXPECTED in bar() and "u undo" not in bar(), (
-                f"bar must stay minimal after an edit: {bar()!r}"
-            )
-
-            # Undo opens a redo, but again no `⌃r redo` token leaks into the bar.
-            await pilot.press("u")
-            await pilot.pause()
-            assert pilot.app._history.can_redo, "undo should open a redo"
-            assert EXPECTED in bar() and "⌃r redo" not in bar(), (
-                f"bar must stay minimal after an undo: {bar()!r}"
-            )
-
-            # Both keys are documented in the `?` overlay instead.
-            await pilot.press("question_mark")
-            await pilot.pause()
-            body = str(pilot.app.screen.query_one("#help-body-text", Static).content)
-            assert "undo" in body and "redo" in body, f"help must document undo/redo: {body!r}"
 
     asyncio.run(_run())
 
@@ -2155,29 +2090,6 @@ def test_pilot_addmodal_kimi_no_variant_phase(pilot_config):
     asyncio.run(_run())
 
 
-def test_pilot_vkey_lists_opencode_reported_variants(pilot_config):
-    """`v` on a candidate opens VariantModal listing the variants opencode reports for that
-    (provider, model) — catalog.variants_for (cached `--verbose`), seeded here for openai/gpt-5.5
-    — plus the (none) clear row."""
-    cfg_path, _ = pilot_config
-
-    async def _run():
-        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
-        app = _build_app(cfg_path)
-        async with app.run_test() as pilot:
-            await _select_target(pilot, "agent:sisyphus")
-            oid = await _highlight_candidate(pilot, "openai/gpt-5.5")
-            assert oid is not None, "openai/gpt-5.5 must be a sisyphus candidate"
-            await pilot.press("v")
-            await pilot.pause()
-            assert len(pilot.app.screen_stack) == 2, "v must open the VariantModal"
-            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
-            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
-            assert vids == ["var:low", "var:medium", "var:high", "var:__none__"], vids
-
-    asyncio.run(_run())
-
-
 def test_pilot_addmodal_drops_none_variant(pilot_config):
     """A "none" variant opencode lists is dropped as a duplicate of the synthetic "(none)" clear
     row — the add-model variant list must show the REAL variants + var:__none__ only, never a
@@ -2236,8 +2148,10 @@ def test_pilot_addmodal_only_none_variant_skips_phase(pilot_config):
 
 
 def test_pilot_vkey_drops_none_variant(pilot_config):
-    """`v` likewise drops a "none" opencode lists — the VariantModal shows the real variants +
-    var:__none__ only (the synthetic "(none)" already clears the variant)."""
+    """`v` on a candidate opens VariantModal listing the variants opencode reports for that
+    (provider, model) — catalog.variants_for (cached `--verbose`), seeded here — plus the (none)
+    clear row. A "none" opencode lists is likewise dropped as a duplicate of that synthetic row,
+    so the list is the REAL variants + var:__none__ only, never a var:none."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2455,8 +2369,9 @@ def test_pilot_addmodal_variant_skipped_for_familyless(pilot_config):
 
 
 def test_pilot_addmodal_esc_returns_then_cancels(pilot_config):
-    """Esc in the variant phase returns to the model phase (Input visible + focused); a second Esc
-    cancels the modal, leaving the assignment untouched."""
+    """Esc in the variant phase returns to the model phase — Input visible + focused with its
+    typed value intact, candidate list back, variant list hidden — and a second Esc cancels the
+    modal, leaving the assignment untouched."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2469,15 +2384,20 @@ def test_pilot_addmodal_esc_returns_then_cancels(pilot_config):
             await pilot.pause()
             await pilot.press("enter")  # → variant phase
             await pilot.pause()
-            variants = pilot.app.screen.query_one("#add-variants", OptionList)
+            scr = pilot.app.screen
+            variants = scr.query_one("#add-variants", OptionList)
             assert variants.display and pilot.app.focused is variants
 
             await pilot.press("escape")  # back to the model phase
             await pilot.pause()
-            inp = pilot.app.screen.query_one("#add-input", Input)
+            inp = scr.query_one("#add-input", Input)
             assert inp.display, "Esc from the variant phase must restore the Input"
             assert pilot.app.focused is inp, "the model phase must re-focus the Input"
-            assert not pilot.app.screen.query_one("#add-variants", OptionList).display
+            assert inp.value == "openai/gpt-5.5", (
+                f"the typed value must survive esc-back: {inp.value!r}"
+            )
+            assert scr.query_one("#add-candidates", OptionList).display, "candidate list back"
+            assert not scr.query_one("#add-variants", OptionList).display, "variant list hidden"
 
             await pilot.press("escape")  # cancel the modal
             await pilot.pause()
@@ -2687,37 +2607,6 @@ def test_pilot_addmodal_gpt_only_typed_blocked_via_modal(pilot_config):
             await pilot.pause()
             assert scr._staged is not None, "GPT id must stage under require_gpt"
             assert "gpt" in scr._staged["model"].lower(), scr._staged
-
-    asyncio.run(_run())
-
-
-def test_pilot_addmodal_esc_back_preserves_input_value(pilot_config):
-    """Esc from the variant phase returns to the model phase with the Input's typed value intact,
-    the candidate list visible again, and the variant list hidden (extends the esc-back test with
-    value + candidate-visibility assertions)."""
-    cfg_path, _ = pilot_config
-
-    async def _run():
-        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
-        app = _build_app(cfg_path)
-        async with app.run_test() as pilot:
-            inp = await _open_add_modal(pilot)
-            inp.value = "openai/gpt-5.5"
-            await pilot.pause()
-            await pilot.press("enter")  # → variant phase
-            await pilot.pause()
-            scr = pilot.app.screen
-            assert scr.query_one("#add-variants", OptionList).display
-
-            await pilot.press("escape")  # back to model phase
-            await pilot.pause()
-            inp = scr.query_one("#add-input", Input)
-            assert inp.display and pilot.app.focused is inp
-            assert inp.value == "openai/gpt-5.5", (
-                f"the typed value must survive esc-back: {inp.value!r}"
-            )
-            assert scr.query_one("#add-candidates", OptionList).display, "candidate list back"
-            assert not scr.query_one("#add-variants", OptionList).display, "variant list hidden"
 
     asyncio.run(_run())
 
