@@ -19,6 +19,7 @@ All tests use tmp_path only — the real ~/.config/opencode/... is never touched
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import glob
 import json
@@ -2860,6 +2861,59 @@ def test_to_thread_daemon_runs_on_daemon_thread():
     assert asyncio.run(_run()) == "ok"
     assert captured["daemon"] is True, "the callable must run on a daemon thread"
     assert captured["is_main"] is False, "the callable must run off the main thread"
+
+
+@pytest.mark.parametrize("boom", [False, True], ids=["returns", "raises"])
+def test_to_thread_daemon_is_quiet_when_the_loop_is_already_gone(boom):
+    """Outliving the loop is the WHOLE POINT of the daemon thread — `q` exits at once and the
+    orphaned opencode call finishes into a process that has moved on. So the delivery hop is
+    routinely made into a closed loop, where `call_soon_threadsafe` raises RuntimeError ON THE
+    WORKER THREAD: no `await` is left to receive it and no caller can catch it, so Python prints
+    `Exception in thread Thread-N` to stderr — corrupting the terminal the TUI just released,
+    once per abandoned fetch. Both delivery paths swallow it; this covers both.
+
+    Deterministic by construction, not by timing: the worker parks on an Event, the loop is
+    cancelled and CLOSED while it is parked, and only then is it released — so the RuntimeError
+    is guaranteed, never raced for. Asserted via `threading.excepthook`, since an exception on a
+    non-main thread reaches the test no other way. Both cases fail with
+    `RuntimeError('Event loop is closed')` if either `except RuntimeError` is dropped."""
+    started, release = threading.Event(), threading.Event()
+    worker = {}
+
+    def _blocked():
+        worker["thread"] = threading.current_thread()
+        started.set()
+        assert release.wait(timeout=5), "test bug: the worker was never released"
+        if boom:
+            raise ValueError("boom")
+        return "too late"
+
+    escaped = []
+    prev_hook = threading.excepthook
+    threading.excepthook = escaped.append
+    try:
+        loop = asyncio.new_event_loop()
+        try:
+            task = loop.create_task(_to_thread_daemon(_blocked))
+            for _ in range(500):  # spin the loop until the coro has spawned its thread
+                if started.is_set():
+                    break
+                loop.run_until_complete(asyncio.sleep(0.01))
+            assert started.is_set(), "the worker thread never started"
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                loop.run_until_complete(task)  # drain, so close() has nothing pending
+        finally:
+            loop.close()
+
+        assert loop.is_closed(), "precondition: the loop must be gone before delivery"
+        release.set()  # NOW let the worker deliver into the closed loop
+        worker["thread"].join(timeout=5)
+        assert not worker["thread"].is_alive(), "the worker thread never finished"
+    finally:
+        threading.excepthook = prev_hook
+
+    assert escaped == [], f"RuntimeError escaped the worker thread: {escaped}"
 
 
 # ---------------------------------------------------------------------------
