@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.19.1",
-    "omoCommit": "60201be160749965b9bb4c3b2744e1bbee820dc5",
-    "generatedAt": "2026-07-24T01:57:25.786Z"
+    "omoVersion": "4.19.2",
+    "omoCommit": "6da2b8f24388e2a563ecefaf59979fbd769da70e",
+    "generatedAt": "2026-07-27T09:50:10.214Z"
   },
   "agents": {
     "sisyphus": {
@@ -14,7 +14,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -119,7 +119,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -306,34 +306,19 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "openai",
-            "github-copilot",
-            "opencode",
-            "vercel"
-          ],
-          "model": "gpt-5.6-sol",
-          "variant": "high"
+          "model": "claude-fable-5",
+          "variant": "xhigh"
         },
         {
           "providers": [
             "opencode-go",
-            "vercel"
-          ],
-          "model": "glm-5.2"
-        },
-        {
-          "providers": [
-            "google",
-            "github-copilot",
+            "kimi-for-coding",
+            "moonshotai",
             "opencode",
             "vercel"
           ],
-          "model": "gemini-3.1-pro"
+          "model": "kimi-k3",
+          "variant": "max"
         }
       ],
       "requiresProvider": [],
@@ -349,40 +334,19 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-sonnet-4-6"
-        },
-        {
-          "providers": [
-            "anthropic",
-            "github-copilot",
-            "opencode",
-            "vercel"
-          ],
-          "model": "claude-opus-4-8",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "openai",
-            "github-copilot",
-            "opencode",
-            "vercel"
-          ],
-          "model": "gpt-5.6-sol",
-          "variant": "medium"
+          "model": "claude-opus-5",
+          "variant": "high"
         },
         {
           "providers": [
             "opencode-go",
+            "kimi-for-coding",
+            "moonshotai",
+            "opencode",
             "vercel"
           ],
-          "model": "glm-5.2"
-        },
-        {
-          "providers": [
-            "kimi-for-coding"
-          ],
-          "model": "kimi-k3"
+          "model": "kimi-k3",
+          "variant": "low"
         }
       ],
       "requiresProvider": [],
@@ -429,7 +393,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -574,6 +538,38 @@
       "fallbackChain": [
         {
           "providers": [
+            "anthropic",
+            "github-copilot",
+            "opencode",
+            "vercel"
+          ],
+          "model": "claude-opus-5",
+          "variant": "high"
+        },
+        {
+          "providers": [
+            "apitopia",
+            "opencode-go",
+            "kimi-for-coding",
+            "moonshotai",
+            "opencode",
+            "vercel"
+          ],
+          "model": "kimi-k3",
+          "variant": "max"
+        },
+        {
+          "providers": [
+            "anthropic",
+            "github-copilot",
+            "opencode",
+            "vercel"
+          ],
+          "model": "claude-fable-5",
+          "variant": "low"
+        },
+        {
+          "providers": [
             "google",
             "github-copilot",
             "opencode",
@@ -593,26 +589,10 @@
         },
         {
           "providers": [
-            "anthropic",
-            "github-copilot",
-            "opencode",
-            "vercel"
-          ],
-          "model": "claude-opus-4-8",
-          "variant": "max"
-        },
-        {
-          "providers": [
             "opencode-go",
             "vercel"
           ],
           "model": "glm-5.2"
-        },
-        {
-          "providers": [
-            "kimi-for-coding"
-          ],
-          "model": "kimi-k3"
         }
       ],
       "requiresProvider": [],
@@ -662,7 +642,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -720,7 +700,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -771,7 +751,7 @@
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "variant": "max"
         },
         {
@@ -807,15 +787,19 @@
       "fallbackChain": [
         {
           "providers": [
-            "openai",
-            "github-copilot",
-            "opencode",
-            "vercel"
+            "apitopia"
           ],
-          "model": "gpt-5.4-mini"
+          "model": "kimi-for-coding-highspeed"
         },
         {
           "providers": [
+            "quotio-openai"
+          ],
+          "model": "gpt-5.4-mini-fast"
+        },
+        {
+          "providers": [
+            "anthropic-api",
             "anthropic",
             "github-copilot",
             "vercel"
@@ -945,13 +929,25 @@
       "fallbackChain": [
         {
           "providers": [
+            "apitopia",
+            "opencode-go",
+            "kimi-for-coding",
+            "moonshotai",
+            "opencode",
+            "vercel"
+          ],
+          "model": "kimi-k3",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "anthropic",
             "github-copilot",
             "opencode",
             "vercel"
           ],
-          "model": "claude-opus-4-8",
-          "variant": "max"
+          "model": "claude-opus-5",
+          "variant": "high"
         },
         {
           "providers": [
@@ -974,29 +970,10 @@
         },
         {
           "providers": [
-            "kimi-for-coding"
-          ],
-          "model": "kimi-k3"
-        },
-        {
-          "providers": [
             "opencode-go",
             "vercel"
           ],
           "model": "glm-5.2"
-        },
-        {
-          "providers": [
-            "opencode",
-            "bailian-coding-plan",
-            "vercel",
-            "moonshotai",
-            "moonshotai-cn",
-            "firmware",
-            "ollama-cloud",
-            "aihubmix"
-          ],
-          "model": "kimi-k3"
         }
       ],
       "requiresProvider": [],
