@@ -121,6 +121,18 @@ CATEGORY_NAMES = {
     "unspecified-high", "unspecified-low", "visual-engineering", "writing",
 }
 
+# (model_id, variant) pairs where omo's own chain asks for a variant its own family registry
+# does not declare — see test_chain_variants_are_declared_by_their_family. Keyed by model, NOT
+# by target: one upstream inconsistency reaches several chains (kimi-k3@max lands in three),
+# and omo moving it to a fourth next week is not new information. Reviewed and accepted for
+# omo 4.19.2; resolve._variant_warn renders each as a ⚠ warn-but-allow row, so nothing breaks
+# — the pin exists so the NEXT one gets a human look, not to force a fix that is upstream's
+# to make. Prune an entry once omo stops emitting it (a stale one never fails the test).
+ACCEPTED_VARIANT_DRIFT = {
+    ("claude-fable-5", "xhigh"),
+    ("kimi-k3", "max"),
+}
+
 
 class TestBundledSuggestionsLoad:
 
@@ -202,6 +214,50 @@ class TestBundledSuggestionsLoad:
                         assert entry["variant"] in known, (
                             f"{section} '{name}'[{i}]: unknown variant {entry['variant']!r}"
                         )
+
+    def test_chain_variants_are_declared_by_their_family(self, sugg):
+        """A chain entry's variant should appear in ITS OWN family's `variants`.
+
+        Finer-grained than test_every_variant_is_a_known_variant: that one asks "is this a
+        variant oModel can write at all?", this one asks "does omo's own data agree with
+        itself?" — the two disagree when omo adds a variant to a chain but not to the family
+        registry (omo 4.19.2: claude-fable-5@xhigh, kimi-k3@max).
+
+        This is NOT a correctness failure for oModel. resolve._variant_warn falls back to
+        `family.variants` exactly when opencode `--verbose` is silent, so each such entry
+        renders a ⚠ warn-but-allow row — by design it never blocks a pick. What makes it worth
+        a test is WHERE they land: top-of-chain entries, so the TUI puts a warning triangle on
+        omo's own first recommendation. A weekly --refresh-omo should not add one unnoticed.
+
+        Models with no detected family (e.g. big-pickle) are skipped — no declaration to
+        check against. Comparison is case-insensitive, mirroring _variant_warn.
+        """
+        drift = {}
+        for section in ("agents", "categories"):
+            for name, body in getattr(sugg, section).items():
+                for i, entry in enumerate(body.get("fallbackChain") or ()):
+                    variant = entry.get("variant")
+                    if not variant:
+                        continue
+                    fam = sugg.detect_family(entry["model"])
+                    if fam is None:
+                        continue
+                    if variant.lower() not in {v.lower() for v in fam.variants}:
+                        key = (entry["model"], variant)
+                        drift.setdefault(key, []).append(f"{section} '{name}'[{i}]")
+
+        unreviewed = {k: v for k, v in drift.items() if k not in ACCEPTED_VARIANT_DRIFT}
+        assert not unreviewed, (
+            "omo chain entries request a variant their own family does not declare, and these "
+            "are not in ACCEPTED_VARIANT_DRIFT:\n"
+            + "\n".join(
+                f"  {model}@{variant} (family {sugg.detect_family(model).family} declares "
+                f"{list(sugg.detect_family(model).variants)}) at {', '.join(where)}"
+                for (model, variant), where in sorted(unreviewed.items())
+            )
+            + "\n\nEach renders as a ⚠ warn-but-allow row. Review the refresh diff, then add the "
+            "(model, variant) pair to ACCEPTED_VARIANT_DRIFT in this file to acknowledge it."
+        )
 
     def test_patterns_are_compiled(self, sugg):
         """All pattern fields are compiled re.Pattern objects (not raw strings)."""
