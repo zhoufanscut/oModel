@@ -121,13 +121,14 @@ CATEGORY_NAMES = {
     "unspecified-high", "unspecified-low", "visual-engineering", "writing",
 }
 
-# (model_id, variant) pairs where omo's own chain asks for a variant its own family registry
-# does not declare — see test_chain_variants_are_declared_by_their_family. Keyed by model, NOT
-# by target: one upstream inconsistency reaches several chains (kimi-k3@max lands in three),
-# and omo moving it to a fourth next week is not new information. Reviewed and accepted for
-# omo 4.19.2; resolve._variant_warn renders each as a ⚠ warn-but-allow row, so nothing breaks
-# — the pin exists so the NEXT one gets a human look, not to force a fix that is upstream's
-# to make. Prune an entry once omo stops emitting it (a stale one never fails the test).
+# (model_id, variant) pairs where omo's chain asks for a variant the heuristic family registry
+# does not declare — see test_chain_variants_are_declared_by_their_family for what that does and
+# does not imply (short version: the chain is right, the heuristic is narrow, and it only shows
+# as a ⚠ when opencode --verbose is silent). Keyed by model, NOT by target: one such pair reaches
+# several chains (kimi-k3@max lands in three), and omo moving it to a fourth next week is not new
+# information. Reviewed against opencode's own variant sets and accepted for omo 4.19.2 — the pin
+# exists so the NEXT pair gets the same look, not to force a fix anyone owes. Prune an entry once
+# omo stops emitting it (a stale one never fails the test).
 ACCEPTED_VARIANT_DRIFT = {
     ("claude-fable-5", "xhigh"),
     ("kimi-k3", "max"),
@@ -223,11 +224,20 @@ class TestBundledSuggestionsLoad:
         itself?" — the two disagree when omo adds a variant to a chain but not to the family
         registry (omo 4.19.2: claude-fable-5@xhigh, kimi-k3@max).
 
-        This is NOT a correctness failure for oModel. resolve._variant_warn falls back to
-        `family.variants` exactly when opencode `--verbose` is silent, so each such entry
-        renders a ⚠ warn-but-allow row — by design it never blocks a pick. What makes it worth
-        a test is WHERE they land: top-of-chain entries, so the TUI puts a warning triangle on
-        omo's own first recommendation. A weekly --refresh-omo should not add one unnoticed.
+        A hit is NOT a defect in omo's chain, and usually not visible at all. The registry is
+        omo's HEURISTIC_MODEL_FAMILY_REGISTRY — its guess for models it has no real data on,
+        never a normative capability list. Checked against opencode, both 4.19.2 entries are
+        simply RIGHT and the heuristic is the narrow one: opencode/claude-fable-5 reports
+        low/medium/high/xhigh/max, moonshotai-cn/kimi-k3 reports low/high/max.
+
+        So this pin guards the DEGRADED path, not the normal one. _variant_warn prefers
+        `--verbose` and falls back to `family.variants` only when opencode is silent for that
+        (provider, model) — an expired or cold cache, opencode missing from PATH, or a
+        dedicated provider reporting `{}`. In exactly those states a chain entry listed here
+        renders a spurious ⚠ warn-but-allow row; with a warm cache it renders clean. It never
+        blocks a pick either way (decision #5). Worth a test because the entries land
+        top-of-chain, so when a user IS degraded the triangle sits on omo's first
+        recommendation — and a weekly --refresh-omo should not add one unnoticed.
 
         Models with no detected family (e.g. big-pickle) are skipped — no declaration to
         check against. Comparison is case-insensitive, mirroring _variant_warn.
