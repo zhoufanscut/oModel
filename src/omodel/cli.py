@@ -5,12 +5,19 @@ entrypoint ([project.scripts] omodel = "omodel.cli:main") and returns a process 
 
 Two audiences, one parser:
 
-  * **A human** runs `omodel` (the TUI) or one of the original flat flags — `--print`,
-    `--check`, `--restore`, `--refresh-omo`, `--refresh-models`, `--version`. Every one of
-    those still behaves exactly as it did; they predate the subcommands and are not deprecated.
+  * **A human** runs `omodel` (the TUI) or one of the flat flags — `--print`, `--check`,
+    `--restore`, `--refresh-omo`, `--refresh-models`, `--update`, `--version`. Every one of the
+    originals still behaves exactly as it did; they predate the subcommands and are not
+    deprecated.
   * **An LLM agent** runs the SUBCOMMANDS: `agent-guide`, `targets`, `show`, `candidates`,
     `check`, `set`, `clear`, `apply`, `preset`. These emit machine-readable JSON (`--json`) and
     branch on exit codes. `omodel agent-guide` prints the whole contract; start there.
+
+`--update` is a FLAG and not a subcommand on purpose: the subcommand surface is the agent
+surface, and updating omodel itself is neither a model change nor something an agent should do
+mid-task — it would swap the binary it is running. It belongs with `--refresh-omo` /
+`--refresh-models`, the other two "maintain the tool, not the models" flags, and like them it
+reads no config.
 
 Both go through `session.Session`, so the CLI applies the same provider prefixing, variant
 rules, GPT-only lock, backups and config-equals-active-preset invariant the TUI does. That is
@@ -90,6 +97,11 @@ def _main(argv: list | None = None) -> int:
         print(omodel.__version__)
         return EXIT_OK
 
+    misuse = _flag_misuse(args)
+    if misuse is not None:
+        print(f"usage error: {misuse}", file=sys.stderr)
+        return EXIT_USAGE
+
     command = getattr(args, "command", None)
     if command is not None:
         return _dispatch_command(command, args)
@@ -104,6 +116,11 @@ def _main(argv: list | None = None) -> int:
     # --refresh-models: force opencode upstream re-fetch + rebuild our cache
     if args.refresh_models:
         return _cmd_refresh_models()
+
+    # --update: update omodel ITSELF from its GitHub releases. The only flag that touches the
+    # network, and the only flat one that can return EXIT_REJECTED.
+    if args.update:
+        return _cmd_update(force=args.force, assume_yes=args.yes, as_json=args.json)
 
     # --restore: list backups and prompt the user to pick one
     if args.restore:
@@ -131,6 +148,42 @@ def _main(argv: list | None = None) -> int:
         _print_config_parse_error(exc)
         return EXIT_ERROR
     return EXIT_OK
+
+
+def _flag_misuse(args) -> str | None:
+    """The message for a flag combination that would otherwise be silently ignored, else None.
+
+    Moving `--update`'s modifiers onto the MAIN parser bought a real cost: argparse accepts every
+    top-level flag on every run, so `omodel --update show` parsed cleanly and ran `show` —
+    ignoring the flag the user actually typed — and `omodel --json --print`, which used to exit 2
+    on an unrecognized `--json`, quietly printed prose to a caller waiting for a JSON object.
+    Both are worse than an error, so the error comes back here.
+
+    Scope is deliberately narrow: only the flags this change ADDED. `omodel --check show` was
+    already accepted-and-ignored before any of this, and re-litigating it would be a behaviour
+    change smuggled in under a bug fix."""
+    command = getattr(args, "command", None)
+    flat_action = any((args.print_models, args.check, args.restore,
+                       args.refresh_omo, args.refresh_models))
+
+    if args.update and (command is not None or flat_action):
+        if args.check:
+            return ("--update cannot be combined with --check (they are different checks). To "
+                    "see what is available without installing it, run `omodel --update` and "
+                    "answer no, or `omodel --update --json`.")
+        return "--update cannot be combined with another command or flag; run it on its own."
+    if args.yes and not args.update:
+        return "--yes only means something with --update."
+    # `set`/`apply` own a real `--force`, and it reaches them in either order (their subparser
+    # copies use SUPPRESS). Everywhere else it is update-only.
+    if args.force and not args.update and command not in ("set", "apply"):
+        return "--force only means something with --update, `set` or `apply`."
+    # Every subcommand accepts --json in either position — except `agent-guide`, which prints a
+    # document and never had it (`omodel agent-guide --json` exits 2, so the pre-verb spelling
+    # must too rather than being the one silently-ignored survivor).
+    if args.json and not args.update and command in (None, "agent-guide"):
+        return "--json only means something with --update or a JSON subcommand."
+    return None
 
 
 def _dispatch_command(command: str, args) -> int:
@@ -224,6 +277,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Force `opencode models --refresh` and rebuild the local ~/.cache/omodel cache.",
     )
     parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Update omodel itself to the latest GitHub release.",
+    )
+    # Modifiers that mean something ONLY alongside --update. Kept as plain names rather than
+    # invented `--update-yes`/`--update-force` ones: the subcommands already spell them this
+    # way, and three more `--update-*` entries would read as four features instead of one.
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="With --update: don't ask for confirmation (for scripts and cron).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --update: reinstall even when already on the latest release.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help=f"Machine-readable JSON (schema {SCHEMA}) — for --update and the subcommands below.",
+    )
+    parser.add_argument(
         "--version",
         action="store_true",
         help="Print the omodel version and exit.",
@@ -233,7 +309,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # subparser's own `--config=None` would overwrite a value the MAIN parser already parsed,
     # so `omodel --config X show` would silently fall back to the default config. With SUPPRESS
     # the attribute is set only when the flag is actually given, and both orders work —
-    # `omodel --config X show` and `omodel show --config X`. Agents write the second.
+    # `omodel --config X show` and `omodel show --config X`. Agents write the second. The same
+    # now applies to `--json`, which the main parser also owns (for `--update`).
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--config", metavar="PATH", default=argparse.SUPPRESS,
@@ -301,7 +378,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_set.add_argument("--variant", metavar="V", help="Variant to write (omit for none).")
     p_set.add_argument("--dry-run", action="store_true", dest="dry_run",
                        help="Preview the change and write nothing (--json carries the diff).")
-    p_set.add_argument("--force", action="store_true",
+    # SUPPRESS for the same reason `--config` has it: the main parser owns a `--force` too (for
+    # `--update`), and a subparser default of False would silently swallow `omodel --force set …`
+    # — a flag the caller passed, ignored, with the write then refused for the reason they were
+    # trying to override.
+    p_set.add_argument("--force", action="store_true", default=argparse.SUPPRESS,
                        help="Write despite an unavailable model or invalid variant.")
 
     p_clear = subs.add_parser(
@@ -324,7 +405,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_apply.add_argument("--dry-run", action="store_true", dest="dry_run",
                          help="Preview the change and write nothing (--json carries the diff).")
-    p_apply.add_argument("--force", action="store_true",
+    p_apply.add_argument("--force", action="store_true", default=argparse.SUPPRESS,
                          help="Write despite unavailable models or invalid variants.")
 
     p_preset = subs.add_parser(
@@ -1051,6 +1132,189 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
     _emit({"ok": True, "action": "rm", "name": removed.name},
           as_json, lines=[f"deleted preset '{removed.name}'"])
     return EXIT_OK
+
+
+# Which UpdateError kinds are a REFUSAL (exit 3, "do this other thing") rather than a FAILURE
+# (exit 1, "omodel broke"). The split is the same one the rest of the agent surface makes: a 3
+# always comes with something the caller can do instead — run the printed command, use a
+# supported platform, fix the permissions. Anything else (network, checksum, a binary that won't
+# run) is a 1. Nothing here ever leaves a half-installed omodel: see update.apply_update.
+_UPDATE_REFUSALS = frozenset({"not_self_updatable", "unsupported_platform", "not_writable"})
+
+
+def _update_exit(kind: str) -> int:
+    return EXIT_REJECTED if kind in _UPDATE_REFUSALS else EXIT_ERROR
+
+
+def _cmd_update(force: bool, assume_yes: bool, as_json: bool) -> int:
+    """`--update` — update omodel itself from its GitHub releases.
+
+    A flat flag, not a subcommand: the subcommands are the agent surface, and this one edits no
+    config at all. It is deliberately absent from `agent-usage.md` too — an agent that replaces
+    the binary it is running, mid-task, has not made a model change.
+
+    **It asks before it swaps anything**, like `--restore` does before it overwrites your config,
+    and for the same reason: the user typed a verb, not a consent. That is also why there is no
+    separate `--update-check` — declining the prompt IS the check, and one flag with an obvious
+    escape beats two flags that differ in what they do to your disk. Three things stand in for a
+    "no": answering anything but `y`, having no TTY to answer on, or asking for `--json`. In
+    those last two the release is reported and nothing is installed, so `omodel --update --json`
+    is the machine-readable check with nothing extra to learn. `--yes` is the way to mean it.
+
+    The only network call omodel ever makes, and only when this flag is passed — there is no
+    launch-time version ping. See DESIGN §update.py."""
+    import omodel
+    from omodel import update as update_mod
+
+    current = omodel.__version__
+    install = update_mod.detect_install()
+
+    try:
+        release = update_mod.latest_release()
+    except update_mod.UpdateError as exc:
+        return _fail(exc.kind, str(exc), as_json, code=EXIT_ERROR,
+                     current=current, install=install.kind)
+    except Exception as exc:      # backstop — see the one on apply_update below
+        _print_traceback()
+        return _fail("failed", f"{type(exc).__name__}: {exc}", as_json, code=EXIT_ERROR,
+                     current=current, install=install.kind)
+
+    available = update_mod.is_newer(release.tag, current)
+    # Every key below is present on every path THAT GOT A RELEASE — success, refusal or decline
+    # — so a consumer needn't work out which branch produced the payload (`confirmed` flips to
+    # True only when it is). The one exception is above: a failure to reach the API has no
+    # release to describe, so it carries only the refusal shape plus `current`/`install`.
+    payload = {
+        "current": current,
+        "latest": release.version,
+        "tag": release.tag,
+        "update_available": available,
+        "install": install.kind,
+        "path": install.path,
+        "url": release.url,
+        "changed": False,
+        "confirmed": False,
+    }
+
+    if not available and not force:
+        # "ahead of" rather than "is the latest" when they differ: a dev running a locally-built
+        # 0.4.0 should not be told 0.3.0 is the release they are on.
+        same = update_mod.parse_version(current) == update_mod.parse_version(release.version)
+        _emit(payload, as_json, lines=[
+            f"omodel {current} is the latest release." if same
+            else f"omodel {current} is ahead of the latest release ({release.version}).",
+        ])
+        return EXIT_OK
+
+    if not install.self_updatable:
+        # pipx/uv/pip/a checkout own their install trees. Printing the exact command beats
+        # reaching into someone else's venv and leaving it half-written. Exit 3 even when we
+        # were never going to prompt: the caller asked to update, and the answer — "not by me,
+        # run this" — is the same one whether or not a TTY was there to confirm on.
+        command = install.command_for(release.tag)
+        payload["command"] = command
+        return _fail(
+            "not_self_updatable",
+            f"this omodel was installed with {install.kind}, so --update cannot replace it "
+            f"(that only works for the standalone binary). Run:  {command}",
+            as_json, **payload,
+        )
+
+    # Everything that makes the update impossible, BEFORE the prompt — being asked to confirm a
+    # swap and only then told this platform has no binary is a question that shouldn't be put.
+    try:
+        update_mod.preflight(install, release)
+    except update_mod.UpdateError as exc:
+        return _fail(exc.kind, str(exc), as_json,
+                     code=_update_exit(exc.kind), **payload)
+
+    if not _confirm_update(current, release, assume_yes, as_json):
+        _emit(payload, as_json, lines=[])   # the prose was already printed by the prompt
+        return EXIT_OK
+    payload["confirmed"] = True
+
+    # Prose prints progress as it goes; --json must stay ONE object on stdout, so its steps go
+    # nowhere (the payload reports the outcome).
+    try:
+        result = update_mod.apply_update(
+            release, install, on_step=None if as_json else _update_step,
+        )
+    except update_mod.UpdateError as exc:
+        payload["command"] = install.command_for(release.tag)
+        return _fail(exc.kind, str(exc), as_json, code=_update_exit(exc.kind), **payload)
+    except Exception as exc:
+        # Backstop. Everything below this call is network- and filesystem-facing, and an
+        # unforeseen exception type escaping here would exit 1 with a traceback and — on the
+        # surface that promises a single JSON object — an EMPTY stdout. `http.client`'s
+        # HTTPException family reached exactly that (it is not an OSError); the specific hole is
+        # closed in update.py, but the class of hole is what this catches.
+        _print_traceback()
+        payload["command"] = install.command_for(release.tag)
+        return _fail("failed", f"{type(exc).__name__}: {exc}", as_json,
+                     code=EXIT_ERROR, **payload)
+
+    payload.update({"changed": True, "previous": current, "installed": result.version,
+                    "path": result.path, "verified": result.verified})
+    lines = [f"Updated omodel {current} → {result.version}", f"  {result.path}"]
+    if not result.verified:
+        lines.append("  (this release published no checksum — the new binary was still run "
+                     "before being installed)")
+    _emit(payload, as_json, lines=lines)
+    return EXIT_OK
+
+
+def _update_step(message: str) -> None:
+    print(message)
+
+
+def _print_traceback() -> None:
+    """Put the traceback on STDERR before a backstop swallows the exception.
+
+    Without it the backstop trades one problem for another: `--json` gets its single object, and
+    whoever has to fix the bug gets one line with no file and no line number — on exactly the
+    network/filesystem paths most likely to surprise us, reported by a user who will not be
+    running it again. stdout stays clean, which is the only thing the JSON contract promises."""
+    import traceback
+    traceback.print_exc()
+
+
+def _confirm_update(current: str, release, assume_yes: bool, as_json: bool) -> bool:
+    """Ask before replacing the binary. True = go ahead.
+
+    Three ways to mean "no" and only one to mean "yes", because the cost is asymmetric: a
+    declined update costs one more command, an unwanted one silently swaps the program the user
+    is in the middle of using.
+
+      * `--yes` — the one deliberate yes; for cron and dotfiles.
+      * `--json` — a caller reading a payload cannot answer a prompt, and printing one would
+        break the single-object contract. Report and stop.
+      * no TTY — piped, redirected, or in CI. `input()` would raise EOFError anyway; better to
+        say what is available and how to take it than to fail on a question nobody was asked.
+
+    Ctrl-C / Ctrl-D at the prompt are a "no", not an error (`--restore` treats them as exit 1 —
+    but that one interrupts a *listing*, where there was nothing to decline yet)."""
+    if assume_yes:
+        return True
+
+    header = [f"omodel {current} → {release.version} is available", f"  {release.url}"]
+    if as_json or not sys.stdin.isatty():
+        if not as_json:
+            for line in header:
+                print(line)
+            print("Run `omodel --update --yes` to install it.")
+        return False
+
+    for line in header:
+        print(line)
+    try:
+        answer = input("Update now? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        answer = ""
+    if answer in ("y", "yes"):
+        return True
+    print("Cancelled.")
+    return False
 
 
 def _is_none_variant(variant) -> bool:

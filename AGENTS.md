@@ -36,6 +36,7 @@ omodel                           # launch TUI
 omodel --check                   # CI-safe dry-run resolve (exit 0; degrades w/o opencode)
 omodel --print                   # resolved models, no UI
 omodel --config /tmp/x.jsonc     # ALWAYS use a temp path when testing saves
+omodel --update --json           # newer omodel? (the only network call; --json never installs)
 
 # Agent surface (JSON + exit codes; see `omodel agent-guide` for the full contract)
 omodel targets --json
@@ -152,6 +153,20 @@ data/omo-suggestions.json ──────────────► suggesti
   distinct from `--check` (always exit 0, CI-safe) — don't merge them.
 - **`refresh.py` + `tools/snapshot_omo.ts`** — maintainer-time regeneration of the bundled data. The
   extractor runs under **bun** (node can't resolve omo's extensionless `.ts` imports).
+- **`update.py`** — `omodel --update`: the **only** runtime network access in the codebase, and only
+  when that verb runs (there is deliberately no launch-time version check — "no network call
+  needed at runtime" is a property, not an oversight). Stdlib only. It self-updates **just** the
+  PyInstaller binary, by downloading the release tarball, verifying its published sha256, and
+  **running the new binary's `--version` before `os.replace`-ing it over the old one** — every
+  failure path leaves the installed binary byte-for-byte untouched. pipx/uv/pip/source installs
+  get a tag-pinned command and exit 3. It **confirms before swapping** (`--yes` skips; `--json`
+  and a missing TTY decline by construction, which is why there is no separate `--update-check`),
+  and every reason an update is impossible is raised by `preflight` **before** that prompt.
+  `_open` is the single network seam — https-only, and its reads catch
+  `http.client.HTTPException` as well as `OSError` (`IncompleteRead` is not an `OSError`, and it
+  escaped as a traceback with empty `--json` stdout); tests monkeypatch `_open`, or `_opener` one
+  level lower to exercise `_open` itself, so no test ever reaches api.github.com. It is a **flat flag, not a subcommand**, and is **not** in
+  `agent-usage.md` on purpose: an agent replacing the binary it is running is not a model change.
 
 ### The integration seam: the candidate-row dict
 
@@ -218,6 +233,11 @@ before changing any public signature or shared shape.
 - `src/omodel/data/omo-suggestions.json` is generated (do not hand-edit); regenerate via `--refresh-omo`,
   which CI also runs weekly (`refresh-suggestions.yml`) to open a PR on change. It is derived from omo
   (Sustainable Use License) — keep `NOTICE` attribution intact when redistributing.
+- **Three files agree on the release asset names** and must be changed together: `release.yml`
+  (what gets built + uploaded), `install.sh` (first install) and `update.py` (`platform_asset`,
+  every install after that). `omodel-<os>-<arch>.tar.gz` + `.sha256` is a contract, not a detail —
+  dropping the checksum asset silently downgrades both the installer and the updater to
+  unverified, and renaming the tarball breaks `--update` for everyone already installed.
 - Distribution is **GitHub-only, no PyPI**: `release.yml` builds PyInstaller one-file binaries on `v*`
   tags (**linux-x64 + darwin-arm64 only** — Intel-mac `darwin-x64` was dropped in 0.2.0; those runners
   are being retired, and Intel macs install via pipx); `install.sh` is the curl|sh installer. Non-Python payload

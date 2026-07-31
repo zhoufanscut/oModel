@@ -32,6 +32,9 @@ prefix and a valid variant, and saves a clean config.
   `requires-python` ≤ our floor (verify at lock time, else bump floor to 3.10).
 - **`opencode` CLI** on `PATH` — the source of "what you have". Degrades gracefully if missing or failing.
 - **No** dependency on a local omo checkout or omo cache at runtime.
+- **No network access at runtime** — with exactly one opt-in exception, `omodel --update`, which
+  reaches api.github.com only when that flag is passed (decision #19, §update.py). Launching the
+  TUI, resolving, and every JSON verb work offline.
 - **`bun`** (NOT node) is required **only** for the optional `omodel --refresh-omo` — see §Refresh.
   Verified: `node --experimental-strip-types` cannot run omo's modules (extensionless relative
   imports → `ERR_MODULE_NOT_FOUND`); bun resolves them.
@@ -58,6 +61,7 @@ prefix and a valid variant, and saves a clean config.
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub/delete-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
 | 17 | Presets | **Named presets ARE the working state** (as many as you keep — seeded with one `default`), in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json`). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` adds one holding the current models (as does `enter` on the trailing `+ add preset…` row) — it is row-blind and never overwrites; `r` renames; `x` refuses on the active one (so you can never reach zero). **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
 | 18 | Agent surface | **omodel is a tool an LLM agent can call**, not only a TUI a human drives: JSON subcommands (§CLI) over a headless `session.py` that `app.py` and `cli.py` BOTH edit through. The alternative — leaving the CLI read-only — was rejected because an agent asked to change a model would then hand-edit `oh-my-openagent.jsonc`, bypassing provider prefixing, variant validity, the GPT-only lock, the backup and the preset invariant: exactly the failure mode oModel exists to prevent. So the extraction is the point, and the verbs are the cheap part. `session.py` must never import Textual (cli.py's lazy-import discipline depends on it). |
+| 19 | Self-update | **`omodel --update` updates the program, on demand, after asking.** A flat flag, not a subcommand: the subcommands are the agent surface (#18), and this one edits no config and is not a model change. No launch-time version check and no background poll — decision #1's "self-contained, no runtime coupling" covers the network too, and a TUI that phones home on every start to say "0.3.1 is out" has spent a socket timeout on the path where the user wanted a model picker. It **confirms before swapping** (like `--restore`), which is why there is no `--update-check`: declining is the check, `--json`/no-TTY decline by construction, `--yes` is the one way to mean it. Only the **standalone binary** is replaced in place (download → published sha256 → **run the new binary and require the release's version back** → `os.replace`); pipx/uv/pip/source installs get a tag-pinned command and exit 3, because writing into a tree another package manager owns is how you end up with a venv and no way back. The rejected alternative — "just re-run `install.sh`" — works, but is unfindable from inside the tool and re-downloads with no version comparison at all. See §update.py. |
 
 ## Data sources
 
@@ -123,6 +127,7 @@ omodel --refresh-omo [--omo-src P]  # regenerate bundled suggestion data from an
 omodel --print                  # print current resolved agent/category models, no UI
 omodel --check                  # dry-run: resolve candidate lists for every target, exit 0 (CI-safe; degrades to suggestions-only if `opencode` absent)
 omodel --refresh-models         # force `opencode models --refresh` + rebuild the ~/.cache/omodel cache
+omodel --update [--yes] [--force]   # update omodel ITSELF from its GitHub releases (asks first)
 omodel --version
 ```
 
@@ -137,6 +142,36 @@ omodel clear <target> [--dry-run] [--json]
 omodel apply [--dry-run] [--force] [--json]   # batch assignments from stdin JSON, ONE save
 omodel preset ls|use <name|index>|new <name>|rm <name> [--json]
 ```
+
+**`--update` is a FLAG, not a subcommand** — the line between the two surfaces is what it is for.
+The subcommands are the agent surface; updating omodel itself edits no config, is not a model
+change, and is not something an agent should do mid-task (it would swap the binary it is running
+on). Its cousins are `--refresh-omo` / `--refresh-models`: maintain the tool, not the models. It
+is absent from `agent-guide` for the same reason. It keeps the 1-vs-3 split the rest of the CLI
+uses: an environmental refusal the caller can act on (`not_self_updatable` → run the printed
+command, `unsupported_platform`, `not_writable`) is a **3**; a real failure (network, checksum, a
+binary that won't run) is a **1**. → §update.py
+
+**It asks before swapping anything**, as `--restore` does before overwriting a config: the user
+typed a verb, not a consent. There is therefore **no `--update-check`** — declining the prompt is
+the check, and one flag with an obvious escape beats two that differ in what they do to your
+disk. Three things stand in for "no": answering anything but `y`, **having no TTY** (piped,
+redirected, CI — `input()` could only raise), and **`--json`** (a caller reading a payload cannot
+answer, and a prompt would break the single-object contract). In the last two the release is
+reported and nothing is installed, so `omodel --update --json` *is* the machine-readable check.
+`--yes` is the one way to mean it; `--force` (reinstall at the same version) changes what counts
+as an update, not whether you agreed to it, so it still asks. Every refusal — `not_self_updatable`
+and all of `preflight`'s — comes **before** the prompt: there is nothing to confirm when the
+answer is "not by me" or "not on this machine".
+
+**The main parser now owns `--yes`/`--force`/`--json`, and argparse accepts every top-level flag
+on every run** — so combinations that used to exit 2 on an unrecognized argument started parsing
+cleanly and doing something else (`omodel --update show` ran `show` and dropped the update;
+`omodel --json --print` printed prose to a caller awaiting an object). `cli._flag_misuse` puts
+the exit 2 back, scoped strictly to the flags this added: `omodel --check show` was
+accepted-and-ignored long before, and tightening *that* would be a behaviour change smuggled in
+under a fix. The subcommands' own `--force`/`--json` keep `default=SUPPRESS` so both orders still
+reach them (§CLI, `--config`'s rule).
 
 **Exit codes** (the agent surface's real contract — `0` success, `1` omodel failed, `2` usage,
 `3` **refused by a guard**). The 1-vs-3 split is load-bearing: an agent that can't distinguish
@@ -926,6 +961,85 @@ and prints JSON matching the §Data sources "what omo suggests" schema: each Reg
 (`omoVersion` from omo's `package.json`, `omoCommit` from `git rev-parse`, `generatedAt`). `refresh.py`
 runs `bun run <this file> <omo-src>` and writes stdout to the data file.
 
+### `update.py` — `omodel --update` (self-update from GitHub Releases)
+
+The **only** module that touches the network at runtime, and only when the verb is run. There is
+**no launch-time version ping**: "no network call needed at runtime" (§Runtime requirements) is a
+property worth more than a nag line, and a check on every launch would spend a socket timeout on
+the path where the user just wants the TUI. Stdlib only (`urllib` + `tarfile` + `hashlib`) — a
+dependency added here would ship inside the very binary this replaces.
+
+- **What "update" means depends on how omodel was installed** (`detect_install` → `Install`):
+  `binary` (PyInstaller one-file — `sys.frozen`, `realpath(sys.executable)`, the only
+  self-updatable kind) · `pipx` / `uv` (recognized from `sys.prefix`) · `source` (src-layout +
+  `pyproject.toml` + `.git` → an editable install) · `pip` (anything else). For every kind but the
+  first, `update` **prints the exact command and exits 3** rather than reaching into another
+  package manager's tree. Those commands are **tag-pinned** (`pipx install --force
+  "git+https://…@v0.4.0"`): `pipx upgrade` / `pip install -U` re-resolve a `git+` spec against the
+  default branch, which is not necessarily the release we just named.
+- **Everything that makes an update impossible is checked BEFORE the prompt** (`preflight`:
+  install kind, platform, a writable install *directory* — `os.replace` needs the directory, not
+  the file — and the asset's presence in the release). Asking "Update now? [y/N]", getting a yes,
+  and only then saying "this platform has no binary" is a question that should never have been
+  put. `apply_update` repeats it: it is a public entry point and has to be safe alone.
+- **The swap** (`apply_update`), in this order, on the standalone binary:
+  1. temp dir **inside the target's own directory** — `os.replace` is atomic only within one
+     filesystem, and `$TMPDIR` is usually a different mount (`EXDEV`). Leftovers from a run that
+     was *killed* (no `finally` ever ran) are swept first, but only ones over an hour old — a
+     concurrent `--update` is the other reason one exists, and deleting its half-finished
+     download would be a self-inflicted failure. "Old" is the newest mtime of the directory **or
+     anything in it** (`_touched_at`), never the directory's own: a directory's mtime advances
+     when an entry is created or removed and **not** when a file inside it is written, so the
+     naive check measures time since `mkdtemp` and would sweep a live download that had been
+     running for an hour — and `DOWNLOAD_TIMEOUT` is per socket operation, not per transfer, so
+     a big asset on a bad link legitimately runs that long;
+  2. checksum against the release's published `.sha256`, same rule as `install.sh` — mismatch is
+     fatal, a *missing* checksum asset warns and continues (older releases have none) and reports
+     `verified: false` rather than implying a check that never ran;
+  3. extract **only** the `omodel` member, to a path we choose — never `extractall`, so a `..`
+     member has nowhere to write (3.9 has no `filter="data"`; this is the portable equivalent).
+     LICENSE/NOTICE ride in the tarball and are simply not written;
+  4. **run the downloaded binary's `--version` and require the release's version back.** The step
+     that earns its keep: a linux binary built against a newer glibc than this machine's (the
+     documented failure of the prebuilt asset), a truncated download, an asset uploaded from the
+     wrong build — each dies here with the *working* omodel still installed;
+  5. `os.replace` over the running executable. POSIX renames the directory entry, so the running
+     process keeps its inode and finishes normally — you cannot *write* a busy executable
+     (`ETXTBSY`), but you can always replace one. Mode is inherited from the old file, so a
+     deliberately-restricted install stays restricted. The staged file is **fsynced before** the
+     rename (and the directory after): `os.replace` is atomic against a concurrent *reader*, not
+     against power loss, and a rename that reaches disk ahead of the data it names is a
+     zero-length `omodel` — the exact broken install this section promises cannot happen. Both
+     fsyncs are **best-effort**: some FUSE/network mounts refuse them outright, and since there
+     was no durability guarantee here at all before, a refused fsync must not turn a working
+     update into a failed one.
+  Every failure path leaves the existing binary **byte-for-byte untouched** and the temp dir gone.
+- **Network errors are not all `OSError`.** `http.client.IncompleteRead` (a body cut mid-transfer)
+  descends from `HTTPException`, so it walks straight through an `except OSError` — out of the
+  module, out of the verb's `except UpdateError`, and onto the terminal as a traceback with an
+  **empty `--json` stdout**. Every read catches `(OSError, HTTPException)`, and `cli._cmd_update`
+  keeps a typed backstop so no future surprise can break the single-object contract either. That
+  backstop prints the **traceback to stderr** before swallowing: stdout is all the JSON contract
+  covers, and a one-line `RuntimeError: …` from a user who will never run it again is not a bug
+  report.
+- **https only, on every hop.** `build_opener` keeps urllib's default File/FTP/Data handlers, and
+  the download URL is read straight out of the release JSON — so `_open` refuses any non-https
+  scheme rather than let a `file:///…` asset URL be "downloaded", and `_StripAuthOnRedirect`
+  refuses to follow a redirect to one (`_open` sees only the first URL).
+- **Auth is optional and one-way.** `$GITHUB_TOKEN`/`$GH_TOKEN`, when set, is sent to
+  api.github.com only — purely to dodge the 60-req/hour unauthenticated limit on a shared NAT.
+  Asset downloads never carry it, and `_StripAuthOnRedirect` drops the header when a redirect
+  crosses hosts **or downgrades to http** (GitHub sends asset URLs to
+  `objects.githubusercontent.com`, and urllib otherwise re-sends the original headers there).
+- **`detect_install` requires `sys.frozen` AND `sys._MEIPASS`** for the `binary` verdict. `frozen`
+  alone is a convention several freezers and embedders set, and what we do with that verdict is
+  `os.replace` over `sys.executable` — mistaking a real interpreter for our binary would
+  overwrite *it*, and the smoke test cannot catch that (it validates the download, never the
+  target). Anything else falls through to a printed command, which is the safe way to be wrong.
+- Version comparison is a lenient tuple parse (`v0.3.1` → `(0,3,1)`; `0.4` == `0.4.0`); an
+  **unparseable tag is never "newer"**, since the cost of that mistake is swapping the user's
+  binary for nothing. `releases/latest` (not `releases[0]`) leaves drafts/pre-releases to GitHub.
+
 ### Textual two-pane contract (`app.py`)
 - **Rendering user data is never a plain `str` (hard rule).** Textual parses *content markup* in
   every plain string it renders — a `Static`'s content, an `Option` prompt, a toast. Almost nothing
@@ -1178,6 +1292,12 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh`.
   The linux binary needs a glibc ≥ the `ubuntu-latest` builder's (documented in README; older
   distros → pipx/uvx path).
+- **Staying current — `omodel --update`:** the standalone binary updates itself from the same
+  Release assets `install.sh` reads (tarball + `.sha256`, `releases/latest`), which is why the
+  installer's asset naming is a contract and not an implementation detail: the two must agree on
+  `omodel-<os>-<arch>.tar.gz` forever, and a release that stops publishing the checksum silently
+  downgrades both to unverified. Every other install kind gets a tag-pinned command instead. →
+  §update.py
 - **Secondary — pip/pipx/uvx straight from GitHub (no PyPI):**
   `pipx install git+https://github.com/<you>/oModel` ·
   `uvx --from git+https://github.com/<you>/oModel omodel` ·

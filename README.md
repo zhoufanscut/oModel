@@ -82,6 +82,25 @@ uvx --from git+https://github.com/zhoufanscut/oModel omodel
 uv tool install git+https://github.com/zhoufanscut/oModel
 ```
 
+### Updating
+
+```sh
+omodel --update          # what's available? then it asks before installing
+omodel --update --yes    # no prompt (for scripts and cron)
+```
+
+`--update` tells you what's out and asks `Update now? [y/N]` — so it doubles as "is there
+anything new?", and saying no costs you nothing. It never prompts when there's no terminal to
+answer on (piped, redirected, CI) or when you asked for `--json`: it reports and stops.
+
+If you installed the standalone binary, saying yes replaces it in place: it downloads the release
+tarball, verifies its published sha256, and runs the new binary to confirm it works on this
+machine *before* swapping it in — so a bad download or a glibc mismatch leaves your working
+`omodel` untouched. If you installed with pipx / uv / pip, it prints the exact command for your
+install (it won't write into a tree another tool owns).
+
+This is the only thing in omodel that uses the network. Launching it does not check for updates.
+
 ### Maintainer / development
 
 ```sh
@@ -103,6 +122,7 @@ omodel --refresh-omo [--omo-src P]  # regenerate bundled suggestion data from an
 omodel --refresh-models         # force `opencode models --refresh` + rebuild the local cache
 omodel --print                  # print current resolved models, no UI
 omodel --check                  # dry-run CI check (exit 0; degrades if opencode absent)
+omodel --update [--yes]         # update omodel itself to the latest GitHub release (asks first)
 omodel --version
 ```
 

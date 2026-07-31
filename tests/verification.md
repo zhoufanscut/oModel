@@ -398,18 +398,63 @@ write is the thing to prevent.
 
 ---
 
+## Check 11 — Self-update (`omodel --update`)
+
+**Goal:** a released binary can replace itself from GitHub, and every way that can go wrong
+leaves the working binary in place. The unit suite covers the logic against a stubbed network;
+what it *cannot* cover is the real API, the real asset names, and a real PyInstaller binary
+smoke-testing another one — which is exactly the part that breaks when `release.yml` changes.
+
+```sh
+# Automated — hermetic (update._open is stubbed; no test ever reaches api.github.com)
+python -m pytest tests/test_update.py -q
+
+# Live, read-only: the real API, the real tag, no download
+omodel --update --json | jq '.current, .latest, .install, .update_available, .changed'
+```
+
+Then the real swap, against a **copy** — never your installed binary, and never a checkout
+(a source install correctly refuses, so it proves nothing):
+
+```sh
+mkdir -p /tmp/omodel-selfupdate && cp "$(command -v omodel)" /tmp/omodel-selfupdate/omodel
+/tmp/omodel-selfupdate/omodel --update --force --yes   # --force: reinstall even at the latest tag
+/tmp/omodel-selfupdate/omodel --version
+```
+
+**Expected:** `Downloading… / Verifying checksum… / Extracting… / Checking the new binary… /
+Updated omodel X → Y`, exit 0, the copy runs and reports the release's version, and
+`ls -a /tmp/omodel-selfupdate` shows **only** `omodel` (no `.omodel-update-*` left behind).
+Requires a PyInstaller-built binary — from a **source checkout** this exits 3 with a
+`git … checkout <tag>` command instead, which is the correct refusal, not a failure.
+
+Then the failure that matters most, since it is the one a user meets on a bad release day:
+
+```sh
+# Point it at a release whose asset can't run here, or corrupt the download, and confirm the
+# existing binary survives. Cheapest honest version — make the install dir unwritable:
+chmod 500 /tmp/omodel-selfupdate && /tmp/omodel-selfupdate/omodel --update --force --yes; echo "exit=$?"
+chmod 700 /tmp/omodel-selfupdate
+```
+
+**Expected:** exit **3** (a refusal you can act on, not "omodel broke"), a message naming the
+directory, and **nothing downloaded** — the check runs before the first byte.
+
+---
+
 ## Running all automated checks at once
 
 ```sh
 python -m pytest tests/ -x -q
 ```
 
-Expected outcome — every one of the 12 test files passes:
+Expected outcome — every one of the 13 test files passes:
 - `test_detect_family.py`, `test_catalog_parse.py`, `test_resolve.py`, `test_config_io.py`
 - `test_app_pilot.py` (the full Textual pilot suite — much the slowest; it dominates wall clock)
 - `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py`, `test_refresh.py`
 - `test_session.py` (the headless core both surfaces edit through) and
   `test_agent_surface_integration.py` (the CLI verbs end-to-end over a real temp config)
+- `test_update.py` (`omodel --update` — the swap, and every failure path leaving the binary alone)
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
-plus the 10 checks above run clean on the integration branch.
+plus the 11 checks above run clean on the integration branch.

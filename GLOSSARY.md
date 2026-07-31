@@ -94,6 +94,14 @@ line when a new one does.
 - **the two refreshes** — `--refresh-omo` rebuilds *"what omo suggests"* (bun + omo checkout);
   `--refresh-models` / `r` rebuilds *"what you have"* (re-runs opencode, busts the cache).
   → refresh.py vs catalog.refresh()
+- **`--update`** — ⚠ neither of those: it updates **omodel itself** from its GitHub releases (the
+  program, not the data, not the models), and asks before it does. A *flag*, not a subcommand —
+  the subcommands are the agent surface. The two refreshes never leave your machine; this is the
+  one thing that does. → DESIGN §update.py, decision #19
+- **install kind** — how *this* omodel got here, and therefore who may update it: `binary` (the
+  PyInstaller one-file from `install.sh` — the only self-updatable one) · `pipx` · `uv` · `pip` ·
+  `source`. Everything but `binary` gets a printed command, never a reach into someone else's
+  venv. → update.py `detect_install`
 - **cache** — the 24h on-disk cache of `opencode` CLI output (`~/.cache/omodel`). A perf layer, *not*
   an availability source. → cache.py
 - **stale-while-revalidate** — `variants_for` alone reads the cache at *any* age (`_STALE_OK`),

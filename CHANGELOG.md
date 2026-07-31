@@ -5,6 +5,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `omodel --update` — update omodel itself to the latest GitHub release. It tells you what's
+  available and asks before installing anything, so it doubles as "is there a newer version?"
+  and saying no costs nothing; `--yes` skips the prompt for scripts, and with `--json` or no
+  terminal to answer on it reports and stops. If you installed the standalone binary (the
+  `install.sh` path), saying yes replaces it in place: it downloads the release tarball, checks
+  it against the published sha256, and **runs the new binary and asks it for its version before
+  swapping it in**, so a download that arrived truncated — or a linux build that needs a newer
+  glibc than your machine has — leaves your working omodel exactly where it was. If you
+  installed with pipx, uv or pip instead, it prints the exact command for your install and exits
+  3 rather than writing into a tree another tool owns. This is the only time omodel talks to the
+  network; launching it still doesn't.
+
 ### Changed
 - Bundled omo suggestions refreshed to v4.19.2 (from v4.19.1): `claude-opus-4-8` → `claude-opus-5`
   throughout, `claude-fable-5` and `kimi-for-coding-highspeed` join the chains, `gpt-5.4-mini` →

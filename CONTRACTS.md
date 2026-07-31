@@ -212,12 +212,46 @@ commit.
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint). Constants `SCHEMA = 1`,
   `EXIT_OK/ERROR/USAGE/REJECTED = 0/1/2/3` — and those FOUR are the whole range: `main` flushes
   stdout itself and maps a closed one (`… | head`) to `EXIT_OK`, so the interpreter's shutdown
-  flush can't add a fifth code (120). See DESIGN §Exit codes.
+  flush can't add a fifth code (120). See DESIGN §Exit codes. The main parser owns `--yes`,
+  `--force` and `--json` for `--update`; because `set`/`apply` (`--force`) and every subcommand
+  (`--json`) declare their own, **those subparser copies MUST keep `default=SUPPRESS`** — without
+  it the subparser's False silently overwrites a flag the caller passed before the verb, and
+  `omodel --force set …` would refuse the write for the reason it was told to override. The other
+  half of that trade is `_flag_misuse`: argparse accepts every top-level flag on every run, so a
+  combination those three flags make meaningless (`--update` with a command, `--json` with a flat
+  flag) **must exit 2 rather than be ignored** — it used to, before they were global.
 - `refresh.py`: `refresh(omo_src=None)->int` (the `--refresh-omo` flag — bundled omo suggestion
   data; distinct from `catalog.refresh()`, which is opencode availability via `--refresh-models`).
+- `update.py`: `omodel --update` — the ONLY runtime network access in the codebase, and only when
+  that verb runs (no launch-time version check). `class UpdateError(Exception)` with `.kind` (the
+  `--json` `error`; `cli._UPDATE_REFUSALS` maps three of them to exit 3, everything else to 1);
+  `parse_version(text)->tuple` / `is_newer(candidate, current)->bool` (an unparseable tag is never
+  newer); `platform_asset()->str|None` (`omodel-linux-x64` · `omodel-darwin-arm64` · None —
+  **must track `release.yml`'s matrix and `install.sh`'s detection**); `@dataclass Install(kind,
+  path=None)` with `.self_updatable` and `.command_for(tag)` (kind ∈ `binary`/`pipx`/`uv`/`pip`/
+  `source`; commands are tag-pinned); `detect_install()->Install` (never raises — unknown layout
+  falls back to `pip`); `@dataclass Release(tag, version, url, published_at, assets)`;
+  `latest_release(timeout=META_TIMEOUT)->Release`; `preflight(install, release=None)->str` (every
+  reason an update is impossible, raised BEFORE `cli.py` prompts; returns the tarball asset name);
+  `@dataclass UpdateResult(path, version, verified)`; `apply_update(release, install,
+  timeout=DOWNLOAD_TIMEOUT, on_step=None)->UpdateResult` (calls `preflight` itself; **on ANY
+  failure the installed binary is byte-for-byte untouched**; `on_step` is prose-only progress —
+  `--json` passes None so stdout stays one object). `_open(url, timeout)` is the single network
+  seam — **https-only**, since `build_opener` keeps urllib's File/FTP/Data handlers and asset URLs
+  come from the release JSON; tests monkeypatch it (three patch `_opener` one level lower, to
+  exercise `_open` itself). Reads catch `(OSError, http.client.HTTPException)`: `IncompleteRead`
+  is **not** an OSError, and letting it escape produced a traceback with empty `--json` stdout.
+  `detect_install` requires `sys.frozen` **and** `sys._MEIPASS` for the `binary` verdict — the
+  verdict authorizes an `os.replace` over `sys.executable`. The **confirm** lives in
+  `cli._confirm_update`, not here: `--yes` is the only yes, and `--json` / no-TTY are a no (which
+  is why there is no `--update-check`). **MUST NOT import textual, app, session or config_io** —
+  `cli.py` imports it lazily, inside the flag's branch.
 
 ## Cross-module dependencies
 - `resolve.py` → `suggestions.py` + `catalog.py`.  `refresh.py` → `tools/snapshot_omo.ts`.
+- `update.py` is a leaf: stdlib + `omodel.__version__`, nothing else. It has no config, no
+  catalog and no session — it updates the program, not the models — and `cli.py` reaches it only
+  from inside the `update` verb.
 - `app.py` → all four modules + `history.py` + `presets.py` (Lead wires final).  `config_io.py` +
   CLI+packaging are near-independent.  `history.py` and `presets.py` are pure leaves (no omodel
   imports) — which is why `presets.fingerprint` re-implements `config_io._clean_agents`' empty-sub-
