@@ -343,6 +343,14 @@ oModel/
   `r` / `--refresh-models`, whose `cache.clear()` deletes the file outright and is therefore the only
   thing that makes a genuinely-removed variant disappear. Cheap by construction: **no extra subprocess**,
   since the read half is free and the write half was already happening.
+  **The exemption stops at anything that REFUSES.** `variants_for(..., stale_ok=False)` restores the TTL
+  for the CLI's hard variant guard (`cli._variant_offered` → `bad_variant` → exit 3) — stale data is
+  right for a marker you can overrule and a picker you can ignore, wrong for a rejection. That surface
+  has no revalidate half either (**`cli.py`/`session.py` never call `catalog.detail()`**), so a wrong
+  verdict there would stick until a human ran `--refresh-models`, and an agent branching on exit 3 would
+  back off from a valid variant indefinitely. Expired → `[]` → "no information" → allowed, as before.
+  `_validate`'s `bad_variant` message quotes that same guard set (`_variant_guard_set`) — a message
+  naming a set the guard didn't use would send an agent to retry with a doomed variant.
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
   worker (off the UI thread); `r` is documented in the `?` help overlay (the `oModel:` header shows
@@ -351,12 +359,25 @@ oModel/
   variant source above, so the candidate rows resolved before it landed are stale in the same breath
   (the `⚠ variant` marker). `_rows` is cleared and `#candidates` re-rendered — otherwise the rows stayed
   pinned until the next cfg mutation dropped that cache, i.e. the list visibly corrected itself the
-  moment you pressed enter. Two guards on that re-render: it is **skipped while a modal is open**
-  (`v`'s callback holds a row dict captured before the modal opened and drops the edit if `_rows[target]
-  [idx]` is no longer that same object — its way of yielding to an `r` refresh; rebuilding under it would
-  silently discard the variant just picked), and the whole block catches `NoMatches` (the daemon thread
-  outlives the widgets on `q`, and an exception out of a `@work` worker is a `WorkerFailed`, not a
-  no-op).
+  moment you pressed enter. Two guards on that re-render: it is **skipped under an open `VariantModal`**
+  (`v`'s callback holds a row dict captured before the modal opened and returns early if
+  `_rows[target][idx]` is no longer that same object — its way of yielding to an `r` refresh; rebuilding
+  under it drops the pick before `_pending_variants` sees it). That guard is **VariantModal-specific on
+  purpose**: gating on the whole screen stack meant a fetch landing under the `?` overlay skipped the
+  rebuild and *nothing ever retried it* — the completed fetch is cached, so no further fetch is
+  scheduled and a re-highlight hits the still-stale `_rows`. Second, the whole block catches `NoMatches`
+  (the daemon thread outlives the widgets on `q`, and an exception out of a `@work` worker is a
+  `WorkerFailed`, not a no-op).
+- **`_rows` is a CACHE, so nothing unpersisted may live in it.** A `v` pick on a row that is *not* the
+  current assignment reaches cfg only on Enter (only Enter assigns — §Events), so until then it is
+  pending state and it lives in **`_pending_variants`** (`{target: {"provider/model": variant}}`),
+  re-applied by `_build_rows` after `session.rows()`. It used to be an in-place mutation of the cached
+  row dict, which made any rebuild silently revert it to omo's suggested variant — tolerable while only
+  cfg mutations rebuilt rows, a data-loss bug once a landing background fetch did too (it fires on its
+  own schedule, so the pick vanished with no user action and a later Enter wrote omo's variant). Cleared
+  where the pick stops being pending: `_stage_row` (it reached cfg), `_restore_state` (not in the undo
+  aux, so undo/redo has nothing to restore) and `_refresh_catalog` (chosen from pre-refresh sets — same
+  reasoning as `_custom_rows`).
 - **Memory safety (load-bearing):** a spawned opencode subprocess can't be killed, so the detail fetch
   is **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
   *current* target, which schedules the next — "chase the cursor"). Uncapped/un-stubbed, stacked
@@ -903,7 +924,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   notifies `Press [b]{key}[/b] to quit the app`, whose tags then showed verbatim. `app.py` overrides
   `action_help_quit` rather than letting markup back through the choke point — and takes the chance
   to name **`q`**, since the `key` Textual resolves is its default `ctrl+q`, which exits via
-  `App.action_quit` with **no** unsaved-changes prompt (see §quit below).
+  `App.action_quit` with **no** unsaved-changes prompt (the `q` → QuitModal flow under §Events).
 - **Header** `Static#providers`: one line `oModel: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the

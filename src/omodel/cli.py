@@ -581,7 +581,7 @@ def _validate(session, target: str, value: str, variant, force: bool):
         return ("bad_input", f"variant must be a string or null, got {type(variant).__name__}")
 
     if not force and not _variant_offered(session, provider, model, variant):
-        offered = session.variants_for(provider, model)
+        offered = _variant_guard_set(session, provider, model)
         return ("bad_variant", (
             f"{variant!r} is not a variant of {value!r} "
             f"(opencode reports: {', '.join(offered)}) — or pass --force."
@@ -1065,13 +1065,28 @@ def _variant_offered(session, provider: str, model: str, variant) -> bool:
     information" (cache-only; dedicated providers report `{}`), never "no variants". The
     `.strip().lower()` normalization is shared by `_validate`, `check` and `_warn_for` on
     purpose: when they differed, a hand-edited `variant: " max "` was flagged by `check` and
-    accepted by `set`."""
+    accepted by `set`.
+
+    **`stale_ok=False` — the one caller that opts back into the 24h TTL.** This is a HARD guard
+    (→ `bad_variant`, exit 3), and a refusal must not rest on a file of unbounded age: `set`
+    rejecting a variant opencode added last week, on the strength of a cached set from before it
+    existed, is worse than not checking. This surface never calls `catalog.detail()` either, so
+    nothing re-warms the cache behind an agent — the wrong verdict would stick until a human ran
+    `--refresh-models`. Expired → `[]` → "no information" → allow. The `⚠` marker and the pickers
+    keep reading stale (see `Catalog.variants_for`): they annotate, they don't refuse."""
     if _is_none_variant(variant):
         return True
-    offered = session.variants_for(provider, model)
+    offered = _variant_guard_set(session, provider, model)
     if not offered:
         return True
     return str(variant).strip().lower() in [v.strip().lower() for v in offered]
+
+
+def _variant_guard_set(session, provider: str, model: str) -> list:
+    """The set `_variant_offered` refuses on — and therefore the ONLY set a `bad_variant` message
+    may quote. Keep the two reading the same call: a message naming a set the guard didn't use
+    would tell an agent to retry with a variant that is about to be rejected again."""
+    return session.variants_for(provider, model, stale_ok=False)
 
 
 def _warn_for(session, provider, model, variant) -> list:

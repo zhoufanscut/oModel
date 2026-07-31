@@ -1416,6 +1416,23 @@ class OModelApp(App):
         # _restore_state, so it moves in lockstep with undo/redo: undoing an add-model drops its
         # row, redoing brings it back. A refresh clears it (stored availability ⚠ would be stale).
         self._custom_rows: dict = {}
+        # `v` picks on a row that is NOT the current assignment, kept as
+        # {target: {"provider/model": variant|None}} and re-applied by _build_rows.
+        #
+        # Such a pick is deliberately not a cfg edit (only Enter assigns — DESIGN §Events), so it
+        # has to live somewhere until you press Enter. It used to live as an IN-PLACE mutation of
+        # the row dict inside `_rows`, which quietly made `_rows` load-bearing state rather than a
+        # cache — and anything that rebuilt it silently reverted the pick to omo's suggested
+        # variant. That was survivable while only cfg mutations rebuilt rows; it stopped being so
+        # once a landing background fetch did too (it fires on its own schedule, so the pick
+        # vanished with no user action at all, and a later Enter wrote omo's variant instead of
+        # the chosen one). Holding the pick OUTSIDE the cache makes `_rows` a true cache again,
+        # which is what lets the fetch worker invalidate it freely.
+        #
+        # Cleared exactly where the pick stops being pending: _stage_row (it reached cfg),
+        # _restore_state (undo/redo owns the staged state) and _refresh_catalog (same reasoning as
+        # _custom_rows — the model may not even survive the re-resolve).
+        self._pending_variants: dict = {}
         # Built last: entry 0's `aux` needs `_custom_rows` and the reconciled `_store` (see
         # _aux — the active preset index rides with every undo step). Reads self.cfg, not the
         # `cfg` parameter, which is None on the prebuilt-session path.
@@ -1957,6 +1974,16 @@ class OModelApp(App):
         # a re-highlight, and it is what makes the synthesized current-assignment row appear and
         # vanish in lockstep with cfg (every mutation drops it).
         rows = self.session.rows(target, self._custom_rows.get(target, []))
+        # Re-apply any pending `v` pick (see _pending_variants). session.rows() rebuilds chain
+        # rows from omo's fallbackChain, so without this the pick is reverted on every rebuild.
+        # `warn` is deliberately left alone: it is recomputed per (provider, model) by resolve
+        # and this only overrides the variant, matching what the in-place mutation used to do.
+        pending = self._pending_variants.get(target)
+        if pending:
+            for row in rows:
+                key = f"{row['provider']}/{row['model']}"
+                if key in pending:
+                    row["variant"] = pending[key]
         self._rows[target] = rows
         return rows
 
@@ -2075,13 +2102,19 @@ class OModelApp(App):
         # one fetched); they rebuild lazily on highlight, and _restore_cand_highlight puts the
         # cursor back by identity so a re-render under you is invisible.
         #
-        # …but NOT under an open modal. `v`'s callback (action_variant._apply) holds a row dict
-        # captured before the modal opened and drops the edit if `_rows[target][idx]` is no
+        # …but NOT under an open VariantModal. `v`'s callback (action_variant._apply) holds a row
+        # dict captured before the modal opened and RETURNS EARLY if `_rows[target][idx]` is no
         # longer that same OBJECT — its way of yielding to an `r` refresh. Rebuilding rows from
-        # under it here would trip that guard and silently discard the variant the user just
-        # picked (both modal-staging pilot tests caught exactly this). The detail line still
-        # updates; the rows correct on the next fetch or mutation, which is the rarer path than
-        # losing a keystroke's work.
+        # under it trips that guard, and the pick is dropped before it can reach
+        # `_pending_variants` (a pilot test covers exactly this).
+        #
+        # VariantModal specifically, NOT "any modal": that identity guard is the only holder of a
+        # cached row across a callback, and gating on the whole screen stack meant a fetch landing
+        # under, say, the `?` overlay skipped the rebuild — and then nothing ever retried it,
+        # because the completed fetch is cached so no further fetch is scheduled and a re-highlight
+        # hits the still-stale `_rows`. Rows stayed wrong for the rest of the session, which is the
+        # very bug this re-render exists to fix. The residual window is now one open VariantModal,
+        # and picking or dismissing it re-renders anyway.
         #
         # All of it is cosmetic, and this worker outlives the UI: `q` during an in-flight fetch
         # tears the widgets down while the daemon thread is still in opencode (it can't be
@@ -2091,7 +2124,7 @@ class OModelApp(App):
         if self._current_target is not None:
             try:
                 self._render_detail(self._current_target)
-                if len(self.screen_stack) <= 1:
+                if not any(isinstance(s, VariantModal) for s in self.screen_stack):
                     self._rows.clear()
                     self._render_candidates(self._current_target)
             except NoMatches:
@@ -2315,8 +2348,11 @@ class OModelApp(App):
         self.session.set_row(target, row)
         # The assignment changed, so _build_rows' synthesized current-off-chain row may no longer
         # apply (picked a chain model) or now describes a different model — drop the cache so it
-        # rebuilds from the new cfg value.
+        # rebuilds from the new cfg value. The pending `v` picks go with it: the variant is in cfg
+        # now (undo/redo carries it from there), so re-applying them would pin a stale override
+        # over whatever the assignment becomes next.
         self._rows.pop(target, None)
+        self._pending_variants.pop(target, None)
         self._refresh_right(target)
         self._record(label)
 
@@ -2574,6 +2610,12 @@ class OModelApp(App):
                     f"set {self._target_label(target)} variant → {chosen or '(none)'}",
                 )
             else:
+                # Not the assignment, so this pick reaches cfg only if you later press Enter —
+                # until then it is pending state, and it has to survive a rebuild of `_rows`
+                # (which is a cache, not a store). See _pending_variants.
+                self._pending_variants.setdefault(target, {})[
+                    f"{row['provider']}/{row['model']}"
+                ] = chosen
                 self._render_candidates(target)
 
         self.push_screen(VariantModal(variants), _apply)
@@ -2742,6 +2784,11 @@ class OModelApp(App):
         # models — otherwise the restored models would be folded into the preset you switched TO).
         aux = self._history.current_aux() or {}
         self._custom_rows = aux.get("custom_rows") or {}
+        # Pending `v` picks are NOT snapshotted into aux (they aren't cfg, and a `v` on a
+        # non-assigned row pushes no history entry) — so undo/redo has no matching value to
+        # restore and the honest move is to drop them, exactly as a refresh does. Keeping them
+        # would re-apply a pick made against a cfg state you have just stepped away from.
+        self._pending_variants.clear()
         active = aux.get("active")
         if isinstance(active, int):
             if 0 <= active < len(self._store.presets):
@@ -2914,6 +2961,9 @@ class OModelApp(App):
             # typed row.
             self._rows.clear()
             self._custom_rows.clear()
+            # Same reasoning for pending `v` picks: they were chosen from the PRE-refresh variant
+            # sets, and the row they annotate may not even survive the re-resolve.
+            self._pending_variants.clear()
             # Keep the active-preset index: unlike the typed rows, it doesn't go stale with the
             # catalog, and dropping it would let an undo move the models without moving the `●`.
             self._history.clear_aux(keep=("active",))

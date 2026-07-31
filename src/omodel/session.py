@@ -381,12 +381,17 @@ class Session:
             })
         return rows
 
-    def variants_for(self, provider: str, model: str) -> list:
+    def variants_for(self, provider: str, model: str, stale_ok: bool = True) -> list:
         """The variants opencode reports for (provider, model) — cached `--verbose` only, never a
         subprocess. `[]` means "no information", NOT "no variants": dedicated providers report
         `{}` and an uncached model reports nothing, so callers must not treat empty as an
-        authoritative refusal (decision #14 / `resolve._variant_warn`)."""
-        return self.catalog.variants_for(provider, model)
+        authoritative refusal (decision #14 / `resolve._variant_warn`).
+
+        `stale_ok=False` re-applies the 24h TTL that this read is otherwise exempt from — for
+        callers that REFUSE on the answer rather than annotate with it, where an expired file
+        must read as "no information" instead of as grounds to reject. See
+        `Catalog.variants_for`; the CLI's `_variant_offered` is the only such caller."""
+        return self.catalog.variants_for(provider, model, stale_ok=stale_ok)
 
     # ----- cfg mutations --------------------------------------------------------------
 

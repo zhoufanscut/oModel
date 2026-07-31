@@ -89,7 +89,7 @@ class Catalog:
 
         return _parse_verbose_record(stdout, f"{prov}/{model_id}")
 
-    def variants_for(self, provider: str, model: str) -> list:
+    def variants_for(self, provider: str, model: str, stale_ok: bool = True) -> list:
         """The variant names opencode exposes for (provider, model), read from the CACHED
         `opencode models <prov> --verbose` output — NEVER a fresh subprocess, so it is safe to
         call on the UI thread. This is the authoritative variant source for the model pickers:
@@ -107,21 +107,30 @@ class Catalog:
         — i.e. opencode genuinely lists none (kimi) OR nothing is cached for the model anywhere (a
         total miss): the caller offers nothing, we never guess.
 
-        Reads the SAME cache as detail() but **ignores its 24h TTL** (`_STALE_OK`) — this is the
-        read half of stale-while-revalidate. An expired `verbose-<prov>.json` is still opencode's
-        answer, and the alternative is not "fresher data" but no data: resolve then falls back to
-        the coarse heuristic `family.variants` (glm → low/medium/high, no `max`) and flags omo's
-        own suggestion `⚠ variant`, while `v` offers nothing at all. Variant sets are near-static
-        next to availability and cost, so a day-old set beats the heuristic every time. The
-        REVALIDATE half is unchanged and still TTL'd: detail()'s background fetch rewrites the
-        file on expiry, and `r` / `--refresh-models` (cache.clear) deletes it outright — which is
-        what makes a genuinely-removed variant disappear."""
+        `stale_ok=True` (the default) **ignores the 24h TTL** (`_STALE_OK`) — the read half of
+        stale-while-revalidate. An expired `verbose-<prov>.json` is still opencode's answer, and
+        the alternative is not "fresher data" but no data: resolve then falls back to the coarse
+        heuristic `family.variants` (glm → low/medium/high, no `max`) and flags omo's own
+        suggestion `⚠ variant`, while `v` offers nothing at all. Variant sets are near-static next
+        to availability and cost, so a day-old set beats the heuristic every time. The REVALIDATE
+        half is detail()'s still-TTL'd background fetch, whose write re-warms this very file, plus
+        `r` / `--refresh-models` (cache.clear), which deletes it outright — the only thing that
+        makes a genuinely-removed variant disappear.
+
+        `stale_ok=False` restores the TTL, and exists for exactly one caller: the CLI's HARD
+        variant guard (`cli._variant_offered` → `bad_variant` → exit 3). Serving stale data is
+        right for a *marker* you can overrule and a picker you can ignore; it is wrong for a
+        *refusal*. That surface also never calls detail(), so it has no revalidate half at all —
+        an agent would otherwise be told a perfectly valid variant is invalid, on the strength of
+        a week-old file, until someone ran `--refresh-models`. Expired → `[]` → "no information"
+        → the guard allows, exactly as before this became TTL-exempt."""
+        ttl = _STALE_OK if stale_ok else None  # None → cache.read applies the normal 24h TTL
         tried = set()
         for prov in [provider, *self.providers_for(model)]:
             if prov in tried:
                 continue
             tried.add(prov)
-            stdout = cache.read(f"verbose-{prov}", ttl_seconds=_STALE_OK)
+            stdout = cache.read(f"verbose-{prov}", ttl_seconds=ttl)
             if stdout is None:
                 continue
             variants = _parse_verbose_variants(stdout, f"{prov}/{model}")

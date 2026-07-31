@@ -554,6 +554,61 @@ class TestSet:
              "--config", _agent_cfg(tmp_path), "--json"])
         assert rc == 0
 
+    def test_variant_guard_does_not_refuse_on_an_expired_set(self, tmp_path):
+        """The hard guard reads TTL'd data (`variants_for(..., stale_ok=False)`), unlike the `⚠`
+        marker and the pickers, which read the cache at any age.
+
+        A refusal must not rest on a file of unbounded age: an expired set predating an upstream
+        addition would make `set` reject a variant opencode now accepts, and THIS surface never
+        calls `catalog.detail()` — nothing re-warms the cache behind an agent, so the wrong
+        verdict would stick until a human ran `--refresh-models`. Expired → `[]` → "no
+        information" → allow, which is what it did before the read became TTL-exempt.
+        (`test_bad_variant_refuses_when_opencode_reports_a_set` pins the fresh-cache half — the
+        guard must still refuse when it has current data.)"""
+        import json as _j
+        import os as _os
+
+        from _helpers import seed_verbose
+
+        from omodel import cache
+        seed_verbose("zhipuai", {"glm-5": ["low", "high"]})   # a set from before `max` existed
+        path = _os.path.join(cache.cache_dir(), "verbose-zhipuai.json")
+        with open(path, encoding="utf-8") as f:
+            blob = _j.load(f)
+        blob["fetched_at"] -= 5 * 86400
+        with open(path, "w", encoding="utf-8") as f:
+            _j.dump(blob, f)
+
+        rc, payload = _run_json(
+            ["set", "agent:sisyphus", "zhipuai/glm-5", "--variant", "max",
+             "--config", _agent_cfg(tmp_path), "--json"])
+        assert rc == 0, f"an expired variant set must not produce a refusal: {payload}"
+
+    def test_check_does_not_flag_a_variant_on_an_expired_set(self, tmp_path):
+        """Same rule for `omodel check` (exit 3 on a problem) — it shares `_variant_offered`, so
+        a stale set must not turn a valid config into `bad_variant` for an agent polling it."""
+        import json as _j
+        import os as _os
+
+        from _helpers import seed_verbose
+
+        from omodel import cache
+        seed_verbose("zhipuai", {"glm-5": ["low", "high"]})
+        path = _os.path.join(cache.cache_dir(), "verbose-zhipuai.json")
+        with open(path, encoding="utf-8") as f:
+            blob = _j.load(f)
+        blob["fetched_at"] -= 5 * 86400
+        with open(path, "w", encoding="utf-8") as f:
+            _j.dump(blob, f)
+
+        cfg = str(tmp_path / "oh-my-openagent.jsonc")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('{ "agents": { "sisyphus": '
+                    '{ "model": "zhipuai/glm-5", "variant": "max" } }, "categories": {} }')
+        rc, payload = _run_json(["check", "--config", cfg, "--json"])
+        assert rc == 0, f"check must not flag a variant on unbounded-age data: {payload}"
+        assert payload["ok"] is True, payload
+
     def test_degraded_writes_instead_of_refusing_everything(self, tmp_path):
         """agent-usage §6: while degraded, availability is UNKNOWN, so `set` must SKIP the
         availability guard. Refusing would leave an agent unable to set anything at all on a

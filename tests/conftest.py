@@ -19,6 +19,10 @@ def _isolate_omodel_cache(tmp_path, monkeypatch):
     """
     cache_dir = tmp_path / "omodel-cache"
     monkeypatch.setenv("OMODEL_CACHE_DIR", str(cache_dir))
+    # $OMODEL_CACHE_TTL is a documented debugging override (cache._ttl_default). Exported in a
+    # dev's shell it would silently redefine "expired" for the whole suite — the TTL tests around
+    # variants_for's stale read assert on both sides of that boundary.
+    monkeypatch.delenv("OMODEL_CACHE_TTL", raising=False)
     # Belt-and-suspenders: also redirect XDG_CACHE_HOME so the fallback path can't reach
     # the real ~/.cache even if OMODEL_CACHE_DIR were ever unset mid-test.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))

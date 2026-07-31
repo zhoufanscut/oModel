@@ -36,7 +36,14 @@ from textual.widgets import Button, Input, OptionList, Static
 
 import omodel
 from omodel import presets as presets_mod
-from omodel.app import ConfirmModal, HelpModal, OModelApp, QuitModal, _to_thread_daemon
+from omodel.app import (
+    ConfirmModal,
+    HelpModal,
+    OModelApp,
+    QuitModal,
+    VariantModal,
+    _to_thread_daemon,
+)
 from omodel.catalog import Catalog
 from omodel.config_io import list_backups
 from omodel.resolve import Resolver
@@ -2254,6 +2261,155 @@ def test_pilot_vkey_on_assigned_row_stages_variant(pilot_config):
             node = pilot.app.cfg["agents"]["sisyphus"]
             assert node["model"] == "openai/gpt-5.5", node
             assert node.get("variant") == "high", f"variant must be staged onto the assignment: {node}"
+
+    asyncio.run(_run())
+
+
+async def _vkey_pick(pilot, variant: str) -> None:
+    """Press `v` on the highlighted candidate and choose `variant` from the modal."""
+    await pilot.press("v")
+    await pilot.pause()
+    vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+    vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+    vlist.highlighted = vids.index(f"var:{variant}")
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def _cand_labels(pilot) -> list:
+    c = pilot.app.query_one("#candidates", OptionList)
+    return [str(c.get_option_at_index(i).prompt) for i in range(c.option_count)]
+
+
+async def _land_detail_fetch(pilot, target: str, provider: str, bare: str) -> None:
+    """Drive one detail fetch to completion, as the debounce timer's callback would.
+
+    Clears `_detail_cache` first and asserts the worker really ran: `_fetch_detail` returns
+    IMMEDIATELY when the key is already cached (the app's own launch fetch usually cached it),
+    and a silent no-op would make "the pending pick survived" pass for the wrong reason — there
+    would have been no rebuild to survive."""
+    pilot.app._detail_cache.clear()
+    pilot.app._detail_fetching = False
+    calls = {"n": 0}
+    inner = pilot.app.catalog.detail
+    pilot.app.catalog.detail = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), inner(*a, **k))[1]
+    pilot.app._fetch_detail(target, provider, bare)
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
+    pilot.app.catalog.detail = inner
+    assert calls["n"] == 1, f"the fetch must actually have run, else the test proves nothing: {calls}"
+
+
+def test_pilot_vkey_pick_on_nonassigned_row_survives_a_landing_fetch(pilot_config):
+    """A `v` pick on a row that is NOT the assignment reaches cfg only on Enter, so until then it
+    is pending state — and it must survive a rebuild of `_rows`, which is a CACHE.
+
+    It used to live as an in-place mutation of the cached row dict, so anything that rebuilt the
+    rows reverted it to omo's suggested variant. Harmless while only cfg mutations rebuilt them;
+    a regression once a landing background detail fetch did too, since that fires on its own
+    schedule: the pick vanished with no user action, and a later Enter wrote omo's variant
+    instead of the chosen one. Now held in `_pending_variants` and re-applied by `_build_rows`."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        app.catalog.detail = lambda *a, **k: {
+            "context": 1, "cost": None, "reasoning": False, "image": False
+        }
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            # openai/gpt-5.5 — same model as the assignment but a DIFFERENT provider, so it is
+            # not the assignment and `v` stages nothing to cfg.
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await _vkey_pick(pilot, "high")
+            assert any("openai/gpt-5.5 (high)" in s for s in _cand_labels(pilot)), _cand_labels(pilot)
+
+            # A detail fetch lands, rebuilding the rows. The pick must still be there.
+            await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
+            after = _cand_labels(pilot)
+            assert any("openai/gpt-5.5 (high)" in s for s in after), (
+                f"a landing fetch must not revert the pending `v` pick: {after}"
+            )
+
+            # …and Enter still writes what was picked, not omo's suggestion.
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node == {"model": "openai/gpt-5.5", "variant": "high"}, node
+
+    asyncio.run(_run())
+
+
+def test_pilot_fetch_landing_under_variant_modal_keeps_the_pick(pilot_config):
+    """The one case the re-render must stand down for. `action_variant._apply` holds a row dict
+    captured before the modal opened and returns early if `_rows[target][idx]` is no longer that
+    same object (its way of yielding to an `r` refresh) — so rebuilding rows while the modal is
+    open drops the pick before `_pending_variants` ever sees it. Pins the guard directly rather
+    than relying on the 0.2s debounce happening to fire inside another test's `pilot.pause()`."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        app.catalog.detail = lambda *a, **k: {
+            "context": 1, "cost": None, "reasoning": False, "image": False
+        }
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, VariantModal), pilot.app.screen
+
+            # The fetch completes with the modal still up.
+            await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
+
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            vlist.highlighted = vids.index("var:high")
+            await pilot.press("enter")
+            await pilot.pause()
+            after = _cand_labels(pilot)
+            assert any("openai/gpt-5.5 (high)" in s for s in after), (
+                f"a fetch landing under the modal must not cost the pick: {after}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_fetch_landing_under_a_non_variant_modal_still_rerenders(pilot_config):
+    """…and the guard is VariantModal-specific, not "any modal". Gating on the whole screen stack
+    meant a fetch landing under the `?` overlay skipped the rebuild — and nothing ever retried:
+    the completed fetch is cached so no further fetch is scheduled, and a re-highlight hits the
+    still-stale `_rows`. The rows stayed wrong for the rest of the session, which is the very bug
+    the re-render exists to fix."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        app = _build_app(cfg_path)
+        seen = {"n": 0}
+        real = app._render_candidates
+        app._render_candidates = lambda t: (seen.__setitem__("n", seen["n"] + 1), real(t))[1]
+        app.catalog.detail = lambda *a, **k: {
+            "context": 1, "cost": None, "reasoning": False, "image": False
+        }
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert len(pilot.app.screen_stack) > 1, "the ? overlay must be open"
+
+            before = seen["n"]
+            await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
+            assert seen["n"] > before, (
+                "a non-VariantModal overlay must not suppress the candidate re-render"
+            )
 
     asyncio.run(_run())
 

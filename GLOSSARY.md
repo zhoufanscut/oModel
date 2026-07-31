@@ -98,7 +98,12 @@ line when a new one does.
   an availability source. → cache.py
 - **stale-while-revalidate** — `variants_for` alone reads the cache at *any* age (`_STALE_OK`),
   because for variant sets a day-old answer beats the heuristic fallback; `detail()`'s TTL'd refetch
-  and `r` are what revalidate it. Availability and cost keep the plain 24h TTL. → DESIGN §cache.py
+  and `r` are what revalidate it. Availability and cost keep the plain 24h TTL, and so does
+  `stale_ok=False` — the opt-back-in for callers that *refuse* on the answer (the CLI's variant
+  guard) rather than merely annotate with it. → DESIGN §cache.py
+- **pending variant** — a `v` pick on a candidate row that is *not* the current assignment. Only
+  Enter assigns, so it is not yet cfg; it lives in `app._pending_variants` (never in `_rows`, which
+  is a cache) until Enter stages it, undo/redo moves, or `r` drops it. → DESIGN §Textual contract
 
 ## The two surfaces
 

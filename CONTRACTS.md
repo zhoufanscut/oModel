@@ -132,9 +132,11 @@ The stub files ARE the signatures; implement their bodies. Summary:
   connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id, use_cache=True,
   provider=None)->dict|None` (`provider`, when it serves the model, selects WHOSE record — the
   detail pane passes the assignment's provider; else first-of-providers_for as before),
-  `.variants_for(provider, model)->list` (cached `--verbose` variant keys for the model
-  pickers — first non-empty across the picked provider then others, else `[]`; never a subprocess;
-  reads at **any age** — `_STALE_OK`, the only TTL-exempt read, see DESIGN §cache.py);
+  `.variants_for(provider, model, stale_ok=True)->list` (cached `--verbose` variant keys for the
+  model pickers — first non-empty across the picked provider then others, else `[]`; never a
+  subprocess; default reads at **any age** — `_STALE_OK`, the only TTL-exempt read;
+  `stale_ok=False` restores the 24h TTL and is for callers that REFUSE on the answer rather than
+  annotate with it — see DESIGN §cache.py);
   `load(opencode_bin="opencode", use_cache=True)->Catalog`;
   `refresh(opencode_bin="opencode")->Catalog` (force `opencode models --refresh` + rebuild cache).
   All three opencode calls read through the on-disk cache (`cache.py`) and carry a `timeout=`.
@@ -217,7 +219,8 @@ The stub files ARE the signatures; implement their bodies. Summary:
   `sync_conflict`, `saved_text`, `saved_store_fp`; classmethod `build(config_path=None)`;
   `.degraded` (property, `not catalog.connected`); `.known_targets()->list`;
   `.is_known(target)->bool`; `.node_for()`/`.ensure_node()`/`.assignment()`;
-  `.rows(target, custom_rows=())->list` (candidate-row dicts); `.variants_for(p, m)->list`;
+  `.rows(target, custom_rows=())->list` (candidate-row dicts);
+  `.variants_for(p, m, stale_ok=True)->list`;
   `.set_model(target, provider, model, variant=None)`/`.set_row(target, row)`;
   `.clear(target)->bool`; `.delete_subtarget(name, kind)`; `.projected_store()->Store`;
   `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.is_dirty()`/
