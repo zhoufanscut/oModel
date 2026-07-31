@@ -76,6 +76,11 @@ include = [
 # is the cost of tracking defaults instead of pinning an explicit `select`; the upside is
 # new checks arrive for free. If a future widening is unwelcome, cap the version in `dev`
 # rather than freezing a 413-entry select list.
+#
+# Corollary, learned the hard way: a venv BELOW the `ruff>=0.16` floor lints a different rule
+# set than CI, in BOTH directions — a stale 0.15 reports E402s that 0.16 (and therefore CI)
+# does not, while missing the I001 that CI fails on. Chasing the former reddened a green
+# build. Before trusting a local `ruff check`, confirm `ruff --version` satisfies the floor.
 [tool.ruff.lint]
 ignore = [
   # Graceful degradation is load-bearing here (AGENTS.md): a missing `opencode`, a corrupt

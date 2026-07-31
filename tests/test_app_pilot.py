@@ -30,7 +30,6 @@ import time
 import types
 
 import pytest
-# Canonical fake-verbose cache seeder — shared across test files (tests/_helpers.py).
 from _helpers import seed_verbose as _seed_verbose
 from rich.cells import cell_len
 from textual.content import Content
