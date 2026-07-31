@@ -12,6 +12,7 @@ All tests pass an explicit `--config` temp path — the real
 """
 from __future__ import annotations
 
+import json as _json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -266,8 +267,6 @@ class TestRestore:
 # Every test passes an explicit --config temp path and stubs subprocess.run: the agent verbs
 # reach catalog.load(), and this machine has a real `opencode` (~3s / ~320 MB per call).
 # ===========================================================================
-
-import json as _json
 
 # A config using REAL omo target names (sisyphus / quick), assigned models the mock catalog
 # below actually serves — so availability guards see a coherent world.

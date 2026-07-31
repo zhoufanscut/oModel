@@ -30,6 +30,8 @@ import time
 import types
 
 import pytest
+# Canonical fake-verbose cache seeder — shared across test files (tests/_helpers.py).
+from _helpers import seed_verbose as _seed_verbose
 from rich.cells import cell_len
 from textual.content import Content
 from textual.widgets import Button, Input, OptionList, Static
@@ -112,10 +114,6 @@ def _build_app_with(cfg_path: str, catalog: Catalog) -> OModelApp:
         cfg=cfg,
         config_path=resolved,
     )
-
-
-# Canonical fake-verbose cache seeder — shared across test files (tests/_helpers.py).
-from _helpers import seed_verbose as _seed_verbose
 
 
 async def _select_target(pilot, option_id: str) -> None:
