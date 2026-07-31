@@ -160,8 +160,15 @@ silent, with fd 1 pointed at `os.devnull` so the shutdown flush can't raise it a
 
 The variant check fires **only when opencode reports a non-empty set** for that (provider,
 model). `variants_for` is cache-only and dedicated providers report `{}`, so empty means "no
-information", not "no variants" — refusing on silence would reject valid picks on a cold cache
-(mirrors `resolve._variant_warn`, decision #14).
+information", not "no variants" — refusing on silence would reject valid picks on a cold cache.
+
+It reads that set with **`stale_ok=False`** (`cli._variant_guard_set`), the one place that opts
+back into the 24h TTL: this is a *refusal*, and unlike `resolve._variant_warn`'s ⚠ — which it
+otherwise mirrors (decision #14) — it must not rest on a file of unbounded age, on a surface that
+never calls `detail()` and so never re-warms the cache behind an agent. Expired → `[]` → allowed.
+The TTL gates only the verdict, never which provider answers, so `candidates --json`'s advisory
+`variants` field (stale-ok, like the pickers) can never advertise a variant this guard rejects —
+see §cache.py.
 
 **Write rule.** Every mutating verb is a complete transaction: **validate → mutate cfg** →
 `config_io.save` → `presets.write(projected_store())`, **config first** (mirroring `app.py`'s

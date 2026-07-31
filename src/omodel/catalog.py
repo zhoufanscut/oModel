@@ -123,18 +123,32 @@ class Catalog:
         *refusal*. That surface also never calls detail(), so it has no revalidate half at all —
         an agent would otherwise be told a perfectly valid variant is invalid, on the strength of
         a week-old file, until someone ran `--refresh-models`. Expired → `[]` → "no information"
-        → the guard allows, exactly as before this became TTL-exempt."""
-        ttl = _STALE_OK if stale_ok else None  # None → cache.read applies the normal 24h TTL
+        → the guard allows, exactly as before this became TTL-exempt.
+
+        **The TTL gates the VERDICT, never the provider search.** Both modes walk the providers
+        age-blind and settle on the same one; `stale_ok=False` then returns `[]` if *that*
+        provider's entry is expired. Applying the TTL inside the loop instead would let an
+        expired provider be skipped and a DIFFERENT provider's set answer — and since the loop
+        takes the first NON-EMPTY set, and the gateway plus openai both report real sets whose
+        cache ages drift apart (detail() only re-warms the provider you view), the guard and the
+        advisory `candidates --json` would return two different non-empty sets for one model.
+        `candidates` would then advertise a variant that `set` rejects with exit 3, which is the
+        contradiction the whole split exists to prevent."""
         tried = set()
         for prov in [provider, *self.providers_for(model)]:
             if prov in tried:
                 continue
             tried.add(prov)
-            stdout = cache.read(f"verbose-{prov}", ttl_seconds=ttl)
+            stdout = cache.read(f"verbose-{prov}", ttl_seconds=_STALE_OK)
             if stdout is None:
                 continue
             variants = _parse_verbose_variants(stdout, f"{prov}/{model}")
             if variants:  # non-empty → authoritative for this model; empty/None → keep looking
+                # This provider answers, in either mode. A freshness-demanding caller now asks
+                # whether ITS entry is current; expired → "no information", never another
+                # provider's set.
+                if not stale_ok and cache.read(f"verbose-{prov}") is None:
+                    return []
                 return variants
         return []
 

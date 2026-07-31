@@ -2342,6 +2342,135 @@ def test_pilot_vkey_pick_on_nonassigned_row_survives_a_landing_fetch(pilot_confi
     asyncio.run(_run())
 
 
+def test_pilot_pending_variant_is_dropped_once_it_reaches_cfg(pilot_config):
+    """`_stage_row` must drop the pending pick: it is in cfg now, so an override left behind
+    would outrank cfg on the next rebuild.
+
+    Sequence: `v(high)` on a NON-assigned row → Enter (it becomes the assignment, cfg gets
+    `high`) → `v` it again, now that it IS the assignment, and clear the variant. Without the
+    pop, cfg is correctly variantless but the `●` row still renders `(high)` off the stale
+    override — and Enter writes `high` straight back."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await _vkey_pick(pilot, "high")                 # pending: not the assignment yet
+            await _select_candidate(pilot, "openai/gpt-5.5")  # Enter → cfg, pending must clear
+            assert pilot.app.cfg["agents"]["sisyphus"] == {
+                "model": "openai/gpt-5.5", "variant": "high"
+            }, pilot.app.cfg
+            assert not pilot.app._pending_variants.get("agent:sisyphus"), (
+                f"the pick reached cfg — nothing may stay pending: {pilot.app._pending_variants}"
+            )
+
+            # Now clear the variant via `v` on the row that IS the assignment.
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await pilot.press("v")
+            await pilot.pause()
+            vlist = pilot.app.screen.query_one("#variant-list", OptionList)
+            vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
+            vlist.highlighted = vids.index("var:__none__")   # the synthetic "(none)" clear row
+            await pilot.press("enter")
+            await pilot.pause()
+
+            node = pilot.app.cfg["agents"]["sisyphus"]
+            assert node == {"model": "openai/gpt-5.5"}, node
+            labels = _cand_labels(pilot)
+            assert not any("openai/gpt-5.5 (high)" in s for s in labels), (
+                f"a stale override must not outlive the cfg value it was staged into: {labels}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_pending_variant_is_dropped_by_undo_and_by_refresh(pilot_config, monkeypatch):
+    """The other two clear-sites. `_restore_state`: pending picks are not in the undo aux, so
+    undo/redo has no matching value to restore and keeping one would re-apply a choice made
+    against a cfg state you just stepped away from. `_refresh_catalog`: the pick was chosen from
+    PRE-refresh variant sets and its row may not survive the re-resolve — same reasoning that
+    already drops `_custom_rows`."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+
+            # --- undo path: stage something undoable, then a pending pick, then `u`.
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await _vkey_pick(pilot, "high")
+            assert pilot.app._pending_variants.get("agent:sisyphus"), "precondition: pick pending"
+            await pilot.press("u")
+            await pilot.pause()
+            assert pilot.app._pending_variants == {}, (
+                f"undo must not carry a pick it cannot restore: {pilot.app._pending_variants}"
+            )
+
+            # --- refresh path.
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await _vkey_pick(pilot, "high")
+            assert pilot.app._pending_variants.get("agent:sisyphus"), "precondition: pick pending"
+            # `r` runs catalog.refresh() off-thread; the autouse stub returns empty stdout,
+            # which would raise CatalogUnavailable — hand the worker an equivalent catalog so
+            # the post-refresh path actually runs (the file's existing refresh idiom).
+            from omodel import app as app_mod
+            monkeypatch.setattr(
+                app_mod.catalog_mod, "refresh",
+                lambda *a, **k: Catalog(available={"openai": ["gpt-5.5"],
+                                                   "opencode": ["gpt-5.5"]},
+                                        connected=["opencode", "openai"]),
+            )
+            await pilot.press("r")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            assert pilot.app._pending_variants == {}, (
+                f"a refresh must drop picks made against pre-refresh sets: "
+                f"{pilot.app._pending_variants}"
+            )
+
+    asyncio.run(_run())
+
+
+def test_pilot_pending_variant_dropped_with_the_subtarget(pilot_config):
+    """`_delete_subtarget` drops the pending pick along with the sub-target's typed rows and
+    cached rows — its stated contract is that re-adding the sub-target "starts clean rather than
+    resurrecting a stale ⚠ row", and a surviving pick would come back applied to the rebuilt
+    row (`v` → `x` → `a` re-adds it reading `(high)`, and Enter writes that)."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5",'
+                ' "compaction": { "model": "opencode/gpt-5.5" } } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            sub = "agent:sisyphus.compaction"
+            await _select_target(pilot, sub)
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            await _vkey_pick(pilot, "high")
+            assert pilot.app._pending_variants.get(sub), "precondition: pick pending on the sub"
+
+            pilot.app._delete_subtarget(sub, "sisyphus", "compaction")
+            await pilot.pause()
+            assert sub not in pilot.app._pending_variants, (
+                f"the sub-target is gone — nothing may stay pending on it: "
+                f"{pilot.app._pending_variants}"
+            )
+
+    asyncio.run(_run())
+
+
 def test_pilot_fetch_landing_under_variant_modal_keeps_the_pick(pilot_config):
     """The one case the re-render must stand down for. `action_variant._apply` holds a row dict
     captured before the modal opened and returns early if `_rows[target][idx]` is no longer that
@@ -2406,9 +2535,17 @@ def test_pilot_fetch_landing_under_a_non_variant_modal_still_rerenders(pilot_con
             assert len(pilot.app.screen_stack) > 1, "the ? overlay must be open"
 
             before = seen["n"]
+            stale = pilot.app._build_rows("agent:sisyphus")   # the dicts cached pre-fetch
             await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
             assert seen["n"] > before, (
                 "a non-VariantModal overlay must not suppress the candidate re-render"
+            )
+            # …and the rows were REBUILT, not merely redrawn. A call count alone would still
+            # pass with `_rows.clear()` dropped — i.e. with the stale dicts re-rendered — so
+            # assert on object identity, which only a real re-resolve changes.
+            rebuilt = pilot.app._build_rows("agent:sisyphus")
+            assert all(r is not s for r, s in zip(rebuilt, stale)), (
+                "the row cache must be rebuilt from the new verbose, not re-rendered as-is"
             )
 
     asyncio.run(_run())

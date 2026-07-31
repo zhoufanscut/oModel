@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 
 from omodel import cache
 from omodel.suggestions import Suggestions
@@ -30,6 +31,19 @@ def seed_verbose(provider: str, records: dict) -> None:
         "\n".join(parts) + "\n",
         ["opencode", "models", provider, "--verbose"],
     )
+
+
+def age_cache_entry(key: str, seconds: float) -> None:
+    """Backdate a cached entry's `fetched_at` by `seconds`, in place — how you get a TTL-expired
+    entry without sleeping or moving the clock. It has to be the STORED epoch rather than the
+    file's mtime, since that is what `cache.read()` checks. Used by the tests around
+    `variants_for`'s stale read, on both sides of the TTL boundary."""
+    path = os.path.join(cache.cache_dir(), f"{key}.json")
+    with open(path, encoding="utf-8") as f:
+        blob = json.load(f)
+    blob["fetched_at"] -= seconds
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
 
 
 # ---------------------------------------------------------------------------

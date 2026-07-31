@@ -6,12 +6,11 @@ DESIGN §catalog.py / §Data sources / §Verification checks #2 and #3.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
-from _helpers import seed_verbose
+from _helpers import age_cache_entry, seed_verbose
 
 from omodel import cache
 from omodel.catalog import Catalog, CatalogUnavailable, load, refresh
@@ -365,16 +364,6 @@ class TestVerboseParsing:
 _NO_SHELL = patch("subprocess.run", side_effect=AssertionError("variants_for must not shell out"))
 
 
-def _age_cache_entry(key: str, seconds: float) -> None:
-    """Backdate a cached entry's `fetched_at` by `seconds`, in place. Rewriting the wrapper is
-    how you get a TTL-expired entry without sleeping or moving the clock — and it has to be the
-    stored epoch rather than the file's mtime, since that's what cache.read() checks."""
-    path = os.path.join(cache.cache_dir(), f"{key}.json")
-    with open(path, encoding="utf-8") as f:
-        blob = json.load(f)
-    blob["fetched_at"] -= seconds
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(blob, f)
 
 
 class TestVariantsFor:
@@ -468,11 +457,41 @@ class TestVariantsFor:
         A user's `verbose-opencode.json` sitting 5 days old is what made this the common case,
         not the edge one — the gateway is where ~every model's real variants live."""
         self._seed("opencode", {"glm-5": ["high", "max"]})
-        _age_cache_entry("verbose-opencode", 5 * 86400)  # 5 days — well past the 24h TTL
+        age_cache_entry("verbose-opencode", 5 * 86400)  # 5 days — well past the 24h TTL
         assert cache.read("verbose-opencode") is None, "precondition: TTL-expired for normal reads"
         cat = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])
         with _NO_SHELL:  # and it still must not shell out to get there
             assert cat.variants_for("opencode", "glm-5") == ["high", "max"]
+
+    def test_ttl_gates_the_verdict_not_the_provider_search(self):
+        """`stale_ok=False` must never answer from a DIFFERENT provider than `stale_ok=True`.
+
+        The loop returns the first NON-EMPTY set across [provider, *providers_for(model)], so
+        applying the TTL inside it would skip an expired provider and let the next one answer —
+        two different non-empty sets for one model. That is not exotic: the gateway and openai
+        both report real sets (DESIGN §Data sources) and their cache ages drift apart by design,
+        since detail() only re-warms the provider of an assignment you actually view. The
+        advisory `candidates --json` (stale-ok) would then advertise a variant the CLI guard
+        rejects with exit 3 — the contradiction the split exists to prevent.
+
+        Both modes settle on openai here; the guard only downgrades ITS answer to "no
+        information", it never substitutes opencode's."""
+        self._seed("openai", {"gpt-5.5": ["low", "medium", "high", "xhigh"]})
+        age_cache_entry("verbose-openai", 5 * 86400)          # stale, but still the answerer
+        self._seed("opencode", {"gpt-5.5": ["low", "medium", "high"]})   # fresh, must NOT answer
+        cat = Catalog(
+            available={"openai": ["gpt-5.5"], "opencode": ["gpt-5.5"]},
+            connected=["opencode", "openai"],
+        )
+        with _NO_SHELL:
+            advisory = cat.variants_for("openai", "gpt-5.5")
+            guard = cat.variants_for("openai", "gpt-5.5", stale_ok=False)
+        assert advisory == ["low", "medium", "high", "xhigh"], advisory
+        assert guard == [], (
+            f"an expired answerer means 'no information', never another provider's set: {guard}"
+        )
+        # The invariant in one line: the guard is either silent or a subset of what was advertised.
+        assert not guard or set(guard) <= set(advisory), (guard, advisory)
 
     def test_expired_entry_still_refetched_by_detail(self):
         """…and the REVALIDATE half is intact: detail() keeps the TTL, so the same expired entry
@@ -480,7 +499,7 @@ class TestVariantsFor:
         Serving stale variants must never become "never refresh" — that pairing is the whole
         design, and `r` (cache.clear) remains the hard reset for a genuinely removed variant."""
         self._seed("opencode", {"glm-5": ["high", "max"]})
-        _age_cache_entry("verbose-opencode", 5 * 86400)
+        age_cache_entry("verbose-opencode", 5 * 86400)
         fresh = 'opencode/glm-5\n{"id": "glm-5", "variants": {"low": {}}, "limit": {"context": 9}}\n'
         with patch("subprocess.run", return_value=_mock_run(fresh)) as run:
             cat = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])

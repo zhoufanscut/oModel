@@ -565,19 +565,9 @@ class TestSet:
         information" → allow, which is what it did before the read became TTL-exempt.
         (`test_bad_variant_refuses_when_opencode_reports_a_set` pins the fresh-cache half — the
         guard must still refuse when it has current data.)"""
-        import json as _j
-        import os as _os
-
-        from _helpers import seed_verbose
-
-        from omodel import cache
+        from _helpers import age_cache_entry, seed_verbose
         seed_verbose("zhipuai", {"glm-5": ["low", "high"]})   # a set from before `max` existed
-        path = _os.path.join(cache.cache_dir(), "verbose-zhipuai.json")
-        with open(path, encoding="utf-8") as f:
-            blob = _j.load(f)
-        blob["fetched_at"] -= 5 * 86400
-        with open(path, "w", encoding="utf-8") as f:
-            _j.dump(blob, f)
+        age_cache_entry("verbose-zhipuai", 5 * 86400)
 
         rc, payload = _run_json(
             ["set", "agent:sisyphus", "zhipuai/glm-5", "--variant", "max",
@@ -587,19 +577,9 @@ class TestSet:
     def test_check_does_not_flag_a_variant_on_an_expired_set(self, tmp_path):
         """Same rule for `omodel check` (exit 3 on a problem) — it shares `_variant_offered`, so
         a stale set must not turn a valid config into `bad_variant` for an agent polling it."""
-        import json as _j
-        import os as _os
-
-        from _helpers import seed_verbose
-
-        from omodel import cache
+        from _helpers import age_cache_entry, seed_verbose
         seed_verbose("zhipuai", {"glm-5": ["low", "high"]})
-        path = _os.path.join(cache.cache_dir(), "verbose-zhipuai.json")
-        with open(path, encoding="utf-8") as f:
-            blob = _j.load(f)
-        blob["fetched_at"] -= 5 * 86400
-        with open(path, "w", encoding="utf-8") as f:
-            _j.dump(blob, f)
+        age_cache_entry("verbose-zhipuai", 5 * 86400)
 
         cfg = str(tmp_path / "oh-my-openagent.jsonc")
         with open(cfg, "w", encoding="utf-8") as f:

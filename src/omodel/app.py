@@ -2543,6 +2543,10 @@ class OModelApp(App):
         `_custom_rows` ride along as the entry's `aux`, so `u` restores the row in lockstep with cfg."""
         self.session.delete_subtarget(name, kind)
         self._custom_rows.pop(target, None)
+        # Pending `v` picks go for the same "starts clean" reason as the typed rows above: the
+        # target is gone, so nothing is pending on it — and re-adding the sub-target later would
+        # otherwise resurrect the pick and re-apply it to the rebuilt row.
+        self._pending_variants.pop(target, None)
         self._rows.pop(target, None)
         parent = f"agent:{name}"
         self._populate_targets(select=parent)
