@@ -1085,7 +1085,14 @@ def _variant_offered(session, provider: str, model: str, variant) -> bool:
 def _variant_guard_set(session, provider: str, model: str) -> list:
     """The set `_variant_offered` refuses on — and therefore the ONLY set a `bad_variant` message
     may quote. Keep the two reading the same call: a message naming a set the guard didn't use
-    would tell an agent to retry with a variant that is about to be rejected again."""
+    would tell an agent to retry with a variant that is about to be rejected again.
+
+    **This is load-bearing for a documented promise.** `agent-usage.md` tells agents the
+    `variants` field on a candidate "is what `--variant` is checked against", and that is true
+    only because `Catalog.variants_for` guarantees `guard ∈ {advisory, []}` — same provider
+    walk in both modes, the TTL applied to the verdict alone. Change the walk, the TTL, or the
+    provider order and that sentence becomes false in the same instant; the invariant is pinned
+    by `test_ttl_gates_the_verdict_not_the_provider_search`."""
     return session.variants_for(provider, model, stale_ok=False)
 
 

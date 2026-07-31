@@ -364,8 +364,6 @@ class TestVerboseParsing:
 _NO_SHELL = patch("subprocess.run", side_effect=AssertionError("variants_for must not shell out"))
 
 
-
-
 class TestVariantsFor:
     """Catalog.variants_for — variant names from the CACHED `opencode … --verbose` output (the
     decision #14 reversal for the model pickers). Cache-only: never a subprocess. The conftest
