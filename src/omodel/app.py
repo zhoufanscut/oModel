@@ -2355,6 +2355,18 @@ class OModelApp(App):
         kwargs.setdefault("markup", False)
         super().notify(message, **kwargs)
 
+    def action_help_quit(self) -> None:
+        """`ctrl+c` — Textual's built-in "you probably meant to quit" toast, re-worded for us.
+
+        The base implementation notifies ``f"Press [b]{key}[/b] to quit the app"`` — content
+        markup, which the `markup=False` default above (rightly) does not parse, so the tags
+        showed up as literal `[b]`/`[/b]`. It also names whichever binding runs `quit`, i.e.
+        Textual's own `ctrl+q`, which drops straight into `App.action_quit` and exits WITHOUT
+        the unsaved-changes prompt. `q` (`action_quit_confirm`) is the quit that offers to save
+        config + presets first, so that is the key to point a reflex `ctrl+c` at. Our key, our
+        wording, no markup — do NOT re-introduce tags here."""
+        self.notify("Press q to quit the app", title="Do you want to quit?")
+
     def action_clear(self) -> None:
         """`x` — get rid of the thing under the cursor. On a `#candidates` row YOU added it drops
         that row (`_remove_custom_row`). Otherwise it clears/deletes the current TARGET: on a base

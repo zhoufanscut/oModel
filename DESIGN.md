@@ -878,6 +878,11 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   so an id you can't run would read as one you can — hence the "renders literally" test beside the
   "doesn't crash" ones. Preset names additionally strip brackets at input (`presets._render_safe`),
   belt-and-braces since they're persisted.
+  The default has one **inherited** caller: Textual's own `ctrl+c` handler (`action_help_quit`)
+  notifies `Press [b]{key}[/b] to quit the app`, whose tags then showed verbatim. `app.py` overrides
+  `action_help_quit` rather than letting markup back through the choke point — and takes the chance
+  to name **`q`**, since the `key` Textual resolves is its default `ctrl+q`, which exits via
+  `App.action_quit` with **no** unsaved-changes prompt (see §quit below).
 - **Header** `Static#providers`: one line `oModel: <id · id · …>` from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the

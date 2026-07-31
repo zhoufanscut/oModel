@@ -4275,6 +4275,29 @@ def test_pilot_notify_renders_markup_literally(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_ctrl_c_hint_is_literal_and_names_q(pilot_config):
+    """`ctrl+c` is Textual's, not ours: its `action_help_quit` toasts
+    `f"Press [b]{key}[/b] to quit the app"`. Two things go wrong unhandled — `notify` above
+    defaults `markup=False`, so the tags render as literal `[b]`/`[/b]`; and `key` resolves to
+    Textual's default `ctrl+q` binding, which exits via `App.action_quit` WITHOUT the
+    unsaved-changes prompt. The override says `q` in plain text."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            note = list(pilot.app._notifications)[-1]
+            assert "[b]" not in note.message and "[/b]" not in note.message, note
+            assert note.message == "Press q to quit the app", note
+            # …and it points at the quit that can save, not Textual's bare ctrl+q.
+            assert "ctrl+q" not in note.message, note
+            assert pilot.app.is_running, "ctrl+c must hint, never exit"
+
+    asyncio.run(_run())
+
+
 def test_pilot_a_markup_shaped_preset_name_does_not_crash(pilot_config):
     """Textual parses plain strings as content markup, so a preset named `[/b]` raised
     MarkupError from the compositor — and being persisted, it took the app down on EVERY launch
