@@ -6,6 +6,7 @@ DESIGN §catalog.py / §Data sources / §Verification checks #2 and #3.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -364,6 +365,18 @@ class TestVerboseParsing:
 _NO_SHELL = patch("subprocess.run", side_effect=AssertionError("variants_for must not shell out"))
 
 
+def _age_cache_entry(key: str, seconds: float) -> None:
+    """Backdate a cached entry's `fetched_at` by `seconds`, in place. Rewriting the wrapper is
+    how you get a TTL-expired entry without sleeping or moving the clock — and it has to be the
+    stored epoch rather than the file's mtime, since that's what cache.read() checks."""
+    path = os.path.join(cache.cache_dir(), f"{key}.json")
+    with open(path, encoding="utf-8") as f:
+        blob = json.load(f)
+    blob["fetched_at"] -= seconds
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
+
+
 class TestVariantsFor:
     """Catalog.variants_for — variant names from the CACHED `opencode … --verbose` output (the
     decision #14 reversal for the model pickers). Cache-only: never a subprocess. The conftest
@@ -444,3 +457,35 @@ class TestVariantsFor:
         with _NO_SHELL:
             # verbose-openai isn't cached (the openai miss must NOT shell out); opencode serves it.
             assert cat.variants_for("openai", "gpt-5.5") == ["low", "medium", "high"]
+
+    def test_expired_entry_is_still_read(self):
+        """STALE-WHILE-REVALIDATE, read half: variants_for ignores the 24h TTL (`_STALE_OK`).
+
+        An expired `verbose-<prov>.json` is still opencode's answer, and dropping it doesn't buy
+        fresher data — it buys NONE, which is strictly worse: resolve then falls back to the
+        coarse heuristic `family.variants` and flags omo's own suggestion `⚠ variant`, while `v`
+        offers nothing. Variant sets barely move next to availability, so day-old beats guessed.
+        A user's `verbose-opencode.json` sitting 5 days old is what made this the common case,
+        not the edge one — the gateway is where ~every model's real variants live."""
+        self._seed("opencode", {"glm-5": ["high", "max"]})
+        _age_cache_entry("verbose-opencode", 5 * 86400)  # 5 days — well past the 24h TTL
+        assert cache.read("verbose-opencode") is None, "precondition: TTL-expired for normal reads"
+        cat = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])
+        with _NO_SHELL:  # and it still must not shell out to get there
+            assert cat.variants_for("opencode", "glm-5") == ["high", "max"]
+
+    def test_expired_entry_still_refetched_by_detail(self):
+        """…and the REVALIDATE half is intact: detail() keeps the TTL, so the same expired entry
+        drives a fresh `--verbose` whose write re-warms exactly the file variants_for reads.
+        Serving stale variants must never become "never refresh" — that pairing is the whole
+        design, and `r` (cache.clear) remains the hard reset for a genuinely removed variant."""
+        self._seed("opencode", {"glm-5": ["high", "max"]})
+        _age_cache_entry("verbose-opencode", 5 * 86400)
+        fresh = 'opencode/glm-5\n{"id": "glm-5", "variants": {"low": {}}, "limit": {"context": 9}}\n'
+        with patch("subprocess.run", return_value=_mock_run(fresh)) as run:
+            cat = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])
+            assert cat.detail("glm-5")["context"] == 9
+            assert run.called, "an expired entry must still trigger detail()'s live --verbose"
+        # The refetch rewrote the cache, so the stale read now yields the NEW set.
+        with _NO_SHELL:
+            assert cat.variants_for("opencode", "glm-5") == ["low"]

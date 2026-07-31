@@ -96,6 +96,9 @@ line when a new one does.
   → refresh.py vs catalog.refresh()
 - **cache** — the 24h on-disk cache of `opencode` CLI output (`~/.cache/omodel`). A perf layer, *not*
   an availability source. → cache.py
+- **stale-while-revalidate** — `variants_for` alone reads the cache at *any* age (`_STALE_OK`),
+  because for variant sets a day-old answer beats the heuristic fallback; `detail()`'s TTL'd refetch
+  and `r` are what revalidate it. Availability and cost keep the plain 24h TTL. → DESIGN §cache.py
 
 ## The two surfaces
 

@@ -133,7 +133,8 @@ The stub files ARE the signatures; implement their bodies. Summary:
   provider=None)->dict|None` (`provider`, when it serves the model, selects WHOSE record — the
   detail pane passes the assignment's provider; else first-of-providers_for as before),
   `.variants_for(provider, model)->list` (cached `--verbose` variant keys for the model
-  pickers — first non-empty across the picked provider then others, else `[]`; never a subprocess);
+  pickers — first non-empty across the picked provider then others, else `[]`; never a subprocess;
+  reads at **any age** — `_STALE_OK`, the only TTL-exempt read, see DESIGN §cache.py);
   `load(opencode_bin="opencode", use_cache=True)->Catalog`;
   `refresh(opencode_bin="opencode")->Catalog` (force `opencode models --refresh` + rebuild cache).
   All three opencode calls read through the on-disk cache (`cache.py`) and carry a `timeout=`.

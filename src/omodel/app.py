@@ -119,6 +119,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.fuzzy import Matcher
 from textual.markup import escape as _escape_markup
 from textual.screen import ModalScreen
@@ -2063,8 +2064,38 @@ class OModelApp(App):
             self._detail_cache[key] = info
         # Re-render whatever is current NOW: shows the line if this was it, and (via
         # _detail_info → _schedule_detail_fetch) kicks off the next fetch if still uncached.
+        #
+        # The CANDIDATE rows go too, not just the detail line: this call also rewrote
+        # `verbose-<prov>`, which is where `catalog.variants_for` reads the variant sets that
+        # resolve validates omo's suggestion against (the `⚠ variant` marker) and that `v`
+        # offers. Rows resolved before it landed were computed against whatever the cache held
+        # then, and `_rows` would otherwise pin that until the next mutation dropped it — so the
+        # correction surfaced when you pressed enter, reading as "the list changed under me".
+        # Clear ALL targets (the new verbose covers every model of this provider, not just the
+        # one fetched); they rebuild lazily on highlight, and _restore_cand_highlight puts the
+        # cursor back by identity so a re-render under you is invisible.
+        #
+        # …but NOT under an open modal. `v`'s callback (action_variant._apply) holds a row dict
+        # captured before the modal opened and drops the edit if `_rows[target][idx]` is no
+        # longer that same OBJECT — its way of yielding to an `r` refresh. Rebuilding rows from
+        # under it here would trip that guard and silently discard the variant the user just
+        # picked (both modal-staging pilot tests caught exactly this). The detail line still
+        # updates; the rows correct on the next fetch or mutation, which is the rarer path than
+        # losing a keystroke's work.
+        #
+        # All of it is cosmetic, and this worker outlives the UI: `q` during an in-flight fetch
+        # tears the widgets down while the daemon thread is still in opencode (it can't be
+        # killed — see _to_thread_daemon), so the panes can be gone by the time we get here.
+        # `query_one` then raises NoMatches, and an exception out of a @work worker surfaces as
+        # WorkerFailed rather than being swallowed. Nothing to draw on is a no-op, not an error.
         if self._current_target is not None:
-            self._render_detail(self._current_target)
+            try:
+                self._render_detail(self._current_target)
+                if len(self.screen_stack) <= 1:
+                    self._rows.clear()
+                    self._render_candidates(self._current_target)
+            except NoMatches:
+                return
 
     @staticmethod
     def _detail_line(info: dict) -> str:

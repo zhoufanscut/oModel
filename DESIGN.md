@@ -332,10 +332,31 @@ oModel/
 - `catalog.load()`/`detail()` read through it (`use_cache=True`). opencode presence is checked **first**,
   so "not on `PATH` → empty" (above) is unchanged — the cache is a perf layer, not an availability
   fallback. A live, successful run rewrites the cache; every opencode call carries a `timeout=`.
+- **`variants_for` ignores the TTL (`catalog._STALE_OK`) — stale-while-revalidate.** It is the one
+  read that accepts any age, and only it: availability (`load`) and cost/context (`detail`) keep the
+  24h TTL. Rationale: an expired `verbose-<prov>.json` is still opencode's answer, and discarding it
+  doesn't yield fresher data, it yields *none* — `variants_for` returns `[]`, so `resolve._variant_warn`
+  falls back to the coarse heuristic `family.variants` (glm → low/medium/high, no `max`) and flags omo's
+  own suggestion `⚠ variant`, while `v` offers nothing at all. Variant sets are near-static next to
+  availability and pricing, so a day-old set beats a guessed one. The **revalidate** half is `detail()`'s
+  existing background fetch (still TTL'd — its write re-warms exactly the file `variants_for` reads) plus
+  `r` / `--refresh-models`, whose `cache.clear()` deletes the file outright and is therefore the only
+  thing that makes a genuinely-removed variant disappear. Cheap by construction: **no extra subprocess**,
+  since the read half is free and the write half was already happening.
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
   worker (off the UI thread); `r` is documented in the `?` help overlay (the `oModel:` header shows
   only the connected list — no cache-age suffix).
+- **The completing fetch re-renders BOTH panes**, not just `#detail`: its `--verbose` write is also the
+  variant source above, so the candidate rows resolved before it landed are stale in the same breath
+  (the `⚠ variant` marker). `_rows` is cleared and `#candidates` re-rendered — otherwise the rows stayed
+  pinned until the next cfg mutation dropped that cache, i.e. the list visibly corrected itself the
+  moment you pressed enter. Two guards on that re-render: it is **skipped while a modal is open**
+  (`v`'s callback holds a row dict captured before the modal opened and drops the edit if `_rows[target]
+  [idx]` is no longer that same object — its way of yielding to an `r` refresh; rebuilding under it would
+  silently discard the variant just picked), and the whole block catches `NoMatches` (the daemon thread
+  outlives the widgets on `q`, and an exception out of a `@work` worker is a `WorkerFailed`, not a
+  no-op).
 - **Memory safety (load-bearing):** a spawned opencode subprocess can't be killed, so the detail fetch
   is **capped to one concurrent** (a `_detail_fetching` gate; on completion the worker re-renders the
   *current* target, which schedules the next — "chase the cursor"). Uncapped/un-stubbed, stacked

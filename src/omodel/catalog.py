@@ -24,6 +24,10 @@ _MODELS_TIMEOUT = 20
 _VERBOSE_TIMEOUT = 20
 _REFRESH_TIMEOUT = 90
 
+# `cache.read(ttl_seconds=…)` for a read that accepts ANY age. Only `variants_for` uses it —
+# see the rationale there; availability (`load`) and cost/context (`detail`) keep the 24h TTL.
+_STALE_OK = float("inf")
+
 
 class CatalogUnavailable(Exception):
     """`opencode` IS on PATH but `opencode models` exited != 0 or produced zero
@@ -101,14 +105,23 @@ class Catalog:
         `provider`'s own non-empty set wins if it has one; else the gateway's (usually warm,
         covers ~every model); else []. Returns [] when NO cached provider reports a non-empty set
         — i.e. opencode genuinely lists none (kimi) OR nothing is cached for the model anywhere (a
-        total miss): the caller offers nothing, we never guess. Same 24h cache as detail(); the
-        `r` key / `--refresh-models` clears it."""
+        total miss): the caller offers nothing, we never guess.
+
+        Reads the SAME cache as detail() but **ignores its 24h TTL** (`_STALE_OK`) — this is the
+        read half of stale-while-revalidate. An expired `verbose-<prov>.json` is still opencode's
+        answer, and the alternative is not "fresher data" but no data: resolve then falls back to
+        the coarse heuristic `family.variants` (glm → low/medium/high, no `max`) and flags omo's
+        own suggestion `⚠ variant`, while `v` offers nothing at all. Variant sets are near-static
+        next to availability and cost, so a day-old set beats the heuristic every time. The
+        REVALIDATE half is unchanged and still TTL'd: detail()'s background fetch rewrites the
+        file on expiry, and `r` / `--refresh-models` (cache.clear) deletes it outright — which is
+        what makes a genuinely-removed variant disappear."""
         tried = set()
         for prov in [provider, *self.providers_for(model)]:
             if prov in tried:
                 continue
             tried.add(prov)
-            stdout = cache.read(f"verbose-{prov}")
+            stdout = cache.read(f"verbose-{prov}", ttl_seconds=_STALE_OK)
             if stdout is None:
                 continue
             variants = _parse_verbose_variants(stdout, f"{prov}/{model}")

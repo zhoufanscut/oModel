@@ -3037,6 +3037,80 @@ def test_create_app_degraded_mode_add_model_still_works(pilot_config, monkeypatc
 # Pilot test: a transient catalog.detail() failure is not cached forever
 # ---------------------------------------------------------------------------
 
+def test_pilot_candidates_rerender_when_verbose_lands(tmp_path):
+    """When a background detail fetch lands it rewrites `verbose-<prov>` — the very file
+    `catalog.variants_for` reads to validate omo's suggested variant (`⚠ variant`) and to feed
+    `v`. So the CANDIDATE rows go stale too, not just the detail line, and `_rows` would pin
+    them until the next cfg mutation dropped it: the correction surfaced the moment you pressed
+    enter, reading as "the list changed under me". The worker must re-render both panes.
+
+    Chain is defined inline (not from bundled omo data) so the ⚠ is deterministic: the heuristic
+    glm family lists low/medium/high, so omo's `max` reads as unsupported until opencode's
+    verbose — which does offer it — arrives."""
+    from omodel.suggestions import Suggestions
+    from omodel.suggestions import load as _load_suggestions
+
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": {}, "categories": {} }')
+
+    real = _load_suggestions()
+    suggestions = Suggestions(
+        meta={"omoVersion": "inline-for-test", "omoCommit": "", "generatedAt": ""},
+        agents={},
+        categories={"probe-cat": {"fallbackChain": [
+            {"providers": ["opencode"], "model": "glm-5", "variant": "max"},
+        ]}},
+        families=real.families,
+        known_variants=real.known_variants,
+    )
+    catalog = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])
+
+    def _labels(pilot):
+        c = pilot.app.query_one("#candidates", OptionList)
+        return [str(c.get_option_at_index(i).prompt) for i in range(c.option_count)]
+
+    async def _run():
+        from omodel import config_io as _config_io
+
+        cfg, resolved = _config_io.load_config(cfg_path)
+        app = OModelApp(
+            catalog=catalog, suggestions=suggestions,
+            resolver=Resolver.build(catalog, suggestions), cfg=cfg, config_path=resolved,
+        )
+
+        def _detail_that_warms_cache(model_id, use_cache=True, provider=None):
+            """Stands in for catalog.detail(): the real one WRITES verbose-<prov> as a side
+            effect of its `--verbose` call, which is the whole point here."""
+            _seed_verbose("opencode", {"glm-5": ["high", "max"]})
+            return {"context": 128000, "cost": None, "reasoning": False, "image": False}
+
+        app.catalog.detail = _detail_that_warms_cache
+
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "cat:probe-cat")
+            before = _labels(pilot)
+            assert any("⚠ variant" in s for s in before), (
+                f"cold verbose → heuristic fallback flags omo's own suggestion: {before}"
+            )
+
+            # The fetch lands. NOTHING is selected — the pane must correct itself.
+            pilot.app._fetch_detail("cat:probe-cat", "opencode", "glm-5")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+
+            after = _labels(pilot)
+            assert not any("⚠ variant" in s for s in after), (
+                f"rows must re-resolve against the verbose the fetch just wrote: {after}"
+            )
+            assert any("opencode/glm-5 (max)" in s for s in after), after
+            assert pilot.app.cfg["categories"] == {}, (
+                f"a re-render must not stage anything: {pilot.app.cfg}"
+            )
+
+    asyncio.run(_run())
+
+
 def test_pilot_detail_fetch_failure_not_cached_forever(pilot_config):
     """A TRANSIENT catalog.detail() failure (raises) must NOT be cached — the next render
     retries — unlike a genuine `None` RETURN (no record / no providers), which stays cached as
