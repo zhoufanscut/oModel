@@ -12,21 +12,40 @@ clean — everything else in the file, including comments and commented-out conf
 verbatim (timestamped backups each save).
 
 ```
- oModel: opencode · deepseek · moonshotai-cn · openai · zhipuai
-┌────────────────────┐┌────────────────────────────────────────────┐
-│ AGENTS             ││ sisyphus                                   │
-│ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
-│   ↳ ultrawork opus ││ variant: —    ctx 256k · $0.6/$2.5         │
-│   hephaestus  gpt  │└────────────────────────────────────────────┘
-│   oracle      gpt  │┌────────────────────────────────────────────┐
-│   momus       gpt  ││  opencode/claude-opus-4-7 (max)            │
-│   ...              ││  openai/gpt-5.5 (medium)                   │
-│ CATEGORIES         ││  opencode/gpt-5.5 (medium)                 │
-│   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
-│   quick       mini ││ + add model…                               │
-└────────────────────┘└────────────────────────────────────────────┘
- s save · q quit · ? help                                     v0.3.0
+ oModel: opencode · anthropic · openai
+┌──────────────────────────────┐┌──────────────────────────────────────────────────┐
+│ AGENTS                       ││ agent: sisyphus                                  │
+│   sisyphus                   ││ model: anthropic/claude-opus-5                   │
+│     ↳ ultrawork              ││ variant: max                                     │
+│   hephaestus                 ││ ctx 256k · $5/$25 · reasoning · image            │
+│   oracle                     │└──────────────────────────────────────────────────┘
+│   librarian                  │┌──────────────────────────────────────────────────┐
+│   explore                    ││ ● anthropic/claude-opus-5 (max)                  │
+│   multimodal-looker          ││   opencode/claude-opus-5 (max)                   │
+│   prometheus                 ││   opencode/kimi-k3                               │
+│   metis                      ││   openai/gpt-5.6-sol (medium)                    │
+│   momus                      ││   opencode/gpt-5.6-sol (medium)                  │
+│   atlas                      ││   opencode/glm-5.2  (≈ omo glm-5)                │
+│   sisyphus-junior            ││ + add model…                                     │
+│ CATEGORIES                   ││                                                  │
+│   visual-engineering      ▂▂ ││                                                  │
+│   ultrabrain                 ││                                                  │
+│   deep                       ││                                                  │
+│   artistry                   ││                                                  │
+└──────────────────────────────┘│                                                  │
+┌─ PRESETS ────────────────────┐│                                                  │
+│ ● 1 daily                    ││                                                  │
+│   2 max-power                ││                                                  │
+│ + add preset…                ││                                                  │
+│                              ││                                                  │
+└───── saved 07-30 · 4 models ─┘└──────────────────────────────────────────────────┘
+ s save · q quit · ? help                                                    v0.3.0
 ```
+
+`claude-opus-5` is offered twice — once under `anthropic`, once under the `opencode` gateway.
+Pick the row and you pick the prefix. (Which providers and models you see are your own; these are
+omo's first-choice ones for this agent. The `▂▂` is the scrollbar — the target list is longer than
+the pane.)
 
 ## Requirements
 
@@ -102,9 +121,10 @@ live re-fetch and rebuild the cache.
 | `v` | Pick a variant for the current candidate |
 | `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or a new preset holding the current models (presets card) |
 | `r` | Refresh the model list — or, on a preset, rename it |
-| `x` | Clear the current agent/category model (on a preset: delete it, after a confirm — never the one you're using) |
+| `x` | Clear the current agent/category model (on a sub-target or a model row you added: delete the row; on a preset: delete it, after a confirm — never the one you're using) |
 | `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
 | `s` | Save (diff + confirm modal) |
+| `?` | Key overlay — the base-screen keys the hint bar doesn't already show, grouped by pane |
 | `q` | Quit (if unsaved: save & quit / discard / cancel) |
 | `←` `→` (`h` `l`) *in a dialog* | Move between buttons (`Tab` works too) |
 
@@ -139,8 +159,11 @@ invariant, same as you do from the TUI.
 ```sh
 omodel agent-guide                            # the full contract, written for an agent
 omodel candidates agent:sisyphus --json       # what this agent can run
-omodel set agent:sisyphus opencode/gpt-5.5 --dry-run   # preview; drop --dry-run to write
+omodel set agent:sisyphus opencode/kimi-k3 --dry-run   # preview; drop --dry-run to write
 ```
+
+(omo revises its suggested models most weeks, so take real ids from `omodel candidates`
+rather than from any example here.)
 
 Also `targets`, `show`, `check`, `clear`, `apply` (batch, one save) and
 `preset ls|use|new|rm` — all with `--json`. Exit codes carry the meaning: `0` success, `1` oModel

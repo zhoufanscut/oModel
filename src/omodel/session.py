@@ -15,7 +15,10 @@ that from underneath.  (2) The rules that make omodel worth using — provider p
 `none`-variant drop, the GPT-only lock, the config-equals-active-preset invariant — used to live
 in `OModelApp` methods that queried widgets, so nothing outside a running TUI could apply them.
 An agent asked to change a model would hand-edit the JSONC and bypass every one.  This module is
-that logic with the widgets taken out; `app.py` re-imports the guards it used to own.
+that logic with the widgets taken out.  `app.py` re-imports the four helpers it calls directly
+(`SUBKINDS`, `is_gpt_model`, `is_no_variant`, `subkinds_for`) under their old private names and
+reaches the rest through the module; the two frozensets it used to own are NOT re-imported, so
+they exist here and nowhere else.
 
 **What stays in `app.py`:** the undo `History`, the per-target row cache, `_custom_rows` (typed
 off-chain rows), and every render.  Those are session-shaped only inside a UI — a CLI process
@@ -57,7 +60,8 @@ ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
 
 # ---------------------------------------------------------------------------
-# Target-id helpers and guards (moved out of app.py — app.py re-imports these)
+# Target-id helpers and guards (moved out of app.py — it re-imports the ones it calls directly,
+# and reaches gpt_only / read_map / target_label through the module; see the module docstring)
 # ---------------------------------------------------------------------------
 
 def is_gpt_model(model_id: str) -> bool:

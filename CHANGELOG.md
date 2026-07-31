@@ -5,6 +5,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Bundled omo suggestions refreshed to v4.19.2 (from v4.19.1): `claude-opus-4-8` → `claude-opus-5`
+  throughout, `claude-fable-5` and `kimi-for-coding-highspeed` join the chains, `gpt-5.4-mini` →
+  `gpt-5.4-mini-fast`. Still 11 agents, 8 categories, 15 families.
+- Documentation accuracy pass. The README's screenshot is now captured from a real render rather
+  than drawn by hand — it was showing a column of model names beside each agent that the app has
+  never had, and was missing the presets card entirely. Its providers are also generic now, so the
+  picture doesn't advertise whichever ones the author happens to use. Alongside that: pointers to
+  `_GPT_ONLY_AGENTS` / `_ULTRAWORK_AGENTS` "in `app.py`" now name `session.py`, where they actually
+  moved in 0.3.0; the release matrix no longer claims a `darwin-x64` binary that 0.2.0 stopped
+  building; and the model ids in `omodel agent-guide` are refreshed, with the warning that they are
+  illustrative moved up to the first example an agent reads.
+- `omodel agent-guide`'s JSON examples now show every field the payloads actually carry. They were
+  missing `sync_conflict` on all three — the one the guide tells an agent to check before its first
+  write — and `settable` on a candidate row, two lines above the paragraph explaining what
+  `settable: false` means.
+
+### Fixed
+- Candidate rows no longer flag `⚠ variant` on omo's own suggestion and then drop the flag the
+  moment you pick something. Variant sets were being discarded once the 24h cache expired, which
+  doesn't get you fresher data — it gets you none, leaving a coarse guess in its place. They're
+  read at any age now, and the background fetch re-renders the candidate list when it lands
+  instead of leaving the rows stale until your next edit. A fetch that landed while the `?` overlay
+  was open used to skip that re-render with nothing ever retrying it, so the rows stayed wrong for
+  the rest of the session.
+- A variant chosen with `v` on a row that isn't the currently-set model no longer reverts to omo's
+  suggested variant when a background fetch happens to land. The pick could vanish with no action
+  on your part, and a later `Enter` then wrote the wrong variant. The same pick also outlived
+  deleting and re-adding a sub-target, and would then be written on the next `Enter`.
+- `omodel candidates --json` can no longer advertise a variant that `omodel set --variant` then
+  refuses with exit 3. The two read the same providers in the same order now; only the verdict is
+  age-gated, not which provider answers it. An agent following the documented loop could hit this
+  whenever a gateway's cached data and a dedicated provider's had drifted apart in age.
+- The `ctrl+c` hint showed its own `[b]` markup as literal text, and pointed at a key that exits
+  without offering to save. It names `q` now, which is the quit that asks.
+
 ## [0.3.0] — 2026-07-26
 
 ### Added

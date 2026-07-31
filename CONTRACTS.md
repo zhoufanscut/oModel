@@ -1,46 +1,26 @@
 # oModel — FROZEN CONTRACTS (read with DESIGN.md before coding)
 
 This is the contract-first boundary. **Read `DESIGN.md` in full first** — it is the spec.
-This file pins the shared shapes + ownership so the five tracks build in parallel and
-integrate cleanly. Do not change a public signature or shared shape without the Lead
-updating this file (others depend on it).
+This file pins the shared shapes + public signatures everything else builds against. Do not change
+one without updating this file: both surfaces (`app.py`, `cli.py`) and the agent JSON depend on them.
 
-## File ownership (DISJOINT — touch only your lane)
+## Hard rules (permanent)
 
-| Track | Owns (edit only these) |
-|---|---|
-| **Core logic** | `src/omodel/catalog.py`, `src/omodel/cache.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
-| **Config I/O** | `src/omodel/config_io.py` |
-| **TUI** | `src/omodel/app.py`, `src/omodel/history.py`, `src/omodel/presets.py` |
-| **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `src/omodel/data/agent-usage.md`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
-| **Session (shared core)** | `src/omodel/session.py` — **Lead-owned**, because both TUI and CLI depend on it; a change here can break either. Propose, don't edit unilaterally. |
-| **QA / verification** | everything under `tests/` (incl. `conftest.py`) |
-
-Lead owns: `__init__.py`, `__main__.py`, `data/*`, this file, and ALL git operations + final wiring.
-
-## Rules for every track
-
-1. **Do NOT run any git command** (no add/commit/branch/checkout). The Lead owns git and integration.
-2. **Touch only your owned files.** Read others freely; never edit them. If you believe a
-   frozen signature is wrong, leave a `# CONTRACT-QUESTION:` comment in YOUR file and proceed
-   against the current signature — the Lead reconciles at integration.
-3. **Python floor is 3.9.** Put `from __future__ import annotations` at the top of every
-   module (already present in stubs). No runtime PEP-604 unions (`isinstance(x, A | B)`) and no
+1. **Python floor is 3.9.** Put `from __future__ import annotations` at the top of every
+   module. No runtime PEP-604 unions (`isinstance(x, A | B)`) and no
    runtime PEP-585 generics; annotations-as-strings make `dict | None` in signatures fine.
-4. **REAL-CONFIG SAFETY (hard rule).** The live `~/.config/opencode/oh-my-openagent.jsonc`
+2. **REAL-CONFIG SAFETY.** The live `~/.config/opencode/oh-my-openagent.jsonc`
    is the user's real file. Never read-then-write it in tests or examples. Every test passes an
-   explicit temp `path`/`--config`. The Lead's gate enforces this. **Nothing may write anywhere
-   under the real config dir** — that now covers `.backup/` *and* `.omodel-presets.json`
+   explicit temp `path`/`--config`. **Nothing may write anywhere
+   under the real config dir** — that covers `.backup/` *and* `.omodel-presets.json`
    (§presets.py), not just the config file itself.
-5. **Tests/imports run in a venv** with `textual json5 pytest` installed (PyPI reachable). Do
-   not assume system-wide installs.
-6. **NEVER RENDER DATA AS A PLAIN `str` (hard rule, `app.py`).** Textual parses content markup in
+3. **NEVER RENDER DATA AS A PLAIN `str` (`app.py`).** Textual parses content markup in
    any plain string it renders, so a `[` in a model id, provider, variant, agent/category name,
    preset name or `str(exc)` is a tag — and an unmatched close raises `MarkupError` inside the
    render pass, which kills the app. Build data-carrying `Static`/`Label` with `markup=False`, wrap
    `Option` prompts in `_lit()`, `_esc()` anything spliced into `#detail` (the one markup widget),
    and leave `OModelApp.notify`'s `markup=False` default alone. → DESIGN §Textual contract
-7. **REAL-CACHE SAFETY (hard rule).** The opencode-output cache lives at `~/.cache/omodel/`
+4. **REAL-CACHE SAFETY.** The opencode-output cache lives at `~/.cache/omodel/`
    (`$OMODEL_CACHE_DIR` → `$XDG_CACHE_HOME/omodel` → `~/.cache/omodel`). Tests must never touch
    the real cache: the autouse `conftest.py` fixture points `$OMODEL_CACHE_DIR` at a tmp dir, and
    any test exercising the TUI/catalog must stub `subprocess.run` (no real `opencode` — each call
@@ -124,9 +104,11 @@ The full contract, written for the agent rather than the maintainer, is
 `src/omodel/data/agent-usage.md` — shipped in the package and printed by `omodel agent-guide`.
 Keep the two in step: the doc is what agents actually read.
 
-## Public signatures (authoritative = the stub modules)
+## Public signatures (authoritative = the modules themselves)
 
-The stub files ARE the signatures; implement their bodies. Summary:
+The modules are the signatures; this is the summary you read before changing one. Where the two
+disagree the code wins — and the divergence is a bug in this file, so fix it here in the same
+commit.
 
 - `catalog.py`: `class CatalogUnavailable(Exception)`; `@dataclass Catalog(available: dict,
   connected: list)` with `.providers_for(model_id)->list`, `.detail(model_id, use_cache=True,
@@ -241,7 +223,29 @@ The stub files ARE the signatures; implement their bodies. Summary:
   imports) — which is why `presets.fingerprint` re-implements `config_io._clean_agents`' empty-sub-
   object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
-## Bundled data (already generated by Lead — do not regenerate)
-- `data/omo-suggestions.json` — omo v4.13.0 @ f31c735: 11 agents, 8 categories, 15
-  families, 9 knownVariants. Consume via `suggestions.load()`.
+## Bundled data (generated — do not hand-edit; regenerate with `--refresh-omo`)
+- `data/omo-suggestions.json` — 11 agents, 8 categories, 15 families, 9 knownVariants. Consume via
+  `suggestions.load()`. **The omo version/commit is not pinned here** — a weekly CI job refreshes
+  this file, so any number written down goes stale within days; read `meta.omoVersion` /
+  `meta.omoCommit` out of the file itself. Only the four counts are pinned (they are asserted by
+  `test_detect_family.py::TestBundledSuggestionsLoad`), because a change in *those* is a real event.
 - `data/default-config.jsonc` — oModel's own minimal starter.
+
+## Appendix — module ownership (from the original fan-out)
+
+oModel was built contract-first by six parallel specialists in isolated worktrees. The table is
+kept because it is still an accurate map of the module boundaries — which files move together, and
+which one change can break both surfaces. The *process* rules that came with it (don't run git,
+touch only your lane, leave `# CONTRACT-QUESTION:` for the Lead) belonged to that fan-out and no
+longer bind. One thing they carried does: **tests and imports run from the project venv**
+(`pip install -e ".[dev]"`, per AGENTS.md §Commands) — there is no system-wide install to fall back
+on. `__init__.py`, `__main__.py` and `data/*` sat outside the table, under the Lead.
+
+| Track | Files |
+|---|---|
+| **Core logic** | `src/omodel/catalog.py`, `src/omodel/cache.py`, `src/omodel/suggestions.py`, `src/omodel/resolve.py`, `src/omodel/tools/snapshot_omo.ts` |
+| **Config I/O** | `src/omodel/config_io.py` |
+| **TUI** | `src/omodel/app.py`, `src/omodel/history.py`, `src/omodel/presets.py` |
+| **CLI + packaging** | `src/omodel/cli.py`, `src/omodel/refresh.py`, `src/omodel/data/agent-usage.md`, `pyproject.toml`, `install.sh`, `.github/workflows/*`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md` |
+| **Session (shared core)** | `src/omodel/session.py` — the one both TUI and CLI depend on; a change here can break either. Still the file to touch most carefully. |
+| **QA / verification** | everything under `tests/` (incl. `conftest.py`) |

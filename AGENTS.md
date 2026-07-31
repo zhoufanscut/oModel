@@ -55,7 +55,8 @@ opencode CLI output is cached for 24h under `~/.cache/omodel/` (`cache.py`) so w
 are instant; `--refresh-models` / `r` bust it. Tests isolate the cache via `tests/conftest.py`
 (`$OMODEL_CACHE_DIR` → tmp) and must stub `subprocess.run` (each opencode call is ~3s / ~320 MB).
 
-`tests/verification.md` maps the 9 DESIGN.md verification checks to concrete commands — use it as the
+`tests/verification.md` maps DESIGN.md's 9 verification checks (plus Check 10, the agent surface) to
+concrete commands — use it as the
 pre-release gate (it covers the live `opencode` and PyInstaller-binary checks that CI can't run).
 
 ## Architecture
@@ -126,8 +127,11 @@ data/omo-suggestions.json ──────────────► suggesti
   GPT-only lock, config-equals-active-preset) can't fork between the two surfaces. `Session.build()`
   is the shared production wiring. **Never import textual or app here** — `cli.py`'s lazy imports
   depend on it. The guards moved here from `app.py` (`GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`,
-  `is_gpt_model`, `subkinds_for`, `is_no_variant`, `coerce_dict`), which re-imports them under
-  their old private names.
+  `is_gpt_model`, `subkinds_for`, `is_no_variant`, `read_map`, `coerce_dict`). `app.py` re-imports
+  only the four it calls directly, under their old private names (`SUBKINDS`, `is_gpt_model`,
+  `is_no_variant`, `subkinds_for`), and reaches the rest through the module
+  (`session_mod.gpt_only` / `read_map` / `target_label`) — **the two frozensets are never imported
+  at all**, which is the point: they exist in exactly one place and can't fork.
 - **`app.py`** — Textual two-pane App. Wraps a `Session` and keeps only what needs a UI (the undo
   `History`, the per-target row cache, `_custom_rows`, rendering); `cfg`/`_store`/`_saved_text`/
   `_saved_store_fp` are properties onto the session. Stable widget IDs (`#targets`, `#presets`, `#candidates`,
@@ -162,6 +166,24 @@ before changing any public signature or shared shape.
   signatures, GLOSSARY.md disambiguates the vocabulary.** Update DESIGN.md in the *same commit* as
   the code it describes; add/fix a line in GLOSSARY.md when you coin or rename a term. Read DESIGN.md
   + CONTRACTS.md before non-trivial changes; skim GLOSSARY.md when a term is ambiguous.
+- **CHANGELOG: check `[Unreleased]` before every push.** This is the upkeep rule that actually gets
+  skipped — twice now the tag has shipped and user-visible fixes have sat on `main` with an empty
+  `[Unreleased]`, to be reconstructed from `git log` later under time pressure. Nothing enforces it;
+  CI doesn't check it and the release workflow publishes an **empty** body, so the file is the only
+  record. Before you push, run:
+
+  ```sh
+  git log --oneline "$(git describe --tags --abbrev=0)"..HEAD    # what's unreleased
+  sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md           # what's written down
+  ```
+
+  Every commit that changes what a user sees or what an agent gets back needs a line — behaviour,
+  a flag, JSON output, an exit code, bundled-data ids. Refactors, tests, lint and CI don't (0.3.0's
+  `session.py` extraction earned one line only because it's the reason the CLI exists). Write it in
+  the same commit as the change, not at tag time: you will not remember why it mattered. Prefer
+  describing the symptom the user hit over the mechanism you changed. Keep the tone plain — see the
+  existing entries. **`## [Unreleased]` stays as a heading even when empty**; never fold a released
+  section into it (a bad edit did exactly that, hiding a whole shipped release).
 - **Python floor is 3.9** (CI matrix 3.9–3.13). Every module starts with
   `from __future__ import annotations`. No runtime PEP-604 unions (`isinstance(x, A | B)`) or PEP-585
   generics — annotations-as-strings make `dict | None` in signatures fine, but runtime use is not.
@@ -187,8 +209,9 @@ before changing any public signature or shared shape.
   empty everywhere or uncached — no heuristic fallback (kimi/glm-5 → no variant step). `--verbose.family`
   is still never read (family stays heuristic), and the bundled family registry still backs
   `detect_family`/substitution and resolve's omo-suggestion `⚠` warn (which warn-but-allow, never block).
-- **GPT-only agents:** Hephaestus mirrors omo's `no-hephaestus-non-gpt` hook via `_GPT_ONLY_AGENTS` /
-  `_is_gpt_model` in `app.py` — a hardcoded agent key, not a data field.
+- **GPT-only agents:** Hephaestus mirrors omo's `no-hephaestus-non-gpt` hook via `GPT_ONLY_AGENTS` /
+  `is_gpt_model` in **`session.py`** (not `app.py` — they moved there so the CLI enforces the same
+  lock) — a hardcoded agent key, not a data field. Same for `ULTRAWORK_AGENTS`.
 
 ## Bundled data & packaging
 
@@ -196,6 +219,7 @@ before changing any public signature or shared shape.
   which CI also runs weekly (`refresh-suggestions.yml`) to open a PR on change. It is derived from omo
   (Sustainable Use License) — keep `NOTICE` attribution intact when redistributing.
 - Distribution is **GitHub-only, no PyPI**: `release.yml` builds PyInstaller one-file binaries on `v*`
-  tags (linux-x64, darwin-arm64, darwin-x64); `install.sh` is the curl|sh installer. Non-Python payload
+  tags (**linux-x64 + darwin-arm64 only** — Intel-mac `darwin-x64` was dropped in 0.2.0; those runners
+  are being retired, and Intel macs install via pipx); `install.sh` is the curl|sh installer. Non-Python payload
   (`data/`, `tools/`) ships because it lives under the package tree and is read via `importlib.resources`
   — do **not** add a hatch force-include for it (duplicates the path and fails the wheel build).

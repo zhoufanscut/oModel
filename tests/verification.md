@@ -221,8 +221,11 @@ python -m omodel --config /tmp/omodel-live-test.jsonc
 # Manual steps in the TUI:
 #   1. Verify oModel: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
 #   2. Verify the bottom hint bar shows "s save · q quit · ? help" (left) with the version "v<version>"
-#      right-aligned at the far right; press '?' — the key
-#      overlay opens (Navigate/Edit/Presets/Undo/Models/dialogs); '?'/esc/q closes it
+#      right-aligned at the far right; press '?' — the key overlay opens, grouped by pane
+#      (Move / Models / Presets / Undo — there is deliberately no "In dialogs" group, each dialog
+#      states its own keys); '?'/esc/q closes it.
+#      The body needs a 30-ROW terminal to fit without scrolling (measured: viewport 14 of 20 lines
+#      at 80x24, 18 at 84x28, 20 at 100x30) — below that it scrolls, which is expected, not a fault.
 #   3. Select agent:sisyphus — detail line (ctx/$/caps) appears within a moment (off-thread), UI never freezes
 #   4. Pick a model from the candidate list
 #   5. Press 'r' — header shows "Refreshing…", then updates; ~/.cache/omodel/ is rebuilt
@@ -307,8 +310,8 @@ writes `/tmp/.omodel-presets.json` and never touches `~/.config/opencode/`.
 can read the contract from the shipped binary.
 
 ```sh
-# Automated
-python -m pytest tests/test_session.py tests/test_cli.py -q
+# Automated — the headless core, the CLI verbs, and the end-to-end agent flows over both
+python -m pytest tests/test_session.py tests/test_cli.py tests/test_agent_surface_integration.py -q
 
 # Live, against a TEMP config (never the real one)
 cp ~/.config/opencode/oh-my-openagent.jsonc /tmp/omodel-agent.jsonc
@@ -401,11 +404,12 @@ write is the thing to prevent.
 python -m pytest tests/ -x -q
 ```
 
-Expected outcome — every test file passes:
+Expected outcome — every one of the 12 test files passes:
 - `test_detect_family.py`, `test_catalog_parse.py`, `test_resolve.py`, `test_config_io.py`
 - `test_app_pilot.py` (the full Textual pilot suite — much the slowest; it dominates wall clock)
 - `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py`, `test_refresh.py`
-- `test_session.py` (the headless core both surfaces edit through)
+- `test_session.py` (the headless core both surfaces edit through) and
+  `test_agent_surface_integration.py` (the CLI verbs end-to-end over a real temp config)
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
 plus the 10 checks above run clean on the integration branch.

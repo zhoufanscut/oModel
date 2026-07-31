@@ -24,7 +24,7 @@ line when a new one does.
   quick…; 8). → DESIGN §Problem
 - **sub-target** — `ultrawork` (model swapped in on an `ulw` message; **Sisyphus-only** — omo honors
   it on no other agent) or `compaction` (auto-summary model, any agent), nested under an agent.
-  *Agents only; categories have none.* → DESIGN §Textual contract, app.py `_ULTRAWORK_AGENTS`
+  *Agents only; categories have none.* → DESIGN §Textual contract, session.py `ULTRAWORK_AGENTS`
 
 ## Recommendation → row
 
@@ -64,7 +64,7 @@ line when a new one does.
   clear row, so the pickers never offer it and saving drops the `variant` key (`_is_no_variant`).
   → DESIGN decision #14
 - **warn-but-allow (⚠)** — oModel flags but never blocks you (bad variant, unavailable add). One hard
-  exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, app.py `_GPT_ONLY_AGENTS`
+  exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, session.py `GPT_ONLY_AGENTS`
 
 ## Save / history / cache
 

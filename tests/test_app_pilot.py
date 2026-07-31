@@ -1043,12 +1043,19 @@ def test_pilot_hint_bar_minimal_and_help(pilot_config):
 
 
 def test_help_body_stays_light():
-    """The `?` overlay is a short prompt, not a manual (DESIGN §Textual contract): it must fit an
-    ordinary terminal without scrolling and without wrapping. Guards the two ways it re-bloats —
-    growing past the panel's 56-cell content width, and re-listing keys that are already on screen
-    (the hint bar behind it, each dialog's own hint line) or that need no telling (esc, y/n)."""
+    """The `?` overlay is a short prompt, not a manual (DESIGN §Textual contract). Guards the two
+    ways it re-bloats — growing past the panel's 56-cell content width, and re-listing keys that
+    are already on screen (the hint bar behind it, each dialog's own hint line) or that need no
+    telling (esc, y/n).
+
+    NB the line cap is a REGRESSION BUDGET, not a no-scroll guarantee — the two are different and
+    this test only pins the first. Measured: the body viewport is 14 rows at 80x24, 18 at 84x28,
+    20 at 100x30, against a 20-line _BODY — so the overlay does scroll below ~30 rows today, and a
+    bound that actually guaranteed no-scroll at 24 would have to be <= 14. DESIGN §Textual contract
+    states the 30-row figure; don't restate it here as "fits an ordinary terminal"."""
     lines = HelpModal._BODY.splitlines()
-    # +2 chrome rows (title, hint) + 4 border/padding, against a 24-row terminal.
+    # A ceiling on growth, chosen against a 24-row terminal's rough budget (chrome + border +
+    # padding). See the docstring: clearing it does not mean the body fits without scrolling.
     assert len(lines) <= 22, f"help body must stay under ~22 lines, got {len(lines)}"
     widest = max(lines, key=cell_len)
     # 54, not the panel's 56 cells of content: on a short terminal the scrollbar eats 2, and a

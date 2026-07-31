@@ -46,12 +46,16 @@ Ask what a target can run, then set it to one of the answers:
 
 ```sh
 omodel candidates agent:sisyphus --json
-omodel set agent:sisyphus opencode/claude-opus-4-8 --variant max
+omodel set agent:sisyphus opencode/claude-opus-5 --variant max
 ```
 
 **Use a candidate's `value` verbatim.** It is already `provider/model`; do not assemble that
 string yourself. Each candidate also carries `variants` — the variants `opencode` reports for
 that exact `(provider, model)`, which is what `--variant` is checked against.
+
+⚠ **Every model id on this page is illustrative, and some are certainly out of date.** omo
+revises its suggested models most weeks, and which providers serve them depends on what this
+user has connected. Never copy an id from this page into a `set`; take it from `candidates`.
 
 The candidate list is omo's fallback chain filtered to models you can actually run, one row per
 serving provider, dedicated providers before gateways. A model omo suggests but nobody serves is
@@ -60,7 +64,7 @@ not listed at all.
 Preview any change before making it:
 
 ```sh
-omodel set agent:sisyphus opencode/claude-opus-4-8 --dry-run --json   # writes nothing; `diff` carries the change
+omodel set agent:sisyphus opencode/claude-opus-5 --dry-run --json   # writes nothing; `diff` carries the change
 ```
 
 ## 4. Exit codes
@@ -107,30 +111,35 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
 
 ```json
 // omodel show --json
-{ "schema": 1, "omodel_version": "0.3.0", "config_path": "/home/you/.config/opencode/oh-my-openagent.jsonc",
+{ "schema": 1, "ok": true, "omodel_version": "0.3.0",
+  "config_path": "/home/you/.config/opencode/oh-my-openagent.jsonc",
   "degraded": false, "providers": ["opencode", "zhipuai"],
   "active_preset": {"index": 0, "name": "default"},
   "presets": [{"index": 0, "name": "default", "models": 12, "active": true}],
   "sync_conflict": false,
   "targets": [{"target": "agent:sisyphus", "kind": "agent", "name": "sisyphus",
-               "model": "opencode/claude-opus-4-8", "provider": "opencode", "bare": "claude-opus-4-8",
+               "model": "opencode/claude-opus-5", "provider": "opencode", "bare": "claude-opus-5",
                "variant": "max", "assigned": true, "available": true, "known": true}] }
 
 // omodel candidates agent:sisyphus --json
-{ "schema": 1, "target": "agent:sisyphus", "degraded": false, "gpt_only": false,
-  "current": "opencode/claude-opus-4-7",
-  "candidates": [{"index": 0, "source": "omo", "provider": "opencode", "model": "claude-opus-4-8",
-                  "value": "opencode/claude-opus-4-8", "variant": "max", "substitute_for": null,
-                  "warn": [], "current": false, "variants": ["low", "medium", "high", "max"]}] }
+{ "schema": 1, "ok": true, "target": "agent:sisyphus", "degraded": false, "gpt_only": false,
+  "sync_conflict": false, "current": "opencode/claude-opus-4-8",
+  "candidates": [{"index": 0, "source": "omo", "provider": "opencode", "model": "claude-opus-5",
+                  "value": "opencode/claude-opus-5", "variant": "max", "substitute_for": null,
+                  "warn": [], "current": false, "settable": true,
+                  "variants": ["low", "medium", "high", "max"]}] }
 
 // omodel set … --json
-{ "schema": 1, "ok": true, "target": "agent:sisyphus", "from": "opencode/claude-opus-4-7",
-  "to": "opencode/claude-opus-4-8", "variant": "max", "warn": [], "changed": true,
+{ "schema": 1, "ok": true, "target": "agent:sisyphus", "from": "opencode/claude-opus-4-8",
+  "to": "opencode/claude-opus-5", "variant": "max", "warn": [], "changed": true,
+  "sync_conflict": false,
   "dry_run": false, "backup": "…/.backup/20260726-123728.728.jsonc", "diff": "…" }
 ```
 
+These show every key each payload carries; `sync_conflict` in particular is on all of them (§9).
+
 `substitute_for` means the row stands in for a model omo named that you don't have — e.g. omo
-wants `glm-5`, you have `glm-5.1`, so the row is `glm-5.1` with `substitute_for: "glm-5"`. It is
+wants `glm-5`, you have `glm-5.2`, so the row is `glm-5.2` with `substitute_for: "glm-5"`. It is
 informational; `value` is still what gets written.
 
 `settable: false` marks a row `set` would refuse. The list always shows the target's *current*
@@ -158,16 +167,13 @@ Every save snapshots the config to `.backup/` and the ring keeps only the newest
 separate `set` calls therefore evict eleven of the user's own snapshots. Prefer one call:
 
 ```sh
-echo '{"agent:sisyphus": {"model": "opencode/claude-opus-4-8", "variant": "max"},
-       "cat:quick": "openai/gpt-5.4-mini"}' | omodel apply --json
+echo '{"agent:sisyphus": {"model": "opencode/claude-opus-5", "variant": "max"},
+       "cat:quick": "openai/gpt-5.4-mini-fast"}' | omodel apply --json
 ```
 
 A value may be an object (`{"model": …, "variant": …}`) or a bare model string. Validation is
 all-or-nothing: if any entry is bad, nothing is written and you get exit 3 — so a half-applied
 config never lands.
-
-(The model ids above are illustrative. Take real ones from `omodel candidates <target> --json`;
-which models exist depends on the providers this user has connected.)
 
 `omodel preset use <name>` switches a whole named set of assignments in one save, and is the
 cheapest bulk change available.

@@ -199,35 +199,57 @@ resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `
 
 ## Layout (approved)
 
+Captured from a real 84×28 render (`OModelApp.run_test`), not drawn — the pane widths, the row
+formats and the detail pane's line split are what the code actually emits. Providers/models are
+omo's own first-choice ones for `sisyphus`, so the picture names no particular user's setup.
+
 ```
- oModel: opencode · deepseek · moonshotai-cn · openai · zhipuai
-┌────────────────────┐┌────────────────────────────────────────────┐
-│ AGENTS             ││ sisyphus                                   │
-│ > sisyphus    kimi ││ model: moonshotai-cn/kimi-k2.7-code        │
-│   ↳ ultrawork opus ││ variant: —    ctx 256k · $0.6/$2.5         │
-│   hephaestus  gpt  │└────────────────────────────────────────────┘
-│   oracle      gpt  │┌────────────────────────────────────────────┐
-│   momus       gpt  ││  opencode/claude-opus-4-7 (max)            │
-│   ...              ││  openai/gpt-5.5 (medium)                   │
-│ CATEGORIES         ││  opencode/gpt-5.5 (medium)                 │
-│   deep        gpt  ││● zhipuai/glm-5.1  (≈ omo glm-5)            │
-│   quick       mini ││ + add model…                               │
-└────────────────────┘│                                            │
-┌─ PRESETS ──────────┐│                                            │
-│ ● 1 daily-cheap    ││                                            │
-│   2 max-power      ││                                            │
-│ + add preset…      ││                                            │
-└────────────────────┘└────────────────────────────────────────────┘
- s save · q quit · ? help                                     v0.1.0
+ oModel: opencode · anthropic · openai
+┌──────────────────────────────┐┌──────────────────────────────────────────────────┐
+│ AGENTS                       ││ agent: sisyphus                                  │
+│   sisyphus                   ││ model: anthropic/claude-opus-5                   │
+│     ↳ ultrawork              ││ variant: max                                     │
+│   hephaestus                 ││ ctx 256k · $5/$25 · reasoning · image            │
+│   oracle                     │└──────────────────────────────────────────────────┘
+│   librarian                  │┌──────────────────────────────────────────────────┐
+│   explore                    ││ ● anthropic/claude-opus-5 (max)                  │
+│   multimodal-looker          ││   opencode/claude-opus-5 (max)                   │
+│   prometheus                 ││   opencode/kimi-k3                               │
+│   metis                      ││   openai/gpt-5.6-sol (medium)                    │
+│   momus                      ││   opencode/gpt-5.6-sol (medium)                  │
+│   atlas                      ││   opencode/glm-5.2  (≈ omo glm-5)                │
+│   sisyphus-junior            ││ + add model…                                     │
+│ CATEGORIES                   ││                                                  │
+│   visual-engineering      ▂▂ ││                                                  │
+│   ultrabrain                 ││                                                  │
+│   deep                       ││                                                  │
+│   artistry                   ││                                                  │
+└──────────────────────────────┘│                                                  │
+┌─ PRESETS ────────────────────┐│                                                  │
+│ ● 1 daily                    ││                                                  │
+│   2 max-power                ││                                                  │
+│ + add preset…                ││                                                  │
+│                              ││                                                  │
+└───── saved 07-30 · 4 models ─┘└──────────────────────────────────────────────────┘
+ s save · q quit · ? help                                                    v0.3.0
 ```
+
+Note what the picture is *not*: `#targets` rows carry the target name and nothing else — no
+model/family column beside it, and no `>` cursor glyph (the highlight is Textual styling, which
+a text capture can't show). The `▂▂` is `#targets`' own scrollbar, shown because its 22 rows
+(20 targets + the two disabled section headers) overflow the 18-row pane this capture gives it —
+a live scrollbar, not a reserved gutter (`scrollbar-gutter: stable` is on `#presets` alone, for
+the name-width reason in §presets.py).
 
 Each region is a bordered card; the **focused** pane's border brightens to `$primary`, while blurred
 panes use a muted `$surface-lighten-3` border — a theme token (not a literal), chosen over
 `$border-blurred`, which the default textual-dark theme renders near-black on a dark terminal.
-`Static#providers` / `Static#hints-bar` are full-width bars (not cards) with a neutral `$surface-lighten-1`
-fill (deliberately not the blue-gray `$panel`), and `Static#detail` is display-only — it shows the
-frame but never the focus highlight (Statics never receive focus; only `#targets`, `#presets` and
-`#candidates` do). The left column is a `Vertical#left` (width 32) stacking `#targets` (`height: 1fr`)
+`Static#providers` and `Horizontal#hints-bar` are full-width bars (not cards) with a neutral
+`$surface-lighten-1` fill (deliberately not the blue-gray `$panel`). The hint bar is a *container*:
+its text lives in the `Static#hints` / `Static#hints-version` it holds, which is why the fill rule
+sits on the Horizontal and the width rules on the two Statics. `Static#detail` is display-only — it
+shows the frame but never the focus highlight (Statics never receive focus; only `#targets`,
+`#presets` and `#candidates` do). The left column is a `Vertical#left` (width 32) stacking `#targets` (`height: 1fr`)
 over the `#presets` card (decision #17), which is `height: auto` bounded by `max-height: 50%` — it
 grows with however many presets you keep and scrolls internally past that, so `#targets` can never be
 squeezed below half the column no matter how many you make. Seeded with one preset the card costs 4
@@ -241,8 +263,8 @@ before `app` imports Textual) so the palette is consistent across terminals — 
 collapses to its ANSI slots, looking nothing like a `xterm-256color` session. Overridable:
 `TEXTUAL_COLOR_SYSTEM=truecolor` for 24-bit, `=auto` to restore Textual's own detection.
 
-The bottom hint bar (`Static#hints-bar`) is **minimal and static**: the keys `s save · q quit · ? help` sit
-at the left, the app version (`v<version>`, a right-aligned `Static#hints-version`) at the tail — the
+The bottom hint bar (`Horizontal#hints-bar`) is **minimal and static**: the keys `s save · q quit · ? help`
+sit at the left (`Static#hints`, `width: 1fr`), the app version (`v<version>`, `Static#hints-version`) at the tail — the
 three keys you won't discover by convention and that act regardless of focus. It never tracks
 pane / row / undo state. **Every other base-screen key lives in the `?` help overlay**
 (`HelpModal`), a short modal grouped by pane; dialogs state their own keys on their own hint line.
@@ -292,25 +314,20 @@ oModel/
 ## Components
 
 ### Data contracts (shared shapes — fix once so `resolve.py` and `app.py` agree)
+
+**The authoritative field-by-field spec is CONTRACTS.md §Shared shapes — read it there.** It is
+deliberately not restated here: this shape is the one seam both surfaces and the agent JSON are
+pinned to, and two copies of it in two files is exactly the drift this section exists to prevent.
+In summary:
+
 - `target` id (string): `"agent:<name>"`, `"agent:<name>.ultrawork"`, `"agent:<name>.compaction"`, or
   `"cat:<name>"` — identical to the §Textual `OptionList#targets` option IDs.
 - `source` (string enum): `"omo"` (a `fallbackChain` entry — exact or same-line substitute) ·
   `"add"` (typed in the add-model modal). (`"mine"` retired — no connected-model dump.)
-- **candidate row** — dict yielded by `candidates()` and rendered by `app.py`:
-  ```python
-  {
-    "source":   "omo" | "add",
-    "model":    "glm-5.1",                   # RESOLVED bare id actually used (the substitute,
-                                             #   for a same-line stand-in), no prefix
-    "provider": "zhipuai",                   # one serving provider; candidates() emits one
-                                             #   ROW PER provider, dedicated-first (non-empty str)
-    "variant":  "max" | None,                # per precedence; None = unset
-    "entry":    {...} | None,                # the omo fallbackChain entry; None for 'add'
-    "substitute_for": None | "glm-5",        # None = exact; else the omo id this same-line row fills
-    "warn":     [] | ["variant"],            # 'omo' rows: variant only; 'add' rows may add "unavailable"
-  }
-  ```
-  The value written to config is `f"{provider}/{model}"` plus `variant` (omitted when `None`).
+- **candidate row** — the dict `candidates()` yields and `app.py` renders, one row per serving
+  provider. Fields: `source` · `model` (the RESOLVED bare id, so the substitute when this is a
+  same-line stand-in) · `provider` · `variant` · `entry` · `substitute_for` · `warn`. The value
+  written to config is `f"{provider}/{model}"` plus `variant` (omitted when `None`).
 
 ### `catalog.py` — availability from `opencode`
 - `load()`: `opencode models` → `available` (dict) + `connected` (**list**, first-seen order — never
@@ -519,9 +536,11 @@ oModel/
   model reassigns the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
   `+ add model…` row stays, but the add modal is **gated** — a non-GPT model is **blocked** (enter
   disabled, `⚠ Hephaestus is GPT-only`), so you can pick any GPT model you have but can't footgun a
-  non-GPT one; the detail pane shows a `⚑ GPT-only` tip. Encoded as `_GPT_ONLY_AGENTS` +
-  `_is_gpt_model` in `app.py` (matching omo's hard-coded agent key, not a data field — `requires*`
-  are activation flags, not user-choice restrictions).
+  non-GPT one; the detail pane shows a `⚑ GPT-only` tip. Encoded as `GPT_ONLY_AGENTS` +
+  `is_gpt_model` in **`session.py`** (so the CLI applies the identical lock — §session.py; `app.py`
+  re-imports `is_gpt_model` as `_is_gpt_model` and asks `session.gpt_only(target)` for the rest).
+  A hard-coded agent key matching omo's, not a data field — `requires*` are activation flags, not
+  user-choice restrictions.
 
 ### `config_io.py` — edit-in-place save
 - Read `json5.load` → ordered dict; `agents`/`categories` are editable, all other top-level keys
@@ -620,8 +639,12 @@ oModel/
 - **No Textual, no `app` import** — `cli.py`'s lazy imports (`--version` / `--check` / the JSON
   verbs never pay for Textual) depend on it. The guards and the target-id vocabulary
   (`GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`, `is_gpt_model`, `subkinds_for`, `is_no_variant`,
-  `coerce_dict`, `gpt_only`, `split_target`, `target_label`) moved here and `app.py` re-imports
-  them under their historical private names.
+  `read_map`, `coerce_dict`, `gpt_only`, `split_target`, `target_label`) moved here. `app.py`
+  re-imports only the four it calls directly, under their historical private names (`_SUBKINDS`,
+  `_is_gpt_model`, `_is_no_variant`, `_subkinds_for`), and reaches the rest through
+  the module (`session_mod.gpt_only` / `read_map` / `target_label`) — so **the frozensets themselves
+  are never imported anywhere**, living in exactly one place where neither surface can hold a
+  private copy that drifts.
 
 ### `history.py` — in-session undo/redo (decision #16)
 - **Purpose:** recover from a mis-press *within a session*, before/independent of saving — a
@@ -944,7 +967,7 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   via `a`), `cat:<name>`. Sub-target set per agent = `{model}` ∪ present `{ultrawork, compaction}`.
   `compaction` is valid on every agent; `ultrawork` is **Sisyphus-only** (omo's `ultrawork`/`ulw`
   keyword swaps the model only on Sisyphus — on any other agent it's dead config omo never reads)
-  (`_ULTRAWORK_AGENTS` / `_subkinds_for` in `app.py`, hard-coded like `_GPT_ONLY_AGENTS`). So only
+  (`ULTRAWORK_AGENTS` / `subkinds_for` in `session.py`, hard-coded like `GPT_ONLY_AGENTS`). So only
   Sisyphus has a choice of sub-kind: `a` there opens a **chooser modal** (below) — naming each kind
   + what it's for rather than blindly cycling. Every other agent has the single kind `compaction`,
   so `a` adds it **directly** (no modal — there's nothing to choose).
@@ -974,8 +997,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.
-- **Hint bar** `Static#hints-bar` (bottom row): **minimal and static** — keys `s save · q quit · ? help` at
-  the left, app version `v<version>` (`Static#hints-version`) right-aligned at the tail
+- **Hint bar** `Horizontal#hints-bar` (bottom row): **minimal and static** — keys `s save · q quit · ? help` in
+  `Static#hints` at the left, app version `v<version>` (`Static#hints-version`) right-aligned at the tail
   (the `_HINT_BAR` constant), set once in `on_mount` and never re-rendered. It advertises only the
   must-have keys: `s` (the app's whole point), `q`, and `?` (the overlay that documents the rest of
   the base screen) — save and quit, the pair you reach for, sit together, and `?` tails the line
@@ -1210,11 +1233,16 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
    or a stubbed-empty catalog makes the test pass for the wrong reason. Never touches the real
    `~/.config/opencode/` (temp `--config` only).
 
-## Execution playbook (team fan-out)
+## Appendix — execution playbook (HISTORICAL: how v0.1.0 was built)
 
-When ready to build, fan out as **6 specialists + a lead**, contract-first (model tier = "Safety").
-**Launch trigger:** the user says "go" (say "lean" to drop the QA agent → 5; "cost-lean" to re-tier
-Config/TUI to Haiku).
+> **This section is a record, not an instruction.** oModel shipped; the fan-out below is how the
+> initial build was organised and is kept because the dependency analysis in §Notes still explains
+> *why* the module boundaries fall where they do. Nothing here describes current process, and its
+> counts are frozen at v0.1.0: there are 12 test files today, and `tests/verification.md` runs 10
+> checks — §Verification below still lists 9, because decision #18's Check 10 (the agent surface)
+> was only ever written up there. Don't act on it.
+
+The build fanned out as **6 specialists + a lead**, contract-first.
 
 ### Roster
 | Role | Owns | Model |
@@ -1224,7 +1252,7 @@ Config/TUI to Haiku).
 | **Config I/O** | `config_io.py` (serialize, backups/restore, scaffold) | **Sonnet** |
 | **TUI** | `app.py` two-pane + variant/add-model/diff modals + keybindings | **Opus** |
 | **CLI + packaging** | `cli.py` · `refresh.py` · `pyproject.toml` · `install.sh` · `.github/workflows/*` · README/LICENSE/NOTICE | **Sonnet** |
-| **QA / verification** | all 7 `tests/test_*` authored **from this spec, independent of the implementations** + runs the 9 §Verification checks as the **merge gate** | **Sonnet** |
+| **QA / verification** | the `tests/test_*` suite (7 files at the time) authored **from this spec, independent of the implementations** + runs the §Verification checks as the **merge gate** | **Sonnet** |
 
 ### Sequencing (contract-first)
 0. **Lead (blocking):** freeze §Data contracts (`target` id, `source` enum, candidate-row dict) + each
@@ -1235,7 +1263,7 @@ Config/TUI to Haiku).
    parallel (not blocked on implementations).
 2. **Integrate (lead):** merge tracks, wire `app.py` to catalog/suggestions/resolve/config_io, reconcile
    any interface drift against the §Data contracts.
-3. **Gate (QA + lead):** QA's `test_*` green **and** all 9 §Verification checks pass (incl. a live
+3. **Gate (QA + lead):** QA's `test_*` green **and** every §Verification check passes (incl. a live
    `opencode` run + a Pilot save round-trip). Nothing ships until green.
 
 ### Notes
