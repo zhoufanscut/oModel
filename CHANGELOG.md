@@ -98,8 +98,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The `?` overlay is about half as long. It's grouped by pane, so you can see at a glance that
   `enter`, `a`, `r` and `x` do different things on a preset row, and it no longer repeats what's
   already on screen (`s` / `q` / `?` sit on the hint bar, and every dialog states its own keys) or
-  what needs no telling (`esc` cancels, `y`/`n` answer). It fits an ordinary terminal now without
-  scrolling.
+  what needs no telling (`esc` cancels, `y`/`n` answer). It fits a 30-row terminal without
+  scrolling, and scrolls with `↑↓`/`jk` below that. *(Corrected after release: this line originally
+  claimed it "fits an ordinary terminal without scrolling", which was never true — the body gets
+  14 rows on an 80×24 and the text is 20 lines.)*
 - The hint bar reads `s save · q quit · ? help` — save and quit next to each other, `?` at the end
   as the pointer to everything else.
 - Confirmation dialogs now take `←`/`→` (and `h`/`l`) to move between buttons, not just `Tab`, and

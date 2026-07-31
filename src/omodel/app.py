@@ -1186,8 +1186,11 @@ class HelpModal(ModalScreen):
     """`?` — the base-screen keys the hint bar doesn't show, grouped by pane (the same key means
     different things on a #presets row). Not an exhaustive reference: `s`/`q`/`?` stay on the bar
     behind it, dialogs carry their own hint line, and conventions like enter/esc/y/n go unsaid.
-    Read-only and scrollable (same body pattern as ConfirmModal, in case it outgrows a short
-    terminal); closes with `?`, `esc`, or `q`."""
+    Read-only and scrollable (same body pattern as ConfirmModal); closes with `?`, `esc`, or `q`.
+    It DOES scroll on a short terminal and that is accepted, not a defect to design around: the
+    body gets floor(0.90 * height) - 7 rows, so _BODY's 20 lines need 30 (14 at 80x24, 18 at
+    84x28). Trimming to fit 24 would cost the pane grouping this overlay exists for — see
+    DESIGN §Textual contract."""
 
     BINDINGS: ClassVar[list] = [
         Binding("question_mark", "close", "Close", show=False),

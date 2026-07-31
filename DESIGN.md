@@ -1014,8 +1014,8 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   Grouping by pane is the point: `enter`/`a`/`r`/`x` each mean something *different* on a
   `#presets` row (switch / add / rename / delete) than on the model panes (set / add-edit /
   refresh / clear), and two short adjacent groups show that contrast better than any prose could.
-  It is deliberately **not** an exhaustive reference — the earlier version was, and at 37 lines it
-  scrolled on a normal terminal, which is the one thing a help panel must not do. Three rules
+  It is deliberately **not** an exhaustive reference — the earlier version was, at 37 lines, and
+  scrolled on every terminal anyone actually uses. Three rules
   keep it short: (1) keys already on screen aren't repeated — `s`/`q`/`?` sit on the hint bar
   *behind* the modal, and every dialog states its own keys on its own hint line
   (`Static.modal-hints`), so the old **In dialogs** group was eight lines of duplication;
@@ -1030,7 +1030,17 @@ runs `bun run <this file> <omo-src>` and writes stdout to the data file.
   Body lines stay **≤54 cells**, not the 56 of content the 62-cell panel actually offers: on a
   short terminal the body scrolls and the scrollbar takes 2 of them, so a 55-cell line wraps and
   gives back the height the trim just bought. `test_help_body_stays_light` pins both the width and
-  the line count; the result fits a 30-row terminal with no scroll (the old body needed 47).
+  the line count (the old body needed 47).
+  **It still scrolls below ~30 rows, and that is accepted.** The body gets
+  `floor(0.90 × terminal_height) − 7` rows (the `max-height: 90%` cap, then border 2 + padding 2 +
+  title 1 + hint 1 + its `margin-top` 1), so 20 lines of `_BODY` need 30 rows: measured 14 at 80×24,
+  18 at 84×28, 20 at 100×30. Fitting 24 would mean cutting to 14 lines — the three blank separators
+  only buy 3, so the rest would come out of the group headers or the key lines, i.e. out of exactly
+  the pane-grouping this overlay exists for. CSS can't close it either: dropping the 90% cap, the
+  padding *and* the hint margin reaches 20 rows at 24 with zero slack. So the modal is scrollable by
+  design (`↑↓`/`jk`/PageUp/PageDown/Home/End, advertised on its own hint line) rather than trimmed
+  further. `test_help_body_stays_light`'s cap is a growth budget, **not** a no-scroll guarantee —
+  its docstring says so; don't read it as one.
 - **Events:** highlight on `#targets` → repopulate detail+candidates for that target;
   `enter` on `#candidates` **dispatches by row**: on `cand:add` → open the add-model modal (below);
   on any other `cand:<i>` → set that model (+ default variant) on the in-memory target;
