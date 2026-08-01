@@ -39,7 +39,7 @@ verbatim (timestamped backups each save).
 │ + add preset…                ││                                                  │
 │                              ││                                                  │
 └───── saved 07-30 · 4 models ─┘└──────────────────────────────────────────────────┘
- s save · q quit · ? help                                                    v0.3.0
+ s save · q quit · ? help                                                    v0.4.0
 ```
 
 `claude-opus-5` is offered twice — once under `anthropic`, once under the `opencode` gateway.

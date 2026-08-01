@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-01
+
 ### Added
 - `omodel --update` — update omodel itself to the latest GitHub release. It tells you what's
   available and asks before installing anything, so it doubles as "is there a newer version?"
@@ -29,7 +31,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_GPT_ONLY_AGENTS` / `_ULTRAWORK_AGENTS` "in `app.py`" now name `session.py`, where they actually
   moved in 0.3.0; the release matrix no longer claims a `darwin-x64` binary that 0.2.0 stopped
   building; and the model ids in `omodel agent-guide` are refreshed, with the warning that they are
-  illustrative moved up to the first example an agent reads.
+  illustrative moved up to the first example an agent reads. The docs also stop claiming the `?`
+  key overlay fits without scrolling — it needs a 30-row terminal and never did fit an 80x24 one.
+  The overlay is unchanged and scrolls fine; only the claim was wrong.
 - `omodel agent-guide`'s JSON examples now show every field the payloads actually carry. They were
   missing `sync_conflict` on all three — the one the guide tells an agent to check before its first
   write — and `settable` on a candidate row, two lines above the paragraph explaining what

@@ -266,7 +266,7 @@ omo's own first-choice ones for `sisyphus`, so the picture names no particular u
 │ + add preset…                ││                                                  │
 │                              ││                                                  │
 └───── saved 07-30 · 4 models ─┘└──────────────────────────────────────────────────┘
- s save · q quit · ? help                                                    v0.3.0
+ s save · q quit · ? help                                                    v0.4.0
 ```
 
 Note what the picture is *not*: `#targets` rows carry the target name and nothing else — no
