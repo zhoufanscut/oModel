@@ -1083,8 +1083,8 @@ class TestForceStillReachesTheSubcommands:
     own. Without `default=SUPPRESS` on theirs, `omodel --force set …` would parse, ignore the
     flag, and then refuse the write for the very reason the caller was overriding.
 
-    `subprocess.run` is stubbed as everywhere else — a real `opencode` is on PATH and costs
-    ~3s / ~320 MB a call (CONTRACTS §hard rules)."""
+    `subprocess.run` AND `shutil.which` are stubbed as everywhere else — a real `opencode` is on
+    PATH and costs ~3s / ~320 MB a call (CONTRACTS §hard rules)."""
 
     CONFIG = '{"agents": {}, "categories": {}}\n'
 
@@ -1094,7 +1094,14 @@ class TestForceStillReachesTheSubcommands:
         config = tmp_path / "c.jsonc"
         config.write_text(self.CONFIG)
         result = MagicMock(returncode=0, stdout="opencode/glm-5\nzhipuai/glm-5\n", stderr="")
-        with patch("subprocess.run", return_value=result):
+        # `shutil.which` too, not just `subprocess.run`: catalog.load() checks PATH FIRST and
+        # returns an empty (degraded) catalog before the stubbed subprocess is ever reached.
+        # Degraded means "can't tell whether it's available", so `nope/nope` is neither refused
+        # nor warned about and all three tests below go quiet. Stubbing only the subprocess left
+        # the class passing on any machine with a real opencode installed and failing on one
+        # without — release.yml, which mocks nothing, is where that finally showed up.
+        with patch("shutil.which", return_value="/usr/bin/opencode"), \
+                patch("subprocess.run", return_value=result):
             code = cli.main([*argv, "--config", str(config), "--json"])
         return code, json.loads(capsys.readouterr().out)
 
