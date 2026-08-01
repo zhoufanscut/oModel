@@ -99,6 +99,7 @@ jobs:
           pytest tests/ -q --tb=short
 
       - name: Open PR if changed
+        id: cpr
         if: steps.diff.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
@@ -125,6 +126,37 @@ jobs:
           # Load-bearing: without it the action falls back to `git add -A`, which would
           # sweep in the untracked oh-my-openagent/ sparse checkout as a gitlink.
           add-paths: "src/omodel/data/omo-suggestions.json"
+
+      # Opening the PR notifies nobody: with REFRESH_PAT the author IS the repo owner, and
+      # GitHub suppresses notifications for your own activity — so the weekly refresh landed
+      # silently. Comment with GITHUB_TOKEN instead; that makes the actor github-actions[bot],
+      # so the @mention is somebody else's, and arrives as a normal "Participating and
+      # @mentions" notification (→ email, with the default notification settings). Works
+      # either way: without REFRESH_PAT the bot authors the PR and the mention still lands.
+      - name: Notify the owner (the PR itself can't)
+        if: steps.cpr.outputs.pull-request-operation == 'created' || steps.cpr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+          OWNER: ${{ github.repository_owner }}
+          OP: ${{ steps.cpr.outputs.pull-request-operation }}
+          VALIDATION: ${{ steps.validate.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$VALIDATION" = "success" ]; then
+            status="✅ Lint + tests passed in the refresh run."
+          else
+            status="⚠️ **Validation FAILED** in the refresh run. Do not merge until the checks are green."
+          fi
+          {
+            echo "@${OWNER} — the weekly omo refresh ${OP} this PR: \`omo-suggestions.json\` data changed."
+            echo
+            echo "$status"
+            echo
+            echo "Refresh run: ${RUN_URL}"
+          } > "$RUNNER_TEMP/notify.md"
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/notify.md"
 
       # Surface a validation failure as a red run even though the PR was allowed to open.
       - name: Fail the run if validation failed
