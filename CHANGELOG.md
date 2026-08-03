@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-03
+
+Support for oh-my-openagent 4.19.3+, which moved its configuration to
+`~/.omo/omo.jsonc` and nested the model assignments under `"[opencode]"`.
+If you have upgraded omo, this release is what makes `omodel` work again.
+
 ### Fixed
 
 - Read and write oh-my-openagent's unified config at `~/.omo/omo.jsonc`. Since omo 4.19.3 the
