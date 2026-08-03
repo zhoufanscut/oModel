@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-03
+
+Catches up with oh-my-openagent 4.19.4, which moved a number of model ids and
+renamed its lowest reasoning level. If you are on 4.19.4, this is the release
+that stops omodel suggesting models omo no longer recommends.
+
 ### Fixed
 
 - You can set a model's reasoning to **off** again. omo 4.19.4 renamed its lowest reasoning level
