@@ -125,11 +125,19 @@ class Catalog:
         Returns the FIRST NON-EMPTY variant set (lowercased, opencode's order) found across
         `provider` then any other connected provider serving `model`. A provider that reports an
         EMPTY `variants` object is treated as "no info from this endpoint, keep looking" rather
-        than an authoritative "no variants" — the dedicated providers (zhipuai, moonshotai-cn)
-        report `{}` for every model (DESIGN §Data sources), so trusting their emptiness would hide
-        real variants that live in the `opencode` gateway's verbose (e.g. glm-5.2 → high/max). So:
-        `provider`'s own non-empty set wins if it has one; else the gateway's (usually warm,
-        covers ~every model); else []. Returns [] when NO cached provider reports a non-empty set
+        than an authoritative "no variants" — a dedicated provider very often reports `{}` (zhipuai
+        for every model; moonshotai-cn for the whole kimi K2 line), so trusting its emptiness would
+        hide real variants that live in the `opencode` gateway's verbose (glm-5.2 → high/max).
+
+        **But "dedicated is empty, the gateway has the real set" is a tendency, not a rule, and
+        the search order is what makes it not matter.** It runs the other way too: moonshotai-cn
+        reports low/high/max for kimi-k3 while the gateway reports only max, so a dedicated
+        endpoint can be the RICHER one. Starting at `provider` is therefore load-bearing in both
+        directions — it skips a dedicated `{}` to reach the gateway, AND keeps a dedicated set the
+        gateway would have narrowed. Do not "optimise" this into a gateway-first lookup; per-row
+        warns depend on it (resolve.TestVariantWarnOpencodeFirst pins the divergence). So:
+        `provider`'s own non-empty set wins if it has one; else the next serving provider's;
+        else []. Returns [] when NO cached provider reports a non-empty set
         — i.e. opencode genuinely lists none (kimi) OR nothing is cached for the model anywhere (a
         total miss): the caller offers nothing, we never guess.
 

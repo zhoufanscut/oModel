@@ -456,6 +456,24 @@ class TestVariantsFor:
         with _NO_SHELL:
             assert cat.variants_for("zhipuai", "glm-5.2") == ["low", "medium"]
 
+    def test_dedicated_provider_may_out_report_the_gateway(self):
+        """The counter-case to test_prefers_non_empty_across_providers, and the reason the search
+        starts at the PICKED provider rather than the gateway.
+
+        "Dedicated reports `{}`, the gateway has the real set" is only a tendency. Measured
+        against live opencode, moonshotai-cn reports low/high/max for kimi-k3 while the opencode
+        gateway reports just max — the dedicated endpoint is the richer one, and a gateway-first
+        lookup would silently narrow the picker from three rungs to one."""
+        self._seed("moonshotai-cn", {"kimi-k3": ["low", "high", "max"]})
+        self._seed("opencode", {"kimi-k3": ["max"]})
+        cat = Catalog(
+            available={"opencode": ["kimi-k3"], "moonshotai-cn": ["kimi-k3"]},
+            connected=["opencode", "moonshotai-cn"],
+        )
+        with _NO_SHELL:
+            assert cat.variants_for("moonshotai-cn", "kimi-k3") == ["low", "high", "max"]
+            assert cat.variants_for("opencode", "kimi-k3") == ["max"]
+
     def test_unknown_model_returns_empty(self):
         """A model no connected provider serves → [] (no record anywhere, no subprocess)."""
         self._seed("opencode", {"gpt-5.5": ["low", "medium", "high"]})

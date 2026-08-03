@@ -881,3 +881,41 @@ class TestVariantWarnOpencodeFirst:
         heuristic variant stays clean (gpt-5.5 + high), so a fresh machine doesn't scream ⚠."""
         res = Resolver.build(_make_catalog(["openai/gpt-5.5"]), sugg)
         assert self._warn_for(res, "gpt-5.5", "openai", "high") == []
+
+    def test_warn_differs_between_the_two_rows_of_one_entry(self, sugg):
+        """ONE chain entry, expanded to two provider rows, can warn on one and not the other —
+        the ⚠ is a property of the (provider, model) PAIR, never of the model or of omo's
+        suggestion. Every other test here uses a single provider, so nothing else pins this.
+
+        Real case (omo 4.19.4 metis, kimi-k3 @ low): moonshotai-cn reports low/high/max and the
+        opencode gateway reports only max, so the dedicated row is clean and the gateway row is
+        flagged. This is what a gateway-first `variants_for` would break — it would clear the ⚠
+        on a row where the variant genuinely is not offered, which is worse than a spurious one:
+        a warn-but-allow marker that stays silent teaches the user to trust it."""
+        self._seed("moonshotai-cn", {"kimi-k3": ["low", "high", "max"]})
+        self._seed("opencode", {"kimi-k3": ["max"]})
+        res = Resolver.build(_make_catalog([
+            "opencode/kimi-k3", "moonshotai-cn/kimi-k3",
+            "opencode/gpt-5.5", "opencode/claude-opus-4-8",  # 2 vendors → opencode is a gateway
+        ]), sugg)
+        synth = {
+            "variant": "",
+            "fallbackChain": [
+                {"providers": ["moonshotai-cn", "opencode"], "model": "kimi-k3", "variant": "low"},
+            ],
+        }
+        with patch.object(res, "_requirement_for", return_value=synth):
+            rows = [r for r in res.candidates("agent:sisyphus") if r["model"] == "kimi-k3"]
+        assert [(r["provider"], r["warn"]) for r in rows] == [
+            ("moonshotai-cn", []),        # dedicated, offers low → clean (and sorts first)
+            ("opencode", ["variant"]),    # gateway, offers only max → ⚠
+        ]
+
+    def test_no_variant_requested_cannot_warn(self, sugg):
+        """The other half of the same confusion: a chain entry with NO variant never warns, on
+        any provider, whatever opencode reports — `_variant_warn` returns [] on its first line.
+        omo 4.19.4's sisyphus asks for kimi-k3 with no variant at all, so that row is clean for
+        this reason and not because its variant was validated against anything."""
+        self._seed("opencode", {"kimi-k3": ["max"]})  # would flag `low`, but none is asked for
+        res = Resolver.build(_make_catalog(["opencode/kimi-k3"]), sugg)
+        assert self._warn_for(res, "kimi-k3", "opencode", None) == []
