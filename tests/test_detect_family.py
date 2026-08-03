@@ -123,8 +123,9 @@ CATEGORY_NAMES = {
 
 # (model_id, variant) pairs where omo's chain asks for a variant the heuristic family registry
 # does not declare — see test_chain_variants_are_declared_by_their_family for what that does and
-# does not imply (short version: the chain is right, the heuristic is narrow, and it only shows
-# as a ⚠ when opencode --verbose is silent). Keyed by model, NOT by target: one such pair reaches
+# does not imply (short version: the chain is right, the heuristic is usually the narrow one, and
+# for MOST entries the ⚠ shows only while opencode --verbose is silent — but not all of them; see
+# the `off` group below). Keyed by model, NOT by target: one such pair reaches
 # several chains (kimi-k3@max lands in three), and omo moving it to a fourth next week is not new
 # information. Reviewed against opencode's own variant sets and accepted for omo 4.19.2 — the pin
 # exists so the NEXT pair gets the same look, not to force a fix anyone owes. Prune an entry once
@@ -142,6 +143,16 @@ ACCEPTED_VARIANT_DRIFT = {
     # cheap/fast models, i.e. "reasoning off for the quick tier", which is coherent. `off` IS a
     # real rung (clampReasoningLevel indexes it at 0) — the heuristic families just never listed
     # the bottom one, so every use of it drifts.
+    #
+    # ⚠ THESE TWO ARE THE EXCEPTION to "only warns while the cache is cold". Measured against a
+    # warm cache, opencode reports `high, max` for BOTH models on every serving provider — no
+    # `none`, no `off`. So the disagreement is with OPENCODE, not with omo's heuristic registry,
+    # and `_variant_warn` takes its first branch (non-empty opencode set, `off` not in it) rather
+    # than the family fallback. The ⚠ therefore persists at any cache age; `--refresh-models`
+    # will not clear it, and nothing is broken when it doesn't. Accepted as warn-but-allow: omo
+    # recommends a rung opencode says the model does not expose, and telling the user that is the
+    # marker doing its job. (Contrast claude-fable-5@xhigh / kimi-k3@max / glm-5.2@max below,
+    # which opencode DOES report and which really do render clean once warm.)
     ("claude-haiku-4-5", "off"),
     ("deepseek-v4-flash", "off"),
     #
@@ -265,14 +276,24 @@ class TestBundledSuggestionsLoad:
         simply RIGHT and the heuristic is the narrow one: opencode/claude-fable-5 reports
         low/medium/high/xhigh/max, moonshotai-cn/kimi-k3 reports low/high/max.
 
-        So this pin guards the DEGRADED path, not the normal one. _variant_warn prefers
+        So for MOST entries this pin guards the DEGRADED path. _variant_warn prefers
         `--verbose` and falls back to `family.variants` only when opencode is silent for that
         (provider, model) — an expired or cold cache, opencode missing from PATH, or a
-        dedicated provider reporting `{}`. In exactly those states a chain entry listed here
-        renders a spurious ⚠ warn-but-allow row; with a warm cache it renders clean. It never
-        blocks a pick either way (decision #5). Worth a test because the entries land
-        top-of-chain, so when a user IS degraded the triangle sits on omo's first
-        recommendation — and a weekly --refresh-omo should not add one unnoticed.
+        dedicated provider reporting `{}`. In exactly those states such an entry renders a
+        spurious ⚠ warn-but-allow row, and with a warm cache it renders clean.
+
+        **But "warm cache ⇒ clean" is not universal, and assuming it will misdiagnose a real
+        ⚠.** Some entries drift because opencode ITSELF does not expose the variant, not because
+        the heuristic registry is narrow — omo 4.19.4's two `off` entries are exactly this
+        (opencode reports only high/max for claude-haiku-4-5 and deepseek-v4-flash). There
+        `_variant_warn` takes its FIRST branch on a non-empty opencode set, so the triangle
+        persists at any cache age and `--refresh-models` will not clear it. Before treating a ⚠
+        as a stale-cache artifact, check what opencode actually reports for that (provider,
+        model); the ACCEPTED_VARIANT_DRIFT comment records which entries are which.
+
+        It never blocks a pick either way (decision #5). Worth a test because the entries land
+        top-of-chain, so the triangle sits on omo's first recommendation — and a weekly
+        --refresh-omo should not add one unnoticed.
 
         Models with no detected family (e.g. big-pickle) are skipped — no declaration to
         check against. Comparison is case-insensitive, mirroring _variant_warn.
