@@ -199,8 +199,8 @@ class TestTempFileCleanup:
 
         rc = refresh_mod.refresh(omo_src=omo_src)
 
-        assert rc == 0
-        assert not os.path.exists(captured["ts_path"])
+        assert rc == 1  # bun ran and failed — fatal, so the workflow goes red
+        assert not os.path.exists(captured["ts_path"])  # ...and the temp still gets cleaned up
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +299,14 @@ class TestRefreshNonFatalPaths:
         assert rc == 0
         assert "non-fatal" in capsys.readouterr().out.lower()
 
-    def test_bun_nonzero_exit_is_non_fatal(self, monkeypatch, tmp_path, capsys):
+    def test_bun_nonzero_exit_is_FATAL(self, monkeypatch, tmp_path, capsys):
+        """A missing checkout or missing bun is non-fatal (above) — the maintainer simply doesn't
+        have the tooling. But bun RUNNING and failing means the extractor is broken against omo's
+        current source, and that must not exit 0.
+
+        It used to. omo deleted `known-variants.ts`; the import threw; refresh reported
+        "Non-fatal"; the weekly workflow's change-check then saw no data change, opened no PR,
+        and went green — refreshing nothing, every Monday, for as long as nobody looked."""
         omo_src = _make_omo_src(tmp_path)
         monkeypatch.setattr(shutil, "which", _which_bun_only)
         monkeypatch.setattr(
@@ -308,18 +315,19 @@ class TestRefreshNonFatalPaths:
 
         rc = refresh_mod.refresh(omo_src=omo_src)
 
-        assert rc == 0
-        assert "non-fatal" in capsys.readouterr().out.lower()
+        assert rc == 1
+        assert "failed" in capsys.readouterr().out.lower()
 
-    def test_bun_invalid_json_is_non_fatal(self, monkeypatch, tmp_path, capsys):
+    def test_bun_invalid_json_is_FATAL(self, monkeypatch, tmp_path, capsys):
+        """Same class: the extractor ran and produced something unusable."""
         omo_src = _make_omo_src(tmp_path)
         monkeypatch.setattr(shutil, "which", _which_bun_only)
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _mock_run("not json {{{"))
 
         rc = refresh_mod.refresh(omo_src=omo_src)
 
-        assert rc == 0
-        assert "non-fatal" in capsys.readouterr().out.lower()
+        assert rc == 1
+        assert "not valid json" in capsys.readouterr().out.lower()
 
     def test_bun_valid_json_writes_to_resolved_target(self, monkeypatch, tmp_path, capsys):
         omo_src = _make_omo_src(tmp_path)

@@ -107,24 +107,33 @@ def refresh(omo_src: str | None = None) -> int:
             except OSError:
                 pass
 
+    # From here on a failure is NOT "the tooling isn't installed" — omo src and bun are both
+    # present and the extractor actually ran. Those two cases above stay non-fatal (a maintainer
+    # without a checkout must still be able to run this); this one exits non-zero so the weekly
+    # workflow goes red instead of green.
+    #
+    # It used to return 0 here too, and that hid a real breakage for a week: omo deleted
+    # `known-variants.ts`, the import threw, `--refresh-omo` reported "Non-fatal", the workflow's
+    # change-check then saw no data change and opened no PR — a green run that refreshed nothing,
+    # every Monday. Silence is not success.
     if result.returncode != 0:
         print(
-            f"[refresh] bun exited with code {result.returncode}. "
-            "Non-fatal — keeping bundled data."
+            f"[refresh] bun exited with code {result.returncode}. The extractor ran and FAILED "
+            "— keeping bundled data, but this needs fixing (omo's source layout may have moved)."
         )
         if result.stderr:
             print(result.stderr, file=sys.stderr)
         _print_bundled_meta()
-        return 0
+        return 1
 
     # Validate the output is JSON
     stdout = result.stdout.strip()
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        print(f"[refresh] bun output is not valid JSON ({exc}). Non-fatal — keeping bundled data.")
+        print(f"[refresh] bun output is not valid JSON ({exc}). Keeping bundled data.")
         _print_bundled_meta()
-        return 0
+        return 1
 
     # --- Determine write target ---
     out_path = _resolve_write_target()

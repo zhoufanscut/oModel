@@ -52,6 +52,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no-op saves each claimed to have changed something.
 - A config file whose top level is not a JSON object (an array, say) reports the same readable
   parse error as any other malformed file instead of a stack trace.
+- `--refresh-omo` works against oh-my-openagent 4.19.3+ again. omo's reasoning-vocabulary change
+  removed the module the extractor read its variant list from, so the refresh had been failing —
+  and, because it treated that as non-fatal, reporting success while regenerating nothing. It now
+  exits non-zero when the extractor runs and fails, so the weekly refresh goes red instead of
+  green. A missing omo checkout or missing `bun` is still non-fatal, as before.
 
 ## [0.4.0] — 2026-08-01
 

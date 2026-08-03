@@ -9,7 +9,11 @@ const core = join(omo, "packages/model-core/src");
 const { HEURISTIC_MODEL_FAMILY_REGISTRY } = await import(join(core, "model-capability-heuristics"));
 const { AGENT_MODEL_REQUIREMENTS }        = await import(join(core, "agent-model-requirements"));
 const { CATEGORY_MODEL_REQUIREMENTS }     = await import(join(core, "category-model-requirements"));
-const { KNOWN_VARIANTS }                  = await import(join(core, "known-variants"));
+// omo's `2026-08-reasoning-unification` (commit 83009aed) deleted known-variants.ts and folded
+// both KNOWN_VARIANTS copies into one 7-rung ladder plus an `auto` sentinel. Mirroring the
+// current vocabulary drops the legacy `none` (omo now normalizes it to `off`) and `thinking`,
+// and gains `off` — 8 tokens where there were 9.
+const { REASONING_LEVELS, REASONING_AUTO } = await import(join(core, "reasoning-level"));
 
 const reqOut = (r: any) => ({
   fallbackChain: r.fallbackChain.map((e: any) => ({
@@ -44,5 +48,5 @@ console.log(JSON.stringify({
   agents: mapReqs(AGENT_MODEL_REQUIREMENTS),
   categories: mapReqs(CATEGORY_MODEL_REQUIREMENTS),
   families,
-  knownVariants: [...KNOWN_VARIANTS],   // Set|array → array
+  knownVariants: [...REASONING_LEVELS, REASONING_AUTO],   // readonly tuple + sentinel → array
 }, null, 2));
