@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- You can set a model's reasoning to **off** again. omo 4.19.4 renamed its lowest reasoning level
+  from `none` to `off` and made it a real setting; opencode still calls it `none`, and omodel sat
+  between the two spellings. It treated `none` as "no setting at all", so the pickers hid it and
+  saving quietly removed the key — turning *reasoning off* into *use the model's default*, which
+  on a reasoning model is the opposite. Asking for it by omo's name (`--variant off`) was refused
+  outright, leaving `--force` as the only way to write a level omo recommends itself (its `quick`
+  category asks for it on two models). omodel now translates between the two, so `off` shows up
+  in the pickers, `--variant off` and `--variant none` both work, and a config that already said
+  `none` is updated to `off` the next time you save it — the same thing omo was already reading
+  it as.
 - Keep a cheaper size/tier model out of a full-size slot. Whether a trailing token like `mini`
   or `nano` marks a genuinely different model was decided purely from the ids omo currently
   recommends, so when omo 4.19.4 dropped its last id containing `mini`, a provider's
@@ -21,6 +31,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `deepseek-v4-pro`, `mimo-v2.5-pro`, `qwen3.6-flash`, `qwen3.8-max-preview` and
   `grok-4.20-0309-non-reasoning`. omo also renamed its `none` reasoning level to `off` and
   retired `thinking`.
+- The pickers' "no reasoning level" row is now labelled `(default)` rather than `(none)`. It sits
+  next to a real `off` that does the opposite thing, and the old name matched neither.
 
 ## [0.5.0] — 2026-08-03
 

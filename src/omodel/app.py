@@ -96,10 +96,10 @@ is auto-prefixed via resolve_prefix if available, else '⚠ unknown — add a pr
 BLOCKED until qualified; a typed full id that fuzzy-matches nothing appears as a synthetic "use as
 typed" row (a half-typed fragment that still matches falls back to the fuzzy list, no ⚠ row).
 VARIANT phase: iff opencode reports variants for the chosen (provider, model)
-(catalog.variants_for — cached `--verbose`), pick one or '(none)'; otherwise (kimi/glm-5, or no
-cached verbose) it's added immediately (variant None). A "none" opencode may list is dropped as a
-duplicate of '(none)' (_is_no_variant) — never offered, never written. GPT-only targets filter the
-list to GPT models.
+(catalog.variants_for — cached `--verbose`), pick one or '(default)'; otherwise (kimi/glm-5, or no
+cached verbose) it's added immediately (variant None). opencode's "none" is offered as omo's
+"off" (catalog.normalize_variant) — reasoning off, which '(default)' is not. GPT-only targets
+filter the list to GPT models.
 Add-sub (`a` on an agent): an agent that supports more than one sub-kind (only Sisyphus — ultrawork
 + compaction) opens a chooser modal, an OptionList (`#sub-list`, IDs 'sub:ultrawork' /
 'sub:compaction') with one row per kind valid for that agent (see session.ULTRAWORK_AGENTS), naming each
@@ -317,10 +317,11 @@ class AddModelModal(ModalScreen):
     (Hephaestus) the fuzzy list is filtered to GPT models, and a typed non-GPT id stays blocked.
 
     VARIANT PHASE — iff opencode reports variants for the chosen (provider, model)
-    (catalog.variants_for — the cached `--verbose` map), pick one, or `(none)` ⇒ variant None (a
+    (catalog.variants_for — the cached `--verbose` map), pick one, or `(default)` ⇒ variant None (a
     fresh add, NOT VariantModal's '' clear sentinel), from #add-variants (a VimOptionList, option
-    ids 'var:<v>' / 'var:__none__'). A "none" opencode may list is dropped as a duplicate of the
-    synthetic `(none)` (_is_no_variant). A model opencode lists with no (real) variants (kimi,
+    ids 'var:<v>' / 'var:__none__' — the ID keeps its old name, which is a contract; only the
+    LABEL says `(default)`). opencode's "none" is offered as omo's `off`. A model opencode lists
+    with no (real) variants (kimi,
     glm-5) — or whose verbose isn't cached anywhere — skips this phase and adds immediately. Esc
     returns to the model phase (restores + focuses the Input); the model phase's Esc cancels the modal.
 
@@ -646,9 +647,10 @@ class AddModelModal(ModalScreen):
         if row is None:
             return
         self._staged = row
-        # Drop a "none" variant opencode may list — it duplicates the synthetic "(none)" clear row
-        # _enter_variant_phase appends, so offering both is redundant (_is_no_variant). If that
-        # leaves nothing pickable, add the model straight away (variant left None), like kimi/glm-5.
+        # opencode's "none" arrives as omo's "off" (catalog.normalize_variant) and IS offered —
+        # it sets reasoning off, which is not what the synthetic "(default)" row below does. The
+        # filter only drops a blank opencode has no business reporting. If that leaves nothing
+        # pickable, add the model straight away (variant left None), like kimi/glm-5.
         variants = [
             v for v in self._resolver.catalog.variants_for(row["provider"], row["model"])
             if not _is_no_variant(v)
@@ -665,7 +667,7 @@ class AddModelModal(ModalScreen):
         variants_list.clear_options()
         for v in variants:
             variants_list.add_option(Option(_lit(v), id=f"var:{v}"))
-        variants_list.add_option(Option("(none)", id="var:__none__"))
+        variants_list.add_option(Option("(default)", id="var:__none__"))
         variants_list.display = True
         # Hide the model-phase widgets now that the variant list can take focus.
         self.query_one("#add-input", Input).display = False
@@ -708,9 +710,10 @@ class AddModelModal(ModalScreen):
 
 
 class VariantModal(ModalScreen):
-    """`v` — pick from the variants opencode reports for the model + '(none)'.  A "none" opencode
-    may list is dropped by the caller as a duplicate of '(none)' (_is_no_variant).  Dismisses with
-    the chosen variant string, the sentinel '' for (none), or None on cancel."""
+    """`v` — pick from the variants opencode reports for the model + '(default)'.  opencode's
+    "none" reaches this list as omo's `off` (catalog.normalize_variant) and is pickable: it sets
+    reasoning off, where '(default)' drops the key.  Dismisses with the chosen variant string,
+    the sentinel '' for (default), or None on cancel."""
 
     BINDINGS: ClassVar[list] = [
         Binding("escape", "cancel", "Cancel", show=False),
@@ -753,7 +756,7 @@ class VariantModal(ModalScreen):
         ol = self.query_one("#variant-list", OptionList)
         for v in self._variants:
             ol.add_option(Option(_lit(v), id=f"var:{v}"))
-        ol.add_option(Option("(none)", id="var:__none__"))
+        ol.add_option(Option("(default)", id="var:__none__"))
         ol.focus()
 
     @on(OptionList.OptionSelected, "#variant-list")
@@ -2591,8 +2594,8 @@ class OModelApp(App):
         if not (0 <= idx < len(rows)):
             return
         row = rows[idx]
-        # Drop a "none" variant opencode may list — the VariantModal already appends a synthetic
-        # "(none)" clear row, so listing both is redundant (_is_no_variant).
+        # opencode's "none" arrives as omo's "off" and IS offered — the VariantModal's synthetic
+        # "(default)" row drops the key instead, which is a different outcome. Blanks only.
         variants = [
             v for v in self.catalog.variants_for(row["provider"], row["model"])
             if not _is_no_variant(v)

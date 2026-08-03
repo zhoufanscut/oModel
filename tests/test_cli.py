@@ -480,11 +480,22 @@ class TestSet:
         assert _read(cfg) == before
         assert not os.path.exists(os.path.join(os.path.dirname(cfg), ".omodel-presets.json"))
 
-    def test_variant_none_drops_the_key(self, tmp_path):
+    def test_variant_none_is_written_as_off(self, tmp_path):
+        """opencode's `none` is omo's `off` — a real bottom rung, so it is WRITTEN, not dropped.
+        Dropping it (the pre-4.19.4 behaviour) turned "reasoning off" into "use the default"."""
         cfg = _agent_cfg(tmp_path)
         _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--variant", "max", "--config", cfg])
         _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--variant", "none", "--config", cfg])
-        assert '"variant"' not in _read(cfg)
+        assert '"variant": "off"' in _read(cfg)
+
+    def test_variant_off_is_accepted_though_opencode_spells_it_none(self, tmp_path):
+        """The guard compares against a set `variants_for` has already converted, so omo's own
+        spelling must pass it. Before the converter this was refused as `bad_variant`, and
+        `--force` was the only way to write a level omo's own `quick` category recommends."""
+        cfg = _agent_cfg(tmp_path)
+        rc = _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--variant", "off", "--config", cfg])
+        assert rc == 0
+        assert '"variant": "off"' in _read(cfg)
 
     def test_whitespace_variant_is_treated_as_none(self, tmp_path):
         """Junk an agent could easily send — stripped at the CLI rather than written verbatim."""

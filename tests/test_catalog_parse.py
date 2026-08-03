@@ -393,6 +393,34 @@ class TestVariantsFor:
         with _NO_SHELL:
             assert cat.variants_for("opencode", "gpt-5.5") == []
 
+    def test_opencode_none_is_converted_to_omo_off(self):
+        """The single seam where opencode's vocabulary enters omodel. opencode still reports the
+        bottom reasoning rung as `none`; omo 4.19.4 renamed it `off`. Converting here means no
+        picker, guard or warning downstream ever has to handle both spellings — and position is
+        preserved, since the rung's place in the ladder has not moved."""
+        self._seed("openai", {"gpt-5.5": ["none", "low", "high"]})
+        cat = Catalog(available={"openai": ["gpt-5.5"]}, connected=["openai"])
+        with _NO_SHELL:
+            assert cat.variants_for("openai", "gpt-5.5") == ["off", "low", "high"]
+
+    def test_conversion_dedupes_against_omos_own_spelling(self):
+        """A provider reporting BOTH spellings must not yield `off` twice — the rename can
+        collide with a level the same provider already names omo's way."""
+        self._seed("openai", {"gpt-5.5": ["none", "off", "high"]})
+        cat = Catalog(available={"openai": ["gpt-5.5"]}, connected=["openai"])
+        with _NO_SHELL:
+            assert cat.variants_for("openai", "gpt-5.5") == ["off", "high"]
+
+    def test_other_variant_names_pass_through_untouched(self):
+        """Only `none` is renamed. An unknown value is forwarded to the provider verbatim by omo
+        (`normalizeReasoning`'s passthrough), so omodel must not mangle it either."""
+        self._seed("openai", {"gpt-5.5": ["minimal", "xhigh", "some-future-rung"]})
+        cat = Catalog(available={"openai": ["gpt-5.5"]}, connected=["openai"])
+        with _NO_SHELL:
+            assert cat.variants_for("openai", "gpt-5.5") == [
+                "minimal", "xhigh", "some-future-rung",
+            ]
+
     def test_empty_object_everywhere_is_no_variants(self):
         """kimi: every serving provider reports `variants: {}` → [] (no variant step)."""
         self._seed("opencode", {"kimi-k2.5": []})

@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from _helpers import frozen_suggestions, seed_verbose
 
+from omodel import catalog as catalog_mod
 from omodel import config_io, presets
 from omodel import session as session_mod
 from omodel.catalog import Catalog
@@ -100,16 +101,24 @@ class TestGuards:
     def test_gpt_only_covers_subtargets(self, target, expected):
         assert session_mod.gpt_only(target) is expected
 
-    @pytest.mark.parametrize("variant", [None, "", "none", "NONE", "None", " none "])
+    @pytest.mark.parametrize("variant", [None, ""])
     def test_is_no_variant_true(self, variant):
         assert session_mod.is_no_variant(variant) is True
 
-    @pytest.mark.parametrize("variant", ["max", "high", "thinking", "   "])
+    @pytest.mark.parametrize("variant", ["max", "high", "thinking", "   ", "off"])
     def test_is_no_variant_false(self, variant):
         """A whitespace-only variant is NOT dropped — it can only come from a hand-edited config,
         and the predicate is kept identical to the TUI's so both surfaces agree. cli.py strips
         its --variant input instead."""
         assert session_mod.is_no_variant(variant) is False
+
+    @pytest.mark.parametrize("variant", ["none", "NONE", "None", " none "])
+    def test_none_is_a_level_not_the_absence_of_one(self, variant):
+        """omo 4.19.4 made `off` a real bottom rung and kept `none` as its alias, so "none" means
+        reasoning OFF — the opposite of dropping the key ("use the default"). The predicate no
+        longer claims it; `catalog.normalize_variant` renames it one layer down."""
+        assert session_mod.is_no_variant(variant) is False
+        assert catalog_mod.normalize_variant(variant) == "off"
 
     def test_subkinds_ultrawork_is_sisyphus_only(self):
         assert session_mod.subkinds_for("sisyphus") == ("ultrawork", "compaction")
@@ -289,13 +298,23 @@ class TestMutations:
         assert s.cfg["agents"]["probe"]["model"] == "zhipuai/glm-5"
         assert s.cfg["agents"]["probe"]["variant"] == "max"
 
-    @pytest.mark.parametrize("variant", [None, "", "none", "NONE"])
-    def test_none_variant_drops_the_key(self, tmp_path, variant):
-        """`none` ≡ `(none)` ≡ no variant key — never written as variant: "none"."""
+    @pytest.mark.parametrize("variant", [None, ""])
+    def test_empty_variant_drops_the_key(self, tmp_path, variant):
+        """No level ≡ `(default)` ≡ no variant key — omo then applies the model's default."""
         s = _session(tmp_path)
         s.set_model("agent:probe", "zhipuai", "glm-5", "max")
         s.set_model("agent:probe", "zhipuai", "glm-5", variant)
         assert "variant" not in s.cfg["agents"]["probe"]
+
+    @pytest.mark.parametrize("variant", ["none", "NONE", " none "])
+    def test_none_variant_is_written_as_off(self, tmp_path, variant):
+        """The converter runs at the write point too, not just on `variants_for`'s output: a
+        `none` can also arrive from `--variant` or a hand-edited config that saw no picker.
+        Writing it through unchanged would leave omodel's config in a vocabulary omo has
+        renamed; dropping it would silently turn "reasoning off" into "use the default"."""
+        s = _session(tmp_path)
+        s.set_model("agent:probe", "zhipuai", "glm-5", variant)
+        assert s.cfg["agents"]["probe"]["variant"] == "off"
 
     def test_set_creates_missing_nodes(self, tmp_path):
         s = _session(tmp_path, json.dumps({}))

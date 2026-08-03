@@ -2102,10 +2102,10 @@ def test_pilot_addmodal_kimi_no_variant_phase(pilot_config):
     asyncio.run(_run())
 
 
-def test_pilot_addmodal_drops_none_variant(pilot_config):
-    """A "none" variant opencode lists is dropped as a duplicate of the synthetic "(none)" clear
-    row — the add-model variant list must show the REAL variants + var:__none__ only, never a
-    var:none. Picking (none) then writes NO variant key ("none" ≡ (none) ≡ unset)."""
+def test_pilot_addmodal_offers_opencode_none_as_off(pilot_config):
+    """A "none" variant opencode lists reaches the picker as omo's `off` (catalog's converter),
+    so the add-model list shows var:off alongside the real variants — never a var:none, and
+    distinct from the synthetic var:__none__ clear row, which still writes NO variant key."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2121,8 +2121,8 @@ def test_pilot_addmodal_drops_none_variant(pilot_config):
 
             variants = pilot.app.screen.query_one("#add-variants", OptionList)
             vids = [variants.get_option_at_index(i).id for i in range(variants.option_count)]
-            assert vids == ["var:low", "var:medium", "var:high", "var:__none__"], vids
-            assert "var:none" not in vids, "the literal 'none' must be dropped, not offered"
+            assert vids == ["var:off", "var:low", "var:medium", "var:high", "var:__none__"], vids
+            assert "var:none" not in vids, "opencode's 'none' must arrive renamed, not raw"
 
             variants.highlighted = vids.index("var:__none__")
             await pilot.pause()
@@ -2136,10 +2136,11 @@ def test_pilot_addmodal_drops_none_variant(pilot_config):
     asyncio.run(_run())
 
 
-def test_pilot_addmodal_only_none_variant_skips_phase(pilot_config):
-    """A model whose ONLY opencode-reported variant is "none" has nothing real to pick once the
-    duplicate is dropped — so the add-model flow skips the variant phase entirely and adds it
-    immediately with no variant key (same path as kimi/glm-5)."""
+def test_pilot_addmodal_only_none_variant_still_offers_off(pilot_config):
+    """A model whose ONLY opencode-reported variant is "none" now has something real to pick —
+    `off` — so the variant phase is ENTERED rather than skipped. Previously the sole variant was
+    discarded as a duplicate and the model was added with no level at all, which is the one
+    outcome the user could not then correct: "reasoning off" was unreachable."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2151,19 +2152,27 @@ def test_pilot_addmodal_only_none_variant_skips_phase(pilot_config):
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert len(pilot.app.screen_stack) == 1, "a 'none'-only model must skip the variant phase"
+            assert len(pilot.app.screen_stack) == 2, "off is pickable → the variant phase opens"
+            variants = pilot.app.screen.query_one("#add-variants", OptionList)
+            vids = [variants.get_option_at_index(i).id for i in range(variants.option_count)]
+            assert vids == ["var:off", "var:__none__"], vids
+
+            variants.highlighted = vids.index("var:off")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
             node = pilot.app.cfg["agents"]["sisyphus"]
             assert node["model"] == "openai/gpt-5.5", node
-            assert "variant" not in node, f"must be added with no variant: {node}"
+            assert node["variant"] == "off", f"off must be written, not dropped: {node}"
 
     asyncio.run(_run())
 
 
-def test_pilot_vkey_drops_none_variant(pilot_config):
+def test_pilot_vkey_offers_opencode_none_as_off(pilot_config):
     """`v` on a candidate opens VariantModal listing the variants opencode reports for that
-    (provider, model) — catalog.variants_for (cached `--verbose`), seeded here — plus the (none)
-    clear row. A "none" opencode lists is likewise dropped as a duplicate of that synthetic row,
-    so the list is the REAL variants + var:__none__ only, never a var:none."""
+    (provider, model) — catalog.variants_for (cached `--verbose`), seeded here — plus the
+    (default) clear row. opencode's "none" arrives renamed to omo's `off` and is offered, since
+    it sets a level where the synthetic row removes one."""
     cfg_path, _ = pilot_config
 
     async def _run():
@@ -2178,16 +2187,17 @@ def test_pilot_vkey_drops_none_variant(pilot_config):
             assert len(pilot.app.screen_stack) == 2, "v must open the VariantModal"
             vlist = pilot.app.screen.query_one("#variant-list", OptionList)
             vids = [vlist.get_option_at_index(i).id for i in range(vlist.option_count)]
-            assert vids == ["var:low", "var:high", "var:__none__"], vids
-            assert "var:none" not in vids, "the literal 'none' must be dropped, not offered"
+            assert vids == ["var:off", "var:low", "var:high", "var:__none__"], vids
+            assert "var:none" not in vids, "opencode's 'none' must arrive renamed, not raw"
 
     asyncio.run(_run())
 
 
-def test_pilot_repick_offchain_clears_stale_none_variant(tmp_path):
+def test_pilot_repick_offchain_renames_stale_none_variant(tmp_path):
     """A pre-existing on-disk `variant: "none"` (e.g. hand-edited, or written by an older omodel)
     rides along on the synthesized off-chain candidate row. Re-picking that row with Enter must
-    DROP the stale key ("none" ≡ (none) ≡ no variant) rather than round-trip `variant: "none"`."""
+    CONVERT it to omo's `off` — which is what omo already resolves it to — rather than round-trip
+    the old spelling or drop it (dropping would change the meaning to "use the default")."""
     cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
     with open(cfg_path, "w", encoding="utf-8") as f:
         # deepseek/deepseek-v4-pro is available but OFF sisyphus's chain → it surfaces as the
@@ -2213,7 +2223,7 @@ def test_pilot_repick_offchain_clears_stale_none_variant(tmp_path):
             await pilot.pause()
             node = app.cfg["agents"]["sisyphus"]
             assert node["model"] == "deepseek/deepseek-v4-pro", node
-            assert "variant" not in node, f"re-picking must clear the stale 'none': {node}"
+            assert node.get("variant") == "off", f"re-picking must rename the stale 'none': {node}"
 
     asyncio.run(_run())
 

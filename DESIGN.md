@@ -216,6 +216,38 @@ omodel wrote is dead config — and because a **category's** `reasoning` outrank
 omodel's internal vocabulary (the candidate-row field, the `v` picker); the mapping happens only
 at the config write boundary.
 
+### Reasoning vocabulary — `off` vs no level
+
+omo's `2026-08-reasoning-unification` folded two variant lists into one ladder,
+`off < minimal < low < medium < high < xhigh < max`, plus an `auto` sentinel
+(`model-core/src/reasoning-level.ts`). `off` is its renamed `none`, kept as an alias:
+`normalizeReasoning("none") → {level: "off"}`; an unknown value becomes `passthrough` and is
+forwarded to the provider verbatim.
+
+**`off` is a level, not the absence of one.** Omitting the key means "no level → the model's
+default", which on a reasoning model is the far end of the ladder from `off`. The two must stay
+distinguishable everywhere.
+
+**opencode has not followed the rename** — its `--verbose` still reports `none`. omodel reads
+variants from opencode but writes a config omo resolves, so it sits between the two vocabularies
+and converts at a single seam, `catalog.normalize_variant`, applied where opencode's names enter
+(`variants_for`) and again at the write point (`session.set_model`, which also catches a
+`--variant` or a hand-edited config that saw no picker). Everything downstream — pickers, the
+`bad_variant` guard, the `⚠` marker — then speaks omo's vocabulary only.
+
+Consequences worth knowing:
+
+- `session.is_no_variant` is **only** "is there a level at all" (None/empty). It no longer claims
+  the string `"none"`; treating that as "no variant" silently turned *reasoning off* into *use
+  the default*, and made `off` unreachable from either surface (`--variant off` was refused as
+  not-in-opencode's-set, so `--force` was the only way to write a level omo's own `quick`
+  category recommends).
+- The pickers' synthetic clear row is labelled **`(default)`**, not `(none)` — it now sits
+  beside a real `off` that does the opposite. Its option ID stays `var:__none__` (a contract the
+  pilot tests depend on); only the label changed.
+- A pre-4.19.4 config saying `none` is **converted on the next write**, not rejected: omo already
+  resolves it to `off`, so re-picking makes the file say what omo was doing anyway.
+
 ## CLI
 
 Two audiences, one parser. The flat flags are the **human** surface and are unchanged; the
