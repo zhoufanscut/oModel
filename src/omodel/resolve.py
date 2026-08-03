@@ -33,6 +33,20 @@ _STAMP_MIN_DIGITS = 6
 # 4-digit version-like token isn't mistaken for a year (no real model version is a 4-digit year).
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 
+# A FLOOR under the data-derived `real_tokens`: size/tier words that make a different model no
+# matter what omo currently recommends. Deriving the whole set from omo's chain ids is otherwise
+# right (no hand-maintained suffix list), but it silently loses a token the week omo drops its
+# last id carrying one — omo 4.19.4 dropped `gpt-5.4-mini-fast`, its only `mini`, and a
+# provider's `gpt-5.4-mini` immediately EXACT-filled a `gpt-5.4` entry (substitute_for=None, no
+# warn: a cheaper model served as the real one). These tokens never become noise. Deliberately
+# only tier words — build tags omo happens to name (`turbo`, `codex`, `jibao`) must stay
+# strippable, and the derived set still covers everything else.
+_TIER_TOKENS = frozenset({
+    "mini", "nano", "lite", "small", "tiny",     # smaller than the bare id
+    "flash", "fast", "air", "instant",           # faster/cheaper serving tier
+    "pro", "plus", "max", "ultra", "heavy",      # larger than the bare id
+})
+
 # omo lumps EVERY non-opus Claude into one detect_family, `claude-non-opus`: its sibling
 # `claude-opus` family keys on the literal "-opus" substring and is tested first, so haiku,
 # sonnet, AND newer lines (fable, mythos, …) all fall through to here. That family is fine for
@@ -90,8 +104,10 @@ class Resolver:
         model modifier — never stripped as noise, so gpt-5.4-mini-fast stays distinct from
         gpt-5.4-mini and glm-5-flash from glm-5. A trailing token NOT in it (a provider's
         `jibao`) is treated as a sub-version tag and stripped for matching. Data-driven: tracks
-        the bundled omo snapshot, so there is no hand-maintained suffix list to drift."""
-        toks: set = set()
+        the bundled omo snapshot, so there is no hand-maintained suffix list to drift — over
+        `_TIER_TOKENS`, the floor of size/tier words that stay real through a release where omo
+        happens to name none of them."""
+        toks: set = set(_TIER_TOKENS)
         reqs = list(self.suggestions.agents.values()) + list(self.suggestions.categories.values())
         for req in reqs:
             for entry in req.get("fallbackChain", []):

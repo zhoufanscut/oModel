@@ -38,8 +38,9 @@ line when a new one does.
 - **noise suffix vs real modifier** — a trailing id token an available id carries that the bare omo
   id lacks. *Noise* (stripped when matching) = a date/build stamp (`…-20251001`) or an unknown
   sub-version tag (`…-jibao`). *Real modifier* (kept; a distinct model) = a token omo itself uses
-  in a chain id (`mini`, `fast`, `flash`, `nano`, …) — so `gpt-5.4-mini-fast` ≠ `gpt-5.4-mini`. NOT
-  the same as a *variant* (reasoning mode). → resolve.py `_matches_omo_id` / `real_tokens`
+  in a chain id, plus a fixed floor of size/tier words that never become noise (`mini`, `fast`,
+  `flash`, `nano`, …) — so `gpt-5.4-mini-fast` ≠ `gpt-5.4-mini`. NOT the same as a *variant*
+  (reasoning mode). → resolve.py `_matches_omo_id` / `real_tokens` / `_TIER_TOKENS`
 
 ## provider vs vendor vs family (the most-confused trio)
 

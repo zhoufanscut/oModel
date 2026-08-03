@@ -609,8 +609,11 @@ In summary:
   model, tolerating `.`/`-` spelling and a trailing **date stamp / sub-version tag** (a provider's
   `claude-haiku-4-5-20251001` or `claude-sonnet-4-8-jibao` fills the bare `claude-haiku-4-5` /
   `claude-sonnet-4-8`) → that **concrete available id** (`substitute_for=None`). A real modifier
-  token omo itself uses (`mini`/`fast`/`nano`/`flash`/…, derived from the chain ids) is *not*
-  stripped, and a short trailing digit stays a version (`glm-5.1` ≠ `glm-5`); **(2) same-line** —
+  token (`mini`/`fast`/`nano`/`flash`/…) is *not* stripped — derived from omo's own chain ids,
+  over a fixed floor of size/tier words (`_TIER_TOKENS`) so one stays protected through a release
+  where omo names none of them (4.19.4 dropped its last `mini` id, and a cheaper `gpt-5.4-mini`
+  briefly exact-filled a `gpt-5.4` entry) — and a short trailing digit stays a version
+  (`glm-5.1` ≠ `glm-5`); **(2) same-line** —
   else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
   `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen) — except within the coarse
   `claude-non-opus` family (haiku, sonnet, fable, mythos, …) the substitute must also share the

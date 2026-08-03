@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep a cheaper size/tier model out of a full-size slot. Whether a trailing token like `mini`
+  or `nano` marks a genuinely different model was decided purely from the ids omo currently
+  recommends, so when omo 4.19.4 dropped its last id containing `mini`, a provider's
+  `gpt-5.4-mini` started filling a `gpt-5.4` slot as an exact match — presented as the model
+  itself, with no `≈` and no warning. Those words are now always treated as a distinct model.
+
+### Changed
+
+- Refresh the bundled omo suggestions to oh-my-openagent 4.19.4. Notable id moves: `glm-5` →
+  `glm-5.2`, `claude-sonnet-4-6` → `claude-sonnet-5`, `gemini-3-flash` → `gemini-3.6-flash`,
+  `gpt-5.6-luna` → `gpt-5.6-luna-fast`, `qwen3.5-plus` → `qwen3.7-plus`; new `deepseek-v4-flash`,
+  `deepseek-v4-pro`, `mimo-v2.5-pro`, `qwen3.6-flash`, `qwen3.8-max-preview` and
+  `grok-4.20-0309-non-reasoning`. omo also renamed its `none` reasoning level to `off` and
+  retired `thinking`.
+
 ## [0.5.0] — 2026-08-03
 
 Support for oh-my-openagent 4.19.3+, which moved its configuration to
