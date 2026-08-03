@@ -136,10 +136,12 @@ ACCEPTED_VARIANT_DRIFT = {
 
     # omo 4.19.4, reviewed 2026-08-03. Three groups, none a defect in omo's chain:
     #
-    # `off` is NEW — 4.19.4 renamed knownVariants `none` → `off` (and dropped `thinking`), then
-    # started using it. Both entries sit in categories:quick on the cheap/fast models, i.e.
-    # "reasoning off for the quick tier", which is coherent; no family declares it because the
-    # registry lists reasoning TIERS, and off is the absence of one.
+    # `off` is NEW — 4.19.4's reasoning-unification folded two variant vocabularies into one
+    # 7-rung ladder (off < minimal < low < medium < high < xhigh < max, plus an `auto` sentinel),
+    # renaming `none` → `off` and dropping `thinking`. Both entries sit in categories:quick on the
+    # cheap/fast models, i.e. "reasoning off for the quick tier", which is coherent. `off` IS a
+    # real rung (clampReasoningLevel indexes it at 0) — the heuristic families just never listed
+    # the bottom one, so every use of it drifts.
     ("claude-haiku-4-5", "off"),
     ("deepseek-v4-flash", "off"),
     #
