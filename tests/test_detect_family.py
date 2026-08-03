@@ -130,8 +130,33 @@ CATEGORY_NAMES = {
 # exists so the NEXT pair gets the same look, not to force a fix anyone owes. Prune an entry once
 # omo stops emitting it (a stale one never fails the test).
 ACCEPTED_VARIANT_DRIFT = {
+    # omo 4.19.2 — both still drift in 4.19.4.
     ("claude-fable-5", "xhigh"),
     ("kimi-k3", "max"),
+
+    # omo 4.19.4, reviewed 2026-08-03. Three groups, none a defect in omo's chain:
+    #
+    # `off` is NEW — 4.19.4's reasoning-unification folded two variant vocabularies into one
+    # 7-rung ladder (off < minimal < low < medium < high < xhigh < max, plus an `auto` sentinel),
+    # renaming `none` → `off` and dropping `thinking`. Both entries sit in categories:quick on the
+    # cheap/fast models, i.e. "reasoning off for the quick tier", which is coherent. `off` IS a
+    # real rung (clampReasoningLevel indexes it at 0) — the heuristic families just never listed
+    # the bottom one, so every use of it drifts.
+    ("claude-haiku-4-5", "off"),
+    ("deepseek-v4-flash", "off"),
+    #
+    # A top tier the heuristic registry stops short of — same shape as kimi-k3@max above, where
+    # opencode turned out to report the variant and the registry was the narrow one.
+    ("claude-opus-5", "xhigh"),
+    ("glm-5.2", "max"),
+    ("gpt-5.6-sol", "max"),
+    ("minimax-m2.7", "max"),
+    ("minimax-m3", "max"),
+    #
+    # qwen declares `variants: []` — the registry has NO data for the family, so every variant on
+    # a qwen id drifts by construction. Nothing to reconcile until omo populates it.
+    ("qwen3.6-flash", "low"),
+    ("qwen3.8-max-preview", "max"),
 }
 
 
@@ -158,8 +183,18 @@ class TestBundledSuggestionsLoad:
     def test_15_families(self, sugg):
         assert len(sugg.families) == 15, f"Expected 15 families, got {len(sugg.families)}"
 
-    def test_9_known_variants(self, sugg):
-        assert len(sugg.known_variants) == 9, f"Expected 9 knownVariants, got {sugg.known_variants}"
+    def test_known_variants_cover_what_chains_use(self, sugg):
+        """Structural, not a count. The old pin was `== 9`, which guards nothing real:
+        `known_variants` has no consumer in src/ (variant validity is opencode's — decision #14),
+        so its size is pure upstream churn — omo 4.19.4 renamed `none` → `off` and dropped
+        `thinking`, reddening this on a rename that changes no behaviour. What matters is that
+        the list is well-formed and actually covers the chains, which
+        test_every_variant_is_a_known_variant then enforces entry by entry."""
+        assert sugg.known_variants, "knownVariants is empty"
+        assert all(isinstance(v, str) and v for v in sugg.known_variants)
+        assert len(set(sugg.known_variants)) == len(sugg.known_variants), "duplicate knownVariants"
+        for tier in ("low", "medium", "high"):
+            assert tier in sugg.known_variants, tier
 
     def test_meta_present(self, sugg):
         assert "omoVersion" in sugg.meta

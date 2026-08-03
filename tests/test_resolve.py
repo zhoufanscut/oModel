@@ -411,45 +411,52 @@ class TestWarnFlags:
 # ---------------------------------------------------------------------------
 
 class TestSameLineSubstitute:
+    """Frozen chain throughout: every test here needs a specific entry (`glm-5`) to exist and
+    names exact models, which is what the frozen fixture is for. Against live data they instead
+    pinned whatever omo happened to recommend — 4.19.4 renumbered the entry to glm-5.2 and
+    reddened four of them at once, on behaviour that was entirely correct."""
 
-    def test_substitute_when_exact_absent(self, sugg):
+    def test_substitute_when_exact_absent(self, frozen_sugg):
         """Chain wants glm-5; only glm-5.1 connected → glm-5.1 offered as a same-line sub."""
         cat = _make_catalog(["zhipuai/glm-5.1"])
-        res = Resolver.build(cat, sugg)
-        rows = res.candidates("agent:sisyphus")
+        res = Resolver.build(cat, frozen_sugg)
+        rows = res.candidates("agent:probe")
         glm = [r for r in rows if r["provider"] == "zhipuai"]
         assert len(glm) == 1
         assert glm[0]["model"] == "glm-5.1"
         assert glm[0]["substitute_for"] == "glm-5"
         assert glm[0]["source"] == "omo"
 
-    def test_exact_beats_substitute(self, sugg):
+    def test_exact_beats_substitute(self, frozen_sugg):
         """When the exact glm-5 is connected, it wins over glm-5.1 (no substitute row)."""
         cat = _make_catalog(["zhipuai/glm-5", "zhipuai/glm-5.1"])
-        res = Resolver.build(cat, sugg)
-        rows = res.candidates("agent:sisyphus")
+        res = Resolver.build(cat, frozen_sugg)
+        rows = res.candidates("agent:probe")
         models = [r["model"] for r in rows]
         assert "glm-5" in models
         g5 = next(r for r in rows if r["model"] == "glm-5")
         assert g5["substitute_for"] is None
         assert "glm-5.1" not in models  # not in chain + glm-5 exact → never offered
 
-    def test_substitute_picks_newest(self, sugg):
+    def test_substitute_picks_newest(self, frozen_sugg):
         """Several same-line models → newest (highest version) wins: glm-5.1 over glm-4.6."""
         cat = _make_catalog(["zhipuai/glm-4.6", "zhipuai/glm-5.1"])
-        res = Resolver.build(cat, sugg)
-        rows = res.candidates("agent:sisyphus")
+        res = Resolver.build(cat, frozen_sugg)
+        rows = res.candidates("agent:probe")
         glm = [r for r in rows if r["provider"] == "zhipuai"]
         assert len(glm) == 1
         assert glm[0]["model"] == "glm-5.1"
         assert glm[0]["substitute_for"] == "glm-5"
 
-    def test_no_cross_family_substitute(self, sugg):
+    def test_no_cross_family_substitute(self, frozen_sugg):
         """A different family is NOT a substitute: with only deepseek connected, the glm-5
-        entry is hidden (not filled by deepseek), and nothing is dumped → empty list."""
+        entry is hidden (not filled by deepseek), and nothing is dumped → empty list.
+
+        Frozen because the assertion is 'the WHOLE list is empty' — it holds only while no chain
+        entry is a deepseek, which is omo's call to change at any release."""
         cat = _make_catalog(["deepseek/deepseek-v4"])
-        res = Resolver.build(cat, sugg)
-        rows = res.candidates("agent:sisyphus")
+        res = Resolver.build(cat, frozen_sugg)
+        rows = res.candidates("agent:probe")
         assert rows == [], f"Expected empty pick list, got {[r['model'] for r in rows]}"
 
     def test_newest_substitute_not_demoted_by_own_chain_entry(self, sugg):
@@ -477,15 +484,15 @@ class TestSameLineSubstitute:
         assert rows[0]["substitute_for"] is None
         assert "glm-4.5" not in models  # strictly-older non-chain model never surfaced
 
-    def test_substitute_dedicated_first(self, sugg):
+    def test_substitute_dedicated_first(self, frozen_sugg):
         """A substitute expands across providers too, dedicated-first: glm-5.1 (filling glm-5)
         shows zhipuai/glm-5.1 then opencode/glm-5.1, both substitute_for='glm-5'."""
         cat = _make_catalog([
             "opencode/glm-5.1", "zhipuai/glm-5.1",
             "opencode/gpt-5", "opencode/claude-opus-4-8",  # make opencode a gateway
         ])
-        res = Resolver.build(cat, sugg)
-        rows = res.candidates("agent:sisyphus")
+        res = Resolver.build(cat, frozen_sugg)
+        rows = res.candidates("agent:probe")
         glm = [r for r in rows if r["model"] == "glm-5.1"]
         assert [f"{r['provider']}/{r['model']}" for r in glm] == [
             "zhipuai/glm-5.1", "opencode/glm-5.1",
@@ -662,10 +669,16 @@ class TestNoiseTolerantMatch:
         assert all("sonnet" not in r["model"] for r in rows)
 
     def test_sonnet_entry_resolves_to_sonnet_not_haiku(self, sugg):
-        """The mirror image: atlas wants claude-sonnet-4-6 → resolves to the exact sonnet, never
-        a haiku (the size guard cuts both ways)."""
+        """The mirror image: a claude-sonnet-4-6 entry resolves to the exact sonnet, never a
+        haiku (the size guard cuts both ways).
+
+        Synthetic chain, since this needs a sonnet entry to EXIST and omo may drop one at any
+        release — 4.19.4 moved atlas from claude-sonnet-4-6 to claude-sonnet-5, leaving the old
+        assertion matching nothing at all and passing its `all(...)` half vacuously."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
-        rows = res.candidates("agent:atlas")
+        req = {"fallbackChain": [{"providers": [GATEWAY], "model": "claude-sonnet-4-6"}]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:atlas")
         sonnet = [r for r in rows if r["model"] == "claude-sonnet-4-6"]
         assert len(sonnet) == 1 and sonnet[0]["substitute_for"] is None
         assert all("haiku" not in r["model"] for r in rows)
@@ -724,20 +737,39 @@ class TestNoiseTolerantMatch:
         assert res._resolve_available("glm-5") == "glm-5"
 
     def test_protected_set_contains_real_modifiers_not_noise(self, sugg):
-        """real_tokens is derived from omo's own chain ids: real modifiers are in; provider
-        sub-tags (jibao/yd/codex/latest/turbo) are not."""
+        """real_tokens is derived from omo's own chain ids, over the `_TIER_TOKENS` floor: real
+        modifiers are in; provider sub-tags (jibao/yd/codex/latest/turbo) are not."""
         res = Resolver.build(_make_catalog([]), sugg)
         for tok in ("mini", "fast", "nano", "flash", "pro", "plus", "highspeed", "haiku", "sonnet"):
             assert tok in res.real_tokens, tok
         for noise in ("jibao", "yd", "codex", "latest", "turbo", "inhouse"):
             assert noise not in res.real_tokens, noise
 
-    def test_version_bump_is_not_a_stamp(self, sugg):
+    def test_tier_token_survives_omo_dropping_its_last_id(self, frozen_sugg):
+        """Regression (omo 4.19.4): a size/tier token must stay protected even when NO chain id
+        carries it. 4.19.4 dropped gpt-5.4-mini-fast — its only `mini` — and a purely derived
+        real_tokens lost the token, so a provider's cheaper gpt-5.4-mini began filling a bare
+        gpt-5.4 entry EXACTLY: substitute_for None, no warn, a smaller model served as the real
+        one. `_TIER_TOKENS` is the floor that keeps it a distinct model.
+
+        Frozen chains contain no `mini` either, which is exactly the state under test."""
+        res = Resolver.build(_make_catalog(["p/gpt-5.4-mini"]), frozen_sugg)
+        assert not any("mini" in e.get("model", "")
+                       for e in frozen_sugg.agents["probe"]["fallbackChain"])
+        assert "mini" in res.real_tokens
+        assert not res._matches_omo_id("gpt-5.4-mini", "gpt-5.4")
+        assert res._resolve_available("gpt-5.4") is None
+
+    def test_version_bump_is_not_a_stamp(self, sugg, frozen_sugg):
         """A short trailing digit is a version, not a date stamp: glm-5.1 != glm-5, so it stays
-        a same-line SUBSTITUTE rather than collapsing into an exact glm-5 match."""
+        a same-line SUBSTITUTE rather than collapsing into an exact glm-5 match.
+
+        Split like test_hyphenated_date_stamp_is_exact: the id-matching half runs against real
+        data, the end-to-end half against the frozen chain, since it needs a glm-5 entry."""
         res = Resolver.build(_make_catalog(["p/glm-5.1"]), sugg)
         assert not res._matches_omo_id("glm-5.1", "glm-5")
-        glm = [r for r in res.candidates("agent:sisyphus") if r["model"] == "glm-5.1"]
+        frozen = Resolver.build(_make_catalog(["p/glm-5.1"]), frozen_sugg)
+        glm = [r for r in frozen.candidates("agent:probe") if r["model"] == "glm-5.1"]
         assert glm and glm[0]["substitute_for"] == "glm-5"
 
 
