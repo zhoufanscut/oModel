@@ -1,17 +1,25 @@
 # Using omodel from an LLM agent
 
-`omodel` sets which model each OMO (`oh-my-openagent`) agent and category runs, in
-`oh-my-openagent.jsonc`. It applies the right `provider/` prefix, checks the variant against what
-`opencode` reports, keeps a timestamped backup of every save, and keeps the config in step with
-its preset.
+`omodel` sets which model each OMO (`oh-my-openagent`) agent and category runs, in omo's config —
+`~/.omo/omo.jsonc` on omo 4.19.3+, falling back to the pre-4.19.3
+`~/.config/opencode/oh-my-openagent.jsonc`. It applies the right `provider/` prefix, checks the
+variant against what `opencode` reports, keeps a timestamped backup of every save, and keeps the
+config in step with its preset.
 
 This page is the contract for using it non-interactively. Print it any time with
 `omodel agent-guide`.
 
-## 1. Do not hand-edit `oh-my-openagent.jsonc`. Use `omodel set`.
+## 1. Do not hand-edit the config. Use `omodel set`.
 
 Editing that file directly skips every check omodel exists to apply:
 
+- **which node the assignment belongs in.** On omo 4.19.3+ `agents`/`categories` live under
+  `"[opencode]"`, and omo folds base → `[opencode]` with the block winning — so a top-level
+  `agents` you write by hand is valid JSON, saves fine, and is then silently ignored.
+- **which spelling the reasoning level takes.** It is `reasoning` on agents and categories, but
+  still `variant` inside `ultrawork`/`compaction`; omo resolves every `reasoning` ahead of any
+  `variant`, so the wrong one is accepted and dropped. `show --json` reports `config_scope` if
+  you need to know which shape the config is in.
 - the `provider/` prefix (a bare model id does not work, and which provider serves a model
   changes as you connect and disconnect them),
 - whether any connected provider can actually serve the model you wrote,
@@ -112,7 +120,7 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
 ```json
 // omodel show --json
 { "schema": 1, "ok": true, "omodel_version": "0.4.0",
-  "config_path": "/home/you/.config/opencode/oh-my-openagent.jsonc",
+  "config_path": "/home/you/.omo/omo.jsonc", "config_scope": "opencode",
   "degraded": false, "providers": ["opencode", "zhipuai"],
   "active_preset": {"index": 0, "name": "default"},
   "presets": [{"index": 0, "name": "default", "models": 12, "active": true}],

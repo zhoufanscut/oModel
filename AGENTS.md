@@ -5,13 +5,15 @@ it) when working **on this repository's source**.
 
 > **Just want to USE `omodel` to set a model?** That is a different document: run
 > **`omodel agent-guide`** (or read `src/omodel/data/agent-usage.md`) for the verbs, the JSON
-> shapes, and the exit codes. Short version: never hand-edit `oh-my-openagent.jsonc` — run
+> shapes, and the exit codes. Short version: never hand-edit omo's config — run
 > `omodel candidates <target> --json`, then `omodel set <target> <value>`.
 
 ## What this is
 
-`omodel` is a Textual TUI that sets models in `oh-my-openagent.jsonc` (OMO's per-agent / per-category
-config). Core flow: **what omo suggests + what you already have → pick one → save a clean config.**
+`omodel` is a Textual TUI that sets models in omo's config (OMO's per-agent / per-category config):
+`~/.omo/omo.jsonc` on omo 4.19.3+, where the assignments live under `"[opencode]"`, falling back to
+the pre-4.19.3 `~/.config/opencode/oh-my-openagent.jsonc`. See DESIGN §Config scope.
+Core flow: **what omo suggests + what you already have → pick one → save a clean config.**
 It bundles a snapshot of omo's model requirements and reads live availability from the `opencode` CLI;
 neither an omo checkout nor a network call is needed at runtime.
 
@@ -205,9 +207,12 @@ before changing any public signature or shared shape.
   Signatures now use `X | None` throughout (ruff `UP045`); that is annotation-only and safe at 3.9,
   and is NOT licence to use `|` where the expression is evaluated. The one rule the floor genuinely
   blocks is `SIM117` (combining `with` needs 3.10 parenthesized context managers) — hence its ignore.
-- **Real-config safety (hard rule):** never read-then-write the live
-  `~/.config/opencode/oh-my-openagent.jsonc` in tests or examples. Pass an explicit temp `path` /
-  `--config` everywhere. Tests monkeypatch `subprocess.run`; no test calls real `opencode`.
+- **Real-config safety (hard rule):** never read-then-write the live `~/.omo/omo.jsonc` (or the
+  legacy `~/.config/opencode/oh-my-openagent.jsonc`) in tests or examples. Pass an explicit temp
+  `path` / `--config` everywhere. Tests monkeypatch `subprocess.run`; no test calls real
+  `opencode`. The default path now carries side effects a temp one does not — the first run there
+  adopts a stranded presets store and **deletes** the original — so `tests/conftest.py` redirects
+  `$HOME`/`$USERPROFILE` as well as `$XDG_CONFIG_HOME`.
 - **Real-cache safety (hard rule):** never let tests touch the real `~/.cache/omodel/`. The autouse
   `tests/conftest.py` fixture redirects `$OMODEL_CACHE_DIR` to a per-test tmp dir, and `test_app_pilot.py`
   stubs `subprocess.run` so the TUI never spawns real opencode (~320 MB/call — un-stubbed it OOM'd a box).

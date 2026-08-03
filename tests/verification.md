@@ -245,8 +245,10 @@ ls /tmp/.backup/                   # or wherever the backup dir lands for /tmp/ 
 ```
 
 **Real-config safety:** use `--config /tmp/omodel-live-test.jsonc`, NOT the default
-`~/.config/opencode/oh-my-openagent.jsonc`. The live config is safe only after all
-automated checks pass and the user explicitly chooses to run against it.
+`~/.omo/omo.jsonc` (or, pre-4.19.3, `~/.config/opencode/oh-my-openagent.jsonc`). The live config
+is safe only after all automated checks pass and the user explicitly chooses to run against it.
+Note the default path also carries side effects a temp `--config` does not: the first run there
+adopts a stranded presets store and **deletes** the original.
 
 ---
 
@@ -313,8 +315,9 @@ can read the contract from the shipped binary.
 # Automated — the headless core, the CLI verbs, and the end-to-end agent flows over both
 python -m pytest tests/test_session.py tests/test_cli.py tests/test_agent_surface_integration.py -q
 
-# Live, against a TEMP config (never the real one)
-cp ~/.config/opencode/oh-my-openagent.jsonc /tmp/omodel-agent.jsonc
+# Live, against a TEMP config (never the real one). Source the UNIFIED config on omo 4.19.3+;
+# `~/.config/opencode/oh-my-openagent.jsonc` is the pre-4.19.3 path and omo has moved it aside.
+cp ~/.omo/omo.jsonc /tmp/omodel-agent.jsonc   # pre-4.19.3: ~/.config/opencode/oh-my-openagent.jsonc
 C="--config /tmp/omodel-agent.jsonc"
 
 omodel show $C --json | jq '.degraded, .active_preset'

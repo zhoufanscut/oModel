@@ -4881,3 +4881,41 @@ def test_pilot_survives_a_non_dict_agents_map(tmp_path, monkeypatch):
             assert pilot.app._agent_subtargets("sisyphus") == []
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Pilot: `s` on a config whose diff is empty but whose baseline is not
+# ---------------------------------------------------------------------------
+
+def test_pilot_nothing_to_save_still_rebaselines(tmp_path):
+    """`_save`'s empty-diff branch must re-baseline, not just return.
+
+    `is_dirty()` compares `serialize(cfg)` against the baseline; the save path compares
+    `render(cfg, on_disk)` against disk. Those disagree for an `agents`/`categories` key that is
+    absent from the file and empty in cfg — the canonical form always emits it, the splice
+    skips it. Switching preset assigns BOTH keys, so on such a config the app went dirty with
+    genuinely nothing to write, and the "Nothing to save." branch returned without re-baselining:
+    `q` warned about unsaved work forever while `s` insisted there was none.
+    """
+    cfg_path = str(tmp_path / "omo.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        # unified, agents already canonical, `categories` absent entirely
+        f.write('// OMO configuration\n{\n  "[opencode]": {\n    "agents": {}\n  },\n'
+                '  "_migrations": []\n}\n')
+    with open(cfg_path, encoding="utf-8") as f:
+        before = f.read()
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            app.session.switch_preset(0)   # cfg gains an empty `categories`; the file has none
+            assert app.session.is_dirty() is True
+            assert not app.session.diff().strip()
+            app._save()                    # takes the "Nothing to save." branch
+            await pilot.pause()
+            assert app.session.is_dirty() is False, "left dirty with nothing to save"
+        # and the file was genuinely not touched
+        with open(cfg_path, encoding="utf-8") as f:
+            assert f.read() == before
+
+    asyncio.run(_run())

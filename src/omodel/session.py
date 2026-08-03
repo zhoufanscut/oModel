@@ -34,6 +34,7 @@ than aliased.
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass, field
 
 from . import catalog as catalog_mod
@@ -114,6 +115,46 @@ def coerce_dict(parent: dict, key: str) -> dict:
     return value
 
 
+def managed_root(cfg) -> dict:
+    """The node holding `agents`/`categories` for READS — `config_io.managed_root`, re-exported so
+    `app.py` / `cli.py` reach the scope through one place (they already go through this module for
+    `read_map` / `target_label`). Never creates anything."""
+    return config_io.managed_root(cfg)
+
+
+# omo resolves a reasoning level from the FIRST of these that is set, checking every source's
+# `reasoning` before any source's `variant` (`omo-opencode/src/shared/agent-variant.ts:80-83`,
+# `:102-109`). The ordering is why omodel writes only one of them and clears the rest: a stale
+# `variant` left beside a `reasoning` is dead config, and — because a CATEGORY's `reasoning`
+# outranks an AGENT's `variant` — a `variant` written into a migrated config can be overridden
+# by an entirely different object.
+REASONING_KEYS = ("reasoning", "variant", "reasoningEffort")
+
+
+def read_variant(node) -> str | None:
+    """The reasoning level set on a cfg node, in omo's own precedence. Returns None when none of
+    the spellings carries a non-blank string, so a hand-edited `"reasoning": null` reads as unset
+    rather than crashing a later `.strip()`."""
+    if not isinstance(node, dict):
+        return None
+    for key in REASONING_KEYS:
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def variant_key_for(cfg, subkind: str | None) -> str:
+    """Which spelling to WRITE: `reasoning` for agents/categories on a unified document,
+    `variant` for a legacy document — and `variant` for `ultrawork`/`compaction` sub-objects in
+    BOTH scopes, because their override reads that key and nothing else
+    (`omo-opencode/src/plugin/ultrawork-model-override.ts:81,84,93`; `reasoning` is accepted by
+    the schema there but no consumer ever reads it)."""
+    if subkind is not None:
+        return "variant"
+    return "reasoning" if config_io.scope_of(cfg) == "opencode" else "variant"
+
+
 def gpt_only(target: str) -> bool:
     """True if `target` (incl. its sub-targets) belongs to a GPT-exclusive agent — currently
     Hephaestus (see GPT_ONLY_AGENTS). Such targets hide the add-model escape hatch in the TUI,
@@ -178,6 +219,7 @@ class Session:
     sync_conflict: bool = field(init=False, default=False)
     saved_text: str = field(init=False, default="")
     saved_store_fp: str = field(init=False, default="")
+    adopted_presets: int | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         # Dirtiness baseline for the config: the serialization last written to (or loaded from)
@@ -189,12 +231,73 @@ class Session:
         # missing or mangled file is SEEDED in memory from the config you already have, so there
         # is always at least one preset and the invariant holds from the first frame. NOTHING is
         # written until a save (one write rule) — the seed materializes with the first one.
+        self._adopt_legacy_presets()
         self.store = presets_mod.load(self.config_path)
         if self.store.is_empty():
-            self.store = presets_mod.seeded(self.cfg)
+            self.store = presets_mod.seeded(self.managed)
+        # Presets captured before omo's reasoning rename carry `variant`; applied to a unified
+        # config that spelling resolves behind `reasoning` and the switch would silently no-op.
+        # Done BEFORE the dirtiness baseline below, so a rename alone never reads as unsaved.
+        self._normalize_store_spelling()
         self._reconcile()
         # Taken AFTER the reconcile, so a re-point alone reads clean.
         self.saved_store_fp = presets_mod.store_fingerprint(self.store)
+
+    def _adopt_legacy_presets(self) -> None:
+        """One-time hand-over of the sidecars stranded beside the pre-4.19.3 config — the presets
+        store, and the pinned pre-omodel config as `.backup/original-legacy.jsonc`.
+
+        Guarded to the DEFAULT unified path on purpose: sidecars live next to whatever config is
+        active, so running `--config /tmp/scratch.jsonc` must not drag the real presets into a
+        temp directory and delete the original. Both adopters are no-ops unless the destination
+        is empty and the source is a readable file."""
+        # Both unified filenames count: `config_path()` resolves `omo.json` too (mirroring omo's
+        # own `detectUserOmoJsonPath`), and a user on that spelling needs the hand-over just as
+        # much. Anything else — a `--config` override — is left alone.
+        unified = os.path.dirname(os.path.abspath(config_io.unified_config_path()))
+        here = os.path.abspath(self.config_path)
+        if os.path.dirname(here) != unified or os.path.basename(here) not in ("omo.jsonc", "omo.json"):
+            return
+        legacy = config_io.legacy_config_path()
+        try:
+            self.adopted_presets = presets_mod.adopt(legacy, self.config_path)
+        except Exception:
+            self.adopted_presets = None  # best-effort: never block a launch on the hand-over
+        try:
+            config_io.adopt_original_backup(legacy, self.config_path)
+        except OSError:
+            pass  # ditto — a missing archive copy is untidy, not a failure worth a traceback
+
+    def _normalize_store_spelling(self) -> None:
+        """Rewrite every preset's reasoning level to the spelling THIS config's scope resolves.
+
+        Applies to the whole store, not just an adopted one, so a preset written by an older
+        omodel is corrected too. Agent/category nodes take `variant_key_for`; `ultrawork` /
+        `compaction` sub-objects always keep `variant`.
+
+        IN MEMORY only, and deliberately: the dirtiness baseline is taken after this runs, so a
+        rename alone never shows as unsaved work. The corrected spelling reaches the presets file
+        with the next save — until then the in-memory store is what every switch writes, which is
+        the part that has to be right."""
+        top_key = variant_key_for(self.cfg, None)
+
+        def fix(node, key: str) -> None:
+            if not isinstance(node, dict):
+                return
+            value = read_variant(node)
+            for stale in REASONING_KEYS:
+                node.pop(stale, None)
+            if value is not None:
+                node[key] = value
+
+        for preset in self.store.presets:
+            for agent in preset.agents.values():
+                fix(agent, top_key)
+                if isinstance(agent, dict):
+                    for sub in SUBKINDS:
+                        fix(agent.get(sub), "variant")
+            for category in preset.categories.values():
+                fix(category, top_key)
 
     def _reconcile(self) -> None:
         """Launch reconciliation. If the config matches a DIFFERENT preset, just activate it —
@@ -209,10 +312,10 @@ class Session:
         current = self.store.current()
         if current is not None and presets_mod.fingerprint(
             current.agents, current.categories
-        ) == presets_mod.fingerprint(self.cfg.get("agents"), self.cfg.get("categories")):
+        ) == presets_mod.fingerprint(self.managed.get("agents"), self.managed.get("categories")):
             match = self.store.active
         else:
-            match = presets_mod.matching_index(self.store, self.cfg)
+            match = presets_mod.matching_index(self.store, self.managed)
         if match is not None:
             self.store.active = match
         self.sync_conflict = match is None and self.store.current() is not None
@@ -294,23 +397,36 @@ class Session:
 
     # ----- cfg nodes ------------------------------------------------------------------
 
+    @property
+    def managed(self) -> dict:
+        """The node of `cfg` holding `agents`/`categories` — `cfg["[opencode]"]` on a unified
+        document, `cfg` itself on a legacy one. Read-only view; writes go through
+        `ensure_node`."""
+        return managed_root(self.cfg)
+
+    @property
+    def scope(self) -> str:
+        """`"opencode"` or `"root"` — which shape this session's config is in. Surfaced by
+        `omodel show --json` as `config_scope` so an agent can tell the two apart."""
+        return config_io.scope_of(self.cfg)
+
     def node_for(self, target: str):
-        """The dict node holding {model, variant} for `target` in cfg, or None if its parent
-        agent/category isn't present. Does NOT create nodes."""
-        cfg = self.cfg
+        """The dict node holding {model, reasoning|variant} for `target` in cfg, or None if its
+        parent agent/category isn't present. Does NOT create nodes."""
+        managed = self.managed
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
             if "." in rest:
                 name, kind = rest.split(".", 1)
-                agent = read_map(cfg, "agents").get(name)
+                agent = read_map(managed, "agents").get(name)
                 if not isinstance(agent, dict):
                     return None
                 sub = agent.get(kind)
                 return sub if isinstance(sub, dict) else None
-            return read_map(cfg, "agents").get(rest)
+            return read_map(managed, "agents").get(rest)
         if target.startswith("cat:"):
             name = target[len("cat:"):]
-            return read_map(cfg, "categories").get(name)
+            return read_map(managed, "categories").get(name)
         return None
 
     def ensure_node(self, target: str) -> dict:
@@ -318,9 +434,10 @@ class Session:
         object / sub-object are created on demand so edits can land. Every level goes through
         `coerce_dict`, so a hand-edited config's non-dict value anywhere along the path is coerced
         back to `{}` instead of crashing or handing back a non-dict node."""
+        root = config_io.managed_root_for_write(self.cfg)
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
-            agents = coerce_dict(self.cfg, "agents")
+            agents = coerce_dict(root, "agents")
             if "." in rest:
                 name, kind = rest.split(".", 1)
                 agent = coerce_dict(agents, name)
@@ -328,16 +445,18 @@ class Session:
             return coerce_dict(agents, rest)
         # cat:
         name = target[len("cat:"):]
-        cats = coerce_dict(self.cfg, "categories")
+        cats = coerce_dict(root, "categories")
         return coerce_dict(cats, name)
 
     def assignment(self, target: str):
         """`(model_str, variant)` currently assigned for `target`; `('', None)` if unset.
-        model_str is the full 'provider/model' as stored."""
+        model_str is the full 'provider/model' as stored. The reasoning level is read in omo's
+        precedence (`read_variant`), so a config written before the reasoning rename still
+        reports what omo will actually resolve."""
         node = self.node_for(target)
         if not isinstance(node, dict):
             return "", None
-        return node.get("model", "") or "", node.get("variant")
+        return node.get("model", "") or "", read_variant(node)
 
     # ----- the pick list --------------------------------------------------------------
 
@@ -405,24 +524,36 @@ class Session:
         The value written is `f"{provider}/{model}"` — the CONTRACTS-frozen rule. A "none"/empty
         variant means "no variant", so the key is DROPPED rather than written as `variant:
         "none"` (identical to `(none)`); this covers the picker, `v`, a restage, and a
-        pre-existing on-disk "none" (re-picking cleans it)."""
+        pre-existing on-disk "none" (re-picking cleans it).
+
+        The reasoning level is written under ONE spelling (`variant_key_for`) and the other two
+        are removed from the node, so no stale key survives to outrank the one omodel just
+        wrote."""
         node = self.ensure_node(target)
         node["model"] = f"{provider}/{model}"
+        parsed = split_target(target)
+        key = variant_key_for(self.cfg, parsed[2] if parsed else None)
+        for stale in REASONING_KEYS:
+            if stale != key:
+                node.pop(stale, None)
         if is_no_variant(variant):
-            node.pop("variant", None)
+            node.pop(key, None)
         else:
-            node["variant"] = variant
+            node[key] = variant
 
     def set_row(self, target: str, row: dict) -> None:
         """`set_model` from a candidate-row dict — the shape `rows()` yields."""
         self.set_model(target, row["provider"], row["model"], row.get("variant"))
 
     def clear(self, target: str) -> bool:
-        """Drop `target`'s model/variant, keeping the node. Returns whether anything changed."""
+        """Drop `target`'s model and reasoning level, keeping the node. Every spelling goes —
+        leaving one behind would keep resolving in omo after omodel reported the target clear.
+        Returns whether anything changed."""
         node = self.node_for(target)
-        if isinstance(node, dict) and ("model" in node or "variant" in node):
+        if isinstance(node, dict) and ("model" in node or any(k in node for k in REASONING_KEYS)):
             node.pop("model", None)
-            node.pop("variant", None)
+            for key in REASONING_KEYS:
+                node.pop(key, None)
             return True
         return False
 
@@ -431,7 +562,7 @@ class Session:
         node along with any model it held. For a sub-target clear == delete: a cleared sub-object
         serializes away anyway (config_io drops empty sub-objects), so a model-less placeholder
         isn't worth keeping."""
-        agent = read_map(self.cfg, "agents").get(name)
+        agent = read_map(self.managed, "agents").get(name)
         if isinstance(agent, dict):
             agent.pop(kind, None)
 
@@ -447,7 +578,7 @@ class Session:
         store = copy.deepcopy(self.store)
         current = store.current()
         if current is not None:
-            fresh = presets_mod.capture(current.name, self.cfg)
+            fresh = presets_mod.capture(current.name, self.managed)
             same = presets_mod.fingerprint(
                 current.agents, current.categories
             ) == presets_mod.fingerprint(fresh.agents, fresh.categories)
@@ -498,8 +629,9 @@ class Session:
             self.store = self.projected_store()  # bank the in-flight edits into the old preset
         self.store.active = index
         agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
-        self.cfg["agents"] = agents
-        self.cfg["categories"] = categories
+        root = config_io.managed_root_for_write(self.cfg)
+        root["agents"] = agents
+        root["categories"] = categories
         return preset
 
     # ----- dirtiness ------------------------------------------------------------------

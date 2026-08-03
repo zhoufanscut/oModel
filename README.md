@@ -7,7 +7,7 @@
 Per agent/category, oModel shows omo's fallback chain filtered to the models you can actually
 run (via `opencode models`) — each as one row per serving provider, dedicated providers before
 gateways. You pick one and it fills in the correct `provider/` prefix and a valid variant, then
-writes it back to `oh-my-openagent.jsonc`: only the `agents`/`categories` blocks are rewritten
+writes it back to omo's config: only the `agents`/`categories` blocks are rewritten
 clean — everything else in the file, including comments and commented-out config, is kept
 verbatim (timestamped backups each save).
 
@@ -157,11 +157,11 @@ live re-fetch and rebuild the cache.
 3. **Pick** — each suggested model you can run is shown as one row per serving provider
    (dedicated providers before gateways). Pick a row and oModel applies the `provider/` prefix
    and a valid variant for you.
-4. **Save** — shows a diff before writing a clean `oh-my-openagent.jsonc`, snapshotting the
+4. **Save** — shows a diff before writing a clean config, snapshotting the
    prior file to a timestamped backup (`omodel --restore` to roll back).
 
 **Presets** sit under the agent list, and they're what you actually edit. One is always active
-(`●`); your model changes go into it, and `s` writes it to `oh-my-openagent.jsonc`. Press `Enter`
+(`●`); your model changes go into it, and `s` writes it to the config. Press `Enter`
 on another preset to switch (your edits stay in the one you leave), `r` to rename one, `x` to
 delete one, and `a` (or `Enter` on the last row, `+ add preset…`) to add another from the models
 you're looking at — keep as many as you like. First
@@ -193,7 +193,7 @@ failed, `2` usage, `3` refused (unknown target, a model you can't run, a bad var
 
 An agent that reaches for `omodel --help` finds `agent-guide` and reads the whole contract from
 there. The gap is earlier than that: asked to change a model, an agent's first instinct is often
-to open `oh-my-openagent.jsonc` and edit it — and nothing in that file mentions oModel.
+to open omo's config and edit it — and nothing in that file mentions oModel.
 
 So say it once, before the agent forms a plan. Paste this into your `CLAUDE.md`, `AGENTS.md`, or
 whatever instructions file your agent reads at startup:
@@ -201,7 +201,8 @@ whatever instructions file your agent reads at startup:
 ```markdown
 ## Changing OMO models
 
-Never hand-edit `oh-my-openagent.jsonc` — it skips the `provider/` prefix, the variant check,
+Never hand-edit omo's config (`~/.omo/omo.jsonc`) — it skips the `provider/` prefix, the
+variant check,
 the backup and the preset invariant. Use the `omodel` CLI instead:
 
     omodel agent-guide                        # read this first — the full contract

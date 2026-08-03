@@ -55,5 +55,14 @@ def _isolate_omodel_config(tmp_path, monkeypatch):
     explicit path can only ever scaffold/write under this tmp dir, never the real
     ~/.config/opencode/oh-my-openagent.jsonc. Tests that monkeypatch XDG_CONFIG_HOME themselves
     set it later in the test body, so theirs overrides this — which is fine.
+
+    $HOME/$USERPROFILE go with it, and they are the load-bearing half now: the unified
+    ~/.omo/omo.jsonc is resolved from $HOME and deliberately IGNORES $XDG_CONFIG_HOME
+    (`config_io._home`), so XDG alone stopped netting the default path the moment omo 4.19.3
+    support landed. Without this a path-less test resolves the developer's real
+    ~/.omo/omo.jsonc — and `Session.__post_init__` adopts the legacy presets store on that
+    path, which DELETES the real ~/.config/opencode/.omodel-presets.json.
     """
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))

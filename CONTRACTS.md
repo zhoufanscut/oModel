@@ -135,17 +135,35 @@ commit.
   `real_tokens` are computed in `build()`) with classmethod
   `build(catalog, suggestions)`, `.vendors_served(p)->int`, `.resolve_prefix(model_id, source,
   entry=None)->str|None`, `.candidates(target)->list[dict]`.
-- `config_io.py`: `config_path(cli_override=None)->str`; `load_config(path=None)->(cfg, path)`
+- `config_io.py`: `config_path(cli_override=None)->str` (first EXISTING of
+  `~/.omo/omo.jsonc` → `~/.omo/omo.json` → legacy; else the unified path, so a scaffold never
+  recreates the legacy file); `unified_config_path()->str`; `legacy_config_path()->str`
+  (`$XDG_CONFIG_HOME` applies to the LEGACY path ONLY — `~/.omo` is `$HOME`/`$USERPROFILE` on
+  every platform, matching omo);
+  `OPENCODE_BLOCK = "[opencode]"`; `scope_of(cfg)->"opencode"|"root"` (CONTENT-based, never
+  filename-based); `managed_root(cfg)->dict` (read, never creates) and
+  `managed_root_for_write(cfg)->dict` (creates/coerces the block) — the node holding
+  `agents`/`categories`; `load_config(path=None)->(cfg, path)`
   (raises `ConfigParseError(ValueError)` — message carries the path — on malformed JSONC; cli.py
-  catches it for a friendly exit-1 message on the TUI/`--print` paths);
+  catches it for a friendly exit-1 message on the TUI/`--print` paths; scaffolds the UNIFIED
+  shape except at an explicit legacy path);
   `serialize(cfg)->str` (canonical clean form — dirtiness + from-scratch fallback; never required
-  to equal the on-disk bytes); `render(cfg, base_text)->str` (**text-preserving write form**:
-  `base_text` with only the top-level `agents`/`categories` value spans rewritten clean, everything
-  else — incl. comments / commented-out config outside them — byte-for-byte; falls back to
-  `serialize(cfg)` when `base_text` is empty or a key isn't a direct root member);
+  to equal the on-disk bytes; scope-aware, and `cfg` is the WHOLE document so it never relocates
+  agents/categories out of their scope); `render(cfg, base_text)->str` (**text-preserving write
+  form**: `base_text` with only the managed `agents`/`categories` value spans rewritten clean —
+  nested under `"[opencode]"` on a unified document — everything else, incl. comments /
+  commented-out config outside them, byte-for-byte; falls back to
+  `serialize(cfg)` when `base_text` is empty or a key is missing from the managed node);
   `diff_text(cfg, path)->str` and `save(cfg, path)->SaveResult` both go through `render`;
   `@dataclass SaveResult(changed, backup, original_created)`; `@dataclass BackupInfo(name, path,
-  is_original, size)`; `list_backups(path)->list`; `restore(path, backup_name)->None`.
+  is_original, size)`; `list_backups(path)->list` (the pinned `original.jsonc` + the newest 10 of
+  the `[0-9]*.jsonc` ring — `original-legacy.jsonc` matches neither and is never offered);
+  `restore(path, backup_name)->None`, which **raises `BackupScopeMismatch(ValueError)`** when the
+  snapshot's `scope_of` differs from the live config's (checked BEFORE the safety snapshot, so a
+  refusal writes nothing; cli.py maps it to exit 3 — there is deliberately no `--force`);
+  `adopt_original_backup(src_config_path, dst_config_path)->bool` (copies the pre-omodel pin to
+  `<dst>/.backup/original-legacy.jsonc`, leaving the source in place and `original.jsonc` free for
+  the first save's pin of the unified config).
 - `app.py`: `class OModelApp(App)` (Textual) + `create_app(config_path=None)->OModelApp` (the
   testable construction half — builds catalog/suggestions/resolver/cfg; the resolver is built even
   in CatalogUnavailable degraded mode, over the empty catalog) + `run_app(config_path=None)->None`
@@ -177,17 +195,25 @@ commit.
   `write(config_path, store)->Store` (**the ONLY disk write in this module** — atomic, RAISES on
   failure so app.py notifies, returns the store as read back; an existing file that does not parse
   is moved to `<path>.corrupt` first, since `load` degrades it to an empty store the app would
-  otherwise clobber). Pure helpers: `capture(name, cfg)` /
+  otherwise clobber); `adopt(src_config_path, dst_config_path)->int|None` (one-time hand-over of
+  a pre-4.19.3 store to the unified location — writes, reads back, compares names, and only THEN
+  deletes the original; any failure leaves it in place. `Session` calls it for the DEFAULT
+  unified path only). Pure helpers: `capture(name, managed)` /
   `assignments(preset)` (deep-copy IN / OUT — the live cfg and a stored Preset never alias),
-  `seeded(cfg, name=DEFAULT_NAME)`, `matching_index(store, cfg)`, `normalize_active(store)`,
-  `fingerprint(agents, categories)` (does the config still reflect a preset?),
+  `seeded(managed, name=DEFAULT_NAME)`, `matching_index(store, managed)`, `normalize_active(store)`,
+  `fingerprint(agents, categories)` (does the config still reflect a preset? — comparison ONLY,
+  never an input to what gets written, and deliberately **spelling-insensitive**: `variant` /
+  `reasoning` / `reasoningEffort` fold to one key at both depths via `_canon`, because omodel
+  respells a preset in memory while the config keeps what is on disk),
   `store_fingerprint(store)` (has `s` anything to persist? — excludes `saved_at`),
   `model_count(preset)`, `sanitize_name(text, index)` (also strips `[`/`]` — Textual parses plain
   strings as markup, and a persisted name crashed every launch), `timestamp()`,
   `presets_path(config_path)`;
-  constants `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. Stored at
+  constants `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. The `managed` argument is the node
+  that HOLDS `agents`/`categories` (`Session.managed`), not necessarily the whole config — that
+  is what keeps this module a leaf with no knowledge of the `"[opencode]"` scope. Stored at
   `<config_dir>/.omodel-presets.json` — next to the ACTIVE config, so a temp `--config` gets its own
-  set. Non-dict `agents`/`categories` coerce to `{}` on read and write. Pure data + file IO, no
+  set, and so the store follows the config to `~/.omo/`. Non-dict `agents`/`categories` coerce to `{}` on read and write. Pure data + file IO, no
   Textual; consumed only by `app.py`. **Invariant app.py upholds:** the config on disk equals the
   ACTIVE preset. In the TUI only `s` writes, and it writes both files. `cli.py`'s mutating verbs
   (decision #18) write both together too — config first — so the invariant holds on both surfaces;
@@ -196,9 +222,18 @@ commit.
   Module-level: `SUBKINDS`, `GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`; `is_gpt_model(id)->bool`;
   `subkinds_for(name)->tuple`; `is_no_variant(v)->bool`; `coerce_dict(parent, key)->dict`;
   `gpt_only(target)->bool`; `target_label(target)->str`; `split_target(target)->tuple|None`
-  (shape only — existence is `Session.is_known`). `@dataclass Session(catalog, suggestions,
+  (shape only — existence is `Session.is_known`); `managed_root(cfg)->dict` (re-export of
+  `config_io.managed_root`, so app.py/cli.py reach the scope through one place);
+  `REASONING_KEYS = ("reasoning", "variant", "reasoningEffort")`;
+  `read_variant(node)->str|None` (omo's read precedence);
+  `variant_key_for(cfg, subkind)->str` (which spelling to WRITE — `reasoning` for
+  agents/categories on a unified document, `variant` for legacy AND for
+  `ultrawork`/`compaction` in both scopes). `@dataclass Session(catalog, suggestions,
   resolver, cfg, config_path, catalog_error=None)` with `__post_init__`-filled `store`,
-  `sync_conflict`, `saved_text`, `saved_store_fp`; classmethod `build(config_path=None)`;
+  `sync_conflict`, `saved_text`, `saved_store_fp`, `adopted_presets`;
+  classmethod `build(config_path=None)`;
+  `.managed` (property, the agents/categories-holding node) and `.scope` (property,
+  `"opencode"`/`"root"`, surfaced as `config_scope` by `show --json`);
   `.degraded` (property, `not catalog.connected`); `.known_targets()->list`;
   `.is_known(target)->bool`; `.node_for()`/`.ensure_node()`/`.assignment()`;
   `.rows(target, custom_rows=())->list` (candidate-row dicts);

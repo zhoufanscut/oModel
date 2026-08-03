@@ -507,14 +507,31 @@ def _fail(error: str, message: str, as_json: bool, code: int = EXIT_REJECTED, **
 
 def _open_session(config_override):
     """`(session, None)` or `(None, exit_code)` — builds a Session, turning a malformed config
-    into the same friendly exit-1 the TUI path gives."""
+    into the same friendly exit-1 the TUI path gives.
+
+    Also the single place the two one-time config-location notices are emitted, so every verb
+    reports them exactly once. They go to STDERR: `--json` callers parse stdout, and a notice
+    must never be the reason a payload fails to decode."""
     from omodel.config_io import ConfigParseError
     from omodel.session import Session
     try:
-        return Session.build(config_override), None
+        session = Session.build(config_override)
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         return None, EXIT_ERROR
+    if session.adopted_presets:
+        print(
+            f"[note] Adopted {session.adopted_presets} preset(s) from the previous config "
+            f"location into {os.path.dirname(session.config_path)}.",
+            file=sys.stderr,
+        )
+    if session.scope == "root":
+        print(
+            "[note] Using the pre-4.19.3 config path. oh-my-openagent 4.19.3+ reads "
+            "~/.omo/omo.jsonc instead — launch omo once to migrate.",
+            file=sys.stderr,
+        )
+    return session, None
 
 
 def _split_value(value):
@@ -561,13 +578,13 @@ def _configured_targets(session) -> list:
     saw stayed put."""
     from omodel import session as session_mod
     out = []
-    for name, data in session_mod.read_map(session.cfg, "agents").items():
+    for name, data in session_mod.read_map(session.managed, "agents").items():
         out.append(f"agent:{name}")
         if isinstance(data, dict):
             for kind in session_mod.SUBKINDS:
                 if isinstance(data.get(kind), dict):
                     out.append(f"agent:{name}.{kind}")
-    for name in session_mod.read_map(session.cfg, "categories"):
+    for name in session_mod.read_map(session.managed, "categories"):
         out.append(f"cat:{name}")
     return out
 
@@ -764,6 +781,9 @@ def _cmd_show(config_override, as_json: bool) -> int:
     payload = {
         "omodel_version": omodel.__version__,
         "config_path": session.config_path,
+        # "opencode" = omo's unified document (assignments live under `"[opencode]"`);
+        # "root" = the pre-4.19.3 file with agents/categories at the top level.
+        "config_scope": session.scope,
         "degraded": session.degraded,
         "providers": list(session.catalog.connected),
         "active_preset": (
@@ -851,7 +871,10 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
     # `read_map` keeps every surface from crashing, but "we survived it" is not "it's fine", and
     # check calling such a config healthy is how it stays broken.
     for key in ("agents", "categories"):
-        raw = session.cfg.get(key)
+        # `session.managed`, not `session.cfg`: on a unified document the maps live under
+        # `"[opencode]"`, so reading the root both MISSED a malformed map there (check reporting
+        # a broken config healthy) and flagged a stray root-level one that omodel does not manage.
+        raw = session.managed.get(key)
         if raw is not None and not isinstance(raw, dict):
             problems.append({
                 "target": None, "problem": "malformed_map",
@@ -1075,7 +1098,7 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
 
     if action == "new":
         clean = presets_mod.sanitize_name(name, len(session.store.presets))
-        session.store.presets.append(presets_mod.capture(clean, session.cfg))
+        session.store.presets.append(presets_mod.capture(clean, session.managed))
         session.store.active = len(session.store.presets) - 1
         try:
             session.write_store()
@@ -1407,7 +1430,7 @@ def _cmd_refresh_models() -> int:
 
 def _cmd_restore(config_override: str | None) -> int:
     """List newest 10 backups + pinned original, prompt user, restore."""
-    from omodel.config_io import config_path, list_backups, restore
+    from omodel.config_io import BackupScopeMismatch, config_path, list_backups, restore
 
     path = config_path(config_override)
     backups = list_backups(path)
@@ -1443,7 +1466,13 @@ def _cmd_restore(config_override: str | None) -> int:
         return EXIT_ERROR
 
     chosen = backups[idx]
-    restore(path, chosen.name)
+    try:
+        restore(path, chosen.name)
+    except BackupScopeMismatch as exc:
+        # Exit 3 = "refused by a guard" (the agent-surface convention), distinct from the exit 1
+        # omodel uses for its own failures: nothing went wrong, the restore was declined.
+        print(f"Refused: {exc}", file=sys.stderr)
+        return EXIT_REJECTED
     print(f"Restored {chosen.name} to {path}")
     return EXIT_OK
 
@@ -1469,10 +1498,11 @@ def _cmd_print(config_override: str | None) -> int:
 
     # read_map, not `cfg.get(k, {})` — the default only applies when the key is ABSENT, so a
     # present `"agents": null` (or a truthy non-dict) returned None and tracebacked on .items().
-    from omodel.session import read_map
+    from omodel.session import managed_root, read_map, read_variant
 
-    agents_cfg = read_map(cfg, "agents")
-    categories_cfg = read_map(cfg, "categories")
+    managed = managed_root(cfg)
+    agents_cfg = read_map(managed, "agents")
+    categories_cfg = read_map(managed, "categories")
 
     print(f"Config: {path}")
     if catalog.connected:
@@ -1484,7 +1514,7 @@ def _cmd_print(config_override: str | None) -> int:
     print("AGENTS:")
     for name, data in agents_cfg.items():
         model = data.get("model", "(unset)") if isinstance(data, dict) else "(unset)"
-        variant = data.get("variant") if isinstance(data, dict) else None
+        variant = read_variant(data)
         suffix = f"  variant={variant}" if variant else ""
         print(f"  {name}: {model}{suffix}")
         # Sub-targets
@@ -1492,7 +1522,7 @@ def _cmd_print(config_override: str | None) -> int:
             sub_data = data.get(sub) if isinstance(data, dict) else None
             if isinstance(sub_data, dict):
                 sub_model = sub_data.get("model", "(unset)")
-                sub_variant = sub_data.get("variant")
+                sub_variant = read_variant(sub_data)
                 sub_suffix = f"  variant={sub_variant}" if sub_variant else ""
                 print(f"    .{sub}: {sub_model}{sub_suffix}")
 
@@ -1500,7 +1530,7 @@ def _cmd_print(config_override: str | None) -> int:
     print("CATEGORIES:")
     for name, data in categories_cfg.items():
         model = data.get("model", "(unset)") if isinstance(data, dict) else "(unset)"
-        variant = data.get("variant") if isinstance(data, dict) else None
+        variant = read_variant(data)
         suffix = f"  variant={variant}" if variant else ""
         print(f"  {name}: {model}{suffix}")
 

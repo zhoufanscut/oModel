@@ -1566,6 +1566,18 @@ class OModelApp(App):
         # AGENTS/CATEGORIES headers), so no line of the bounded card is spent on a label.
         self.query_one("#presets", OptionList).border_title = "PRESETS"
         self._populate_presets()
+        # The two config-location notices cli.py prints to stderr, on the surface most people
+        # actually use. The adoption one matters because it reports a file that was DELETED.
+        if self.session.adopted_presets:
+            self.notify(
+                f"Adopted {self.session.adopted_presets} preset(s) from the previous config "
+                "location.",
+            )
+        if self.session.scope == "root":
+            self.notify(
+                "Using the pre-4.19.3 config path — oh-my-openagent 4.19.3+ reads "
+                "~/.omo/omo.jsonc instead. Launch omo once to migrate.",
+            )
         if self._sync_conflict:
             self._ask_sync()
         # The hint bar is static (see _HINT_BAR) — set it once. Everything it used to advertise
@@ -1594,7 +1606,7 @@ class OModelApp(App):
         `read_map`, not `(cfg.get("agents") or {})`: that rescues `null` but not a TRUTHY
         non-dict, so a hand-edited `"agents": "oops"` reached `.get` on a str and killed the app
         during the first render — while `omodel check` called the same config healthy."""
-        agent = session_mod.read_map(self.cfg, "agents").get(name)
+        agent = session_mod.read_map(self.session.managed, "agents").get(name)
         if not isinstance(agent, dict):
             return []
         return [k for k in _SUBKINDS if isinstance(agent.get(k), dict)]
@@ -1782,8 +1794,9 @@ class OModelApp(App):
                 )
                 return
             agents, categories = presets_mod.assignments(preset)
-            self.cfg["agents"] = agents
-            self.cfg["categories"] = categories
+            root = config_io.managed_root_for_write(self.cfg)
+            root["agents"] = agents
+            root["categories"] = categories
             if self._record(f"restore preset '{preset.name}' over the config"):
                 self._restore_state(self._history.current_state())
             else:
@@ -1856,7 +1869,7 @@ class OModelApp(App):
             self._store = self._projected_store()  # bank in-flight edits into the old preset
             at = len(self._store.presets)
             name = presets_mod.sanitize_name(text, at)
-            self._store.presets.append(presets_mod.capture(name, self.cfg))
+            self._store.presets.append(presets_mod.capture(name, self.session.managed))
             self._store.active = at
             # Adding changes `active` without changing cfg, so it pushes no history entry — the
             # entries recorded on the preset you were sitting on have to follow you here, or the
@@ -2519,10 +2532,11 @@ class OModelApp(App):
             self._custom_rows.pop(target, None)
         clears = self._current_assignment(target)[0] == ident
         if clears:
-            node = self._node_for(target)
-            if isinstance(node, dict):
-                node.pop("model", None)
-                node.pop("variant", None)
+            # Through `Session.clear`, never by hand: it is the one place that knows every
+            # spelling of the reasoning key. Popping `"variant"` here left a live `reasoning`
+            # behind on a unified config, so omo kept resolving a level for a target the TUI had
+            # just reported as cleared.
+            self.session.clear(target)
         # The remembered cursor names a row that is about to stop existing. Re-aim it at whatever
         # is assigned (its `●` row) so the pane doesn't come back un-highlighted under your hand;
         # nothing assigned (we just cleared it) → forget it, and it renders like a fresh target.
@@ -2771,9 +2785,13 @@ class OModelApp(App):
         target = self._store.current()
         if target is None:
             return True
+        # `state` is a whole-document history snapshot, so the maps have to be reached through
+        # the scope adapter — reading its root on a unified config compared against (None, None)
+        # and always claimed the models would land elsewhere.
+        managed = config_io.managed_root(state)
         return presets_mod.fingerprint(
             target.agents, target.categories
-        ) != presets_mod.fingerprint(state.get("agents"), state.get("categories"))
+        ) != presets_mod.fingerprint(managed.get("agents"), managed.get("categories"))
 
     def _restore_state(self, state: dict) -> None:
         """Swap self.cfg for a restored history snapshot and re-render everything that depends
@@ -2861,6 +2879,15 @@ class OModelApp(App):
         store = self._projected_store()
         store_dirty = presets_mod.store_fingerprint(store) != self._saved_store_fp
         if not diff.strip():
+            # An empty diff does NOT imply a clean dirtiness baseline. `render` legitimately
+            # leaves the file byte-identical while `serialize(cfg)` — what `is_dirty` compares —
+            # differs: an agents/categories key that is absent from the file and empty in cfg is
+            # skipped by the splice but always emitted by the canonical form, so switching preset
+            # on such a config reads dirty with genuinely nothing to write. Without this
+            # re-baseline `q` would warn about unsaved work forever while `s` insisted there was
+            # none, with no way out from inside the app. `config_io.save` returns before it takes
+            # a backup or touches the ring when the render matches disk, so this writes nothing.
+            self.session.save_config()
             if not store_dirty:
                 self.notify("Nothing to save.")
                 return

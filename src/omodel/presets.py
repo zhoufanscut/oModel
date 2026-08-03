@@ -242,6 +242,42 @@ def _preserve_unreadable(path: str) -> None:
         pass  # can't preserve it (a directory, no permission) — let the write proceed and report
 
 
+def adopt(src_config_path: str, dst_config_path: str):
+    """Move the presets belonging to `src_config_path` alongside `dst_config_path`, returning how
+    many were adopted — or None when there was nothing to do.
+
+    omo 4.19.3+ relocates the config to `~/.omo/omo.jsonc`, and presets follow the config
+    (`presets_path`), so an upgrade would otherwise strand every preset at the old location and
+    start the user over from a single default. This is the one-time hand-over.
+
+    The delete is GATED on the copy having landed: the destination is written, read back, and
+    checked for the same preset names before the original is removed. Any failure leaves the
+    original exactly where it was — `write()` raises, and a mismatch returns without deleting —
+    because the presets file has no backup ring, so a bad adoption would be unrecoverable.
+
+    Only ever called for the DEFAULT unified path (see `Session.__post_init__`); pointing
+    `--config` at a scratch file must never drag the real presets off to a temp directory."""
+    src, dst = presets_path(src_config_path), presets_path(dst_config_path)
+    if os.path.abspath(src) == os.path.abspath(dst):
+        return None
+    if os.path.exists(dst) or not os.path.isfile(src):
+        return None
+    store = load(src_config_path)
+    if store.is_empty():
+        return None
+
+    landed = write(dst_config_path, store)  # raises on a failed write — nothing deleted
+    if store_fingerprint(landed) != store_fingerprint(store):
+        # Whole-store comparison, not just the names: this delete is irreversible and the presets
+        # file has no backup ring, so the gate checks the assignments and `active` too.
+        return None  # read-back disagrees: keep the original and adopt nothing
+    try:
+        os.remove(src)
+    except OSError:
+        pass  # copy is safely in place; a stale original is untidy, not lossy
+    return len(landed.presets)
+
+
 def write(config_path: str, store: Store) -> Store:
     """Persist the whole store (atomic temp+rename) and return it as READ BACK FROM DISK, so
     the caller renders what actually landed.  RAISES on failure (read-only dir, the path taken
@@ -265,14 +301,18 @@ def write(config_path: str, store: Store) -> Store:
     return load(config_path)
 
 
-def capture(name: str, cfg: dict) -> Preset:
-    """Snapshot `cfg`'s editable state under `name` — the in-memory cfg, staged edits included.
-    Deep-copied IN (`_as_map`), so later edits can't mutate the stored preset."""
+def capture(name: str, managed: dict) -> Preset:
+    """Snapshot the editable state under `name` — staged edits included. Deep-copied IN
+    (`_as_map`), so later edits can't mutate the stored preset.
+
+    `managed` is the node that HOLDS `agents`/`categories`, not necessarily the whole config:
+    on omo's unified document that is `cfg["[opencode]"]`. Callers pass `Session.managed`; this
+    module stays a leaf and never has to know which scope it is looking at."""
     return Preset(
         name=name,
         saved_at=timestamp(),
-        agents=_as_map(cfg.get("agents")),
-        categories=_as_map(cfg.get("categories")),
+        agents=_as_map(managed.get("agents")),
+        categories=_as_map(managed.get("categories")),
     )
 
 
@@ -283,17 +323,19 @@ def assignments(preset: Preset) -> tuple:
     return _as_map(preset.agents), _as_map(preset.categories)
 
 
-def seeded(cfg: dict, name: str = DEFAULT_NAME) -> Store:
+def seeded(managed: dict, name: str = DEFAULT_NAME) -> Store:
     """The first-launch store: preset 1 captured from your existing config, active.  Returned
     IN MEMORY, never written — the first `s` materializes it (one write rule).  Until then a
-    fresh launch that changes nothing stays clean, and re-seeding next time is identical."""
-    return Store(presets=[capture(name, cfg)], active=0)
+    fresh launch that changes nothing stays clean, and re-seeding next time is identical.
+    `managed` is the agents/categories-holding node — see `capture`."""
+    return Store(presets=[capture(name, managed)], active=0)
 
 
-def matching_index(store: Store, cfg: dict):
-    """Index of the preset whose assignments equal `cfg`'s, or None.  Used at launch to answer
-    "does the config still reflect one of the presets?" — the invariant's only real test."""
-    target = fingerprint(cfg.get("agents"), cfg.get("categories"))
+def matching_index(store: Store, managed: dict):
+    """Index of the preset whose assignments equal the config's, or None.  Used at launch to
+    answer "does the config still reflect one of the presets?" — the invariant's only real test.
+    `managed` is the agents/categories-holding node — see `capture`."""
+    target = fingerprint(managed.get("agents"), managed.get("categories"))
     for i, preset in enumerate(store.presets):
         if fingerprint(preset.agents, preset.categories) == target:
             return i
@@ -332,33 +374,70 @@ def sanitize_name(text: str, index: int) -> str:
     return cleaned[:MAX_NAME].strip() or f"preset {index + 1}"
 
 
+# omo spells one reasoning level three ways, and which one a node carries depends on when it was
+# written and how deep it sits. Two nodes that MEAN the same thing must not read as a difference
+# here, or a config omodel never edited reconciles against no preset — permanent `sync_conflict`,
+# permanently dirty, and no-op saves claiming `changed: true`. Folded to a key no real config can
+# collide with; comparison only, never written (see `fingerprint`).
+_REASONING_KEYS = ("reasoning", "variant", "reasoningEffort")
+_CANON_REASONING = "\0reasoning"
+
+
+def _canon(node: dict) -> dict:
+    """A copy of `node` with whichever reasoning spelling it carries folded into one key, in omo's
+    own read precedence (`session.read_variant`). A blank or non-string level counts as unset, so
+    `"reasoning": null` and an absent key compare equal — they resolve the same in omo."""
+    level = None
+    for key in _REASONING_KEYS:
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            level = value
+            break
+    out = {k: v for k, v in node.items() if k not in _REASONING_KEYS}
+    if level is not None:
+        out[_CANON_REASONING] = level
+    return out
+
+
 def _clean(agents: dict) -> dict:
     """config_io._clean_agents' rule, re-implemented to keep this module a leaf: an
     ultrawork/compaction sub-object with no `model` serializes away, so it must not read as a
-    difference here either."""
+    difference here either. Reasoning spellings are folded at both levels (`_canon`)."""
     out: dict = {}
     for name, data in agents.items():
         if not isinstance(data, dict):
             out[name] = data
             continue
-        out[name] = {
-            k: v
-            for k, v in data.items()
-            if not (k in _SUBKINDS and isinstance(v, dict) and not v.get("model"))
-        }
+        node: dict = {}
+        for k, v in data.items():
+            if k in _SUBKINDS and isinstance(v, dict):
+                if not v.get("model"):
+                    continue  # empty sub-object serializes away
+                node[k] = _canon(v)
+            else:
+                node[k] = v
+        out[name] = _canon(node)
     return out
 
 
 def fingerprint(agents, categories) -> str:
     """Identity of an assignment set, for comparison only.
 
-    Cleaned (empty sub-objects dropped) and `sort_keys`ed, so neither key order nor an
-    added-but-unfilled sub-target reads as a difference — matching what actually reaches disk.
+    Cleaned (empty sub-objects dropped), reasoning spellings folded (`_canon`), and `sort_keys`ed
+    — so neither key order, nor an added-but-unfilled sub-target, nor `variant` vs `reasoning`
+    vs `reasoningEffort` reads as a difference. The spelling folding matters because omodel
+    normalizes a preset's spelling in memory while the config keeps whatever is on disk: without
+    it, `reasoning: high` in the store never equals `variant: high` in the config, and a config
+    the user never touched reports a sync conflict on every launch.
     Its one job is `matching_index` (does the config still reflect a preset?); it is never an
     input to what gets WRITTEN, so a disagreement can only mis-answer that question, never
     corrupt a save."""
     return json.dumps(
-        {"agents": _clean(_as_map(agents)), "categories": _as_map(categories)},
+        {
+            "agents": _clean(_as_map(agents)),
+            "categories": {n: _canon(d) if isinstance(d, dict) else d
+                           for n, d in _as_map(categories).items()},
+        },
         sort_keys=True,
         ensure_ascii=False,
     )

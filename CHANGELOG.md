@@ -5,6 +5,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Read and write oh-my-openagent's unified config at `~/.omo/omo.jsonc`. Since omo 4.19.3 the
+  legacy `~/.config/opencode/oh-my-openagent.jsonc` is moved aside on first launch and read by
+  nothing but the migration engine, so omodel was showing every model as unset, reporting saves
+  that changed nothing, and recreating the legacy file it had just lost. Assignments now go to
+  the `"[opencode]"` block omo actually resolves — a top-level `agents` is valid JSON and saves
+  fine, but omo folds base → `[opencode]` with the block winning, so it never took effect.
+  (#12)
+- Write the reasoning level as `reasoning`, not `variant`, in unified configs. omo resolves
+  every source's `reasoning` before any source's `variant`, and a category's `reasoning`
+  outranks an agent's `variant` — so a `variant` written into a migrated config was accepted,
+  saved, and then silently overridden, sometimes by a different object entirely. `ultrawork` and
+  `compaction` keep `variant`: that is the only spelling their override reads. Existing configs
+  are unchanged; all three spellings are still read, in omo's own order.
+- Keep comments and surrounding config intact on a unified document. Rewriting only the
+  `agents`/`categories` spans now works at `"[opencode]"` depth — previously the missing
+  top-level key sent the whole file through a clean rewrite, dropping comments and reflowing
+  everything around them.
+- Never recreate the legacy config file. A fresh scaffold lands at `~/.omo/omo.jsonc` in the new
+  shape; the old path is used only when it is the only config that exists, with a one-line
+  notice that omo no longer reads it.
+
+### Changed
+
+- Presets and backups follow the config to `~/.omo/`. A presets file left beside the old config
+  is adopted once and the original removed, so upgrading does not start you over from a single
+  default. The original is deleted only after the copy has been written and read back intact.
+- `omodel --restore` refuses a backup whose format doesn't match the live config, and exits 3
+  instead. Restoring is a verbatim copy, so putting a pre-4.19.3 snapshot back over
+  `~/.omo/omo.jsonc` would leave keys at the document root that omo's schema rejects — and omo
+  answers a rejected config by falling back to its defaults, which would have wiped far more
+  than your model assignments. There is no override for this one.
+- The pinned pre-oModel config is carried over to `~/.omo/.backup/original-legacy.jsonc` when the
+  config moves, so it stays readable. It is not offered as a restore candidate (it is in the old
+  format), and it leaves `original.jsonc` free for the first save at the new location to pin your
+  unified config — a snapshot you *can* restore. The older timestamped snapshots stay where they
+  are.
+- `omodel show --json` reports `config_scope` (`"opencode"` or `"root"`), so an agent can tell
+  which shape the config is in.
+- A config that spells the reasoning level differently from the one omodel writes no longer
+  reports a sync conflict on every launch. `variant`, `reasoning` and `reasoningEffort` mean the
+  same thing to omo, so they now compare equal when checking whether the config still matches a
+  preset — previously a config nobody had edited could look permanently unsaved, and repeated
+  no-op saves each claimed to have changed something.
+- A config file whose top level is not a JSON object (an array, say) reports the same readable
+  parse error as any other malformed file instead of a stack trace.
+
 ## [0.4.0] — 2026-08-01
 
 ### Added

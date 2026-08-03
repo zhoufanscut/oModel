@@ -16,11 +16,17 @@ detail that makes those three steps reliable.
 
 ## Problem
 
-`~/.config/opencode/oh-my-openagent.jsonc` sets a `model` (and optional `variant`) per **agent**
-(sisyphus, hephaestus, oracle, …) and per **category** (deep, quick, writing, …), plus nested
-sub-models like `sisyphus.ultrawork`. Today the file carries a big hand-curated palette of
+omo's config sets a `model` (and an optional reasoning level) per **agent** (sisyphus,
+hephaestus, oracle, …) and per **category** (deep, quick, writing, …), plus nested sub-models
+like `sisyphus.ultrawork`. Today the file carries a big hand-curated palette of
 **commented-out alternatives**; switching means hand-editing JSONC and remembering the right
-`provider/` prefix and the right `variant`. That manual edit is the pain.
+`provider/` prefix and the right variant. That manual edit is the pain.
+
+Since **omo 4.19.3** that config is `~/.omo/omo.jsonc`, with the whole OpenCode plugin
+configuration — agents and categories included — nested under a `"[opencode]"` key. The
+pre-4.19.3 `~/.config/opencode/oh-my-openagent.jsonc` is read by nothing but omo's migration
+engine, which **moves** it aside on first launch. See §Config scope for what omodel edits and
+where.
 
 **Goal:** a TUI that, per agent/category, shows the current model and a candidate list built from
 **what omo suggests** + **what you actually have** + **free text**, applies the correct provider
@@ -44,7 +50,7 @@ prefix and a valid variant, and saves a clean config.
 | # | Decision | Choice |
 |---|----------|--------|
 | 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
-| 2 | Save format | **Edit-in-place**: only `agents`/`categories` are rewritten clean; **everything else — other keys, formatting, comments, commented-out config — is preserved byte-for-byte** (`render()` splices just those two spans). **Timestamped backup each save** (`.backup/<ts>.jsonc`). |
+| 2 | Save format | **Edit-in-place**: only `agents`/`categories` are rewritten clean; **everything else — other keys, formatting, comments, commented-out config — is preserved byte-for-byte** (`render()` splices just those two spans). On a unified document the spans are nested inside `"[opencode]"`, so `$schema`, `_migrations`, `profiles` and the rest of the block survive untouched (§Config scope). **Timestamped backup each save** (`.backup/<ts>.jsonc`). |
 | 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`a`) types anything off-chain. Suggested variant. |
 | 4 | Layout | **Two-pane list-detail**. |
 | 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
@@ -59,7 +65,7 @@ prefix and a valid variant, and saves a clean config.
 | 14 | Variant validity (pickers) | **opencode `--verbose` (cached) is the source of truth** for the add-model + `v` pickers (`Catalog.variants_for`): per-(provider, model) `variants` keys; prefer the first NON-EMPTY set across the picked provider then the gateway (dedicated providers report `{}`); empty everywhere / uncached → **offer nothing, no heuristic fallback** (kimi, glm-5 → no variant step). A `none` in that set is dropped as a duplicate of the synthetic `(none)` clear row (`_is_no_variant`) — never offered, never written (`none` ≡ `(none)` ≡ no `variant` key). The bundled family registry stays the source for `detect_family`/substitution; the omo-suggestion ⚠ warn (`resolve._variant_warn`) **also** prefers `--verbose` now — the heuristic family `variants` is its fallback only when opencode is silent (dedicated `{}` / uncached) — but the registry is never the source for what the pickers offer. (Reverses the old "registry only, never `--verbose`" rule.) |
 | 15 | Availability cache | opencode CLI output cached **24h** at `~/.cache/omodel/` (flat: `models.json`, `verbose-<prov>.json`); read-through in `catalog`. `r` / `--refresh-models` bust + rebuild it. Detail fetch is off the UI thread and **capped to one concurrent** (each opencode call is ~3s / ~320 MB). See §cache.py. |
 | 16 | Undo | **In-session undo/redo of every edit** (`u` / `ctrl+r`) for mis-press recovery — a snapshot stack of cfg states (`history.py`), separate from the on-disk `.backup/` (decision #2). Each edit (set/clear/variant/add-model/add-sub/delete-sub) records a labelled snapshot; dirtiness is **computed** (`serialize(cfg)` vs last-saved text), so undo-to-saved reads clean. See §history.py. |
-| 17 | Presets | **Named presets ARE the working state** (as many as you keep — seeded with one `default`), in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json`). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` adds one holding the current models (as does `enter` on the trailing `+ add preset…` row) — it is row-blind and never overwrites; `r` renames; `x` refuses on the active one (so you can never reach zero). **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
+| 17 | Presets | **Named presets ARE the working state** (as many as you keep — seeded with one `default`), in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json` — which follows the config to `~/.omo/`, adopting a stranded pre-4.19.3 store once; §Config scope). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` adds one holding the current models (as does `enter` on the trailing `+ add preset…` row) — it is row-blind and never overwrites; `r` renames; `x` refuses on the active one (so you can never reach zero). **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
 | 18 | Agent surface | **omodel is a tool an LLM agent can call**, not only a TUI a human drives: JSON subcommands (§CLI) over a headless `session.py` that `app.py` and `cli.py` BOTH edit through. The alternative — leaving the CLI read-only — was rejected because an agent asked to change a model would then hand-edit `oh-my-openagent.jsonc`, bypassing provider prefixing, variant validity, the GPT-only lock, the backup and the preset invariant: exactly the failure mode oModel exists to prevent. So the extraction is the point, and the verbs are the cheap part. `session.py` must never import Textual (cli.py's lazy-import discipline depends on it). |
 | 19 | Self-update | **`omodel --update` updates the program, on demand, after asking.** A flat flag, not a subcommand: the subcommands are the agent surface (#18), and this one edits no config and is not a model change. No launch-time version check and no background poll — decision #1's "self-contained, no runtime coupling" covers the network too, and a TUI that phones home on every start to say "0.3.1 is out" has spent a socket timeout on the path where the user wanted a model picker. It **confirms before swapping** (like `--restore`), which is why there is no `--update-check`: declining is the check, `--json`/no-TTY decline by construction, `--yes` is the one way to mean it. Only the **standalone binary** is replaced in place (download → published sha256 → **run the new binary and require the release's version back** → `os.replace`); pipx/uv/pip/source installs get a tag-pinned command and exit 3, because writing into a tree another package manager owns is how you end up with a venv and no way back. The rejected alternative — "just re-run `install.sh`" — works, but is unfindable from inside the tool and re-downloads with no version comparison at all. See §update.py. |
 
@@ -111,8 +117,104 @@ prefix and a valid variant, and saves a clean config.
   `requiresProvider`/`requiresModel`/`requiresAnyModel` are **carried but IGNORED** (they gate omo's
   auto-activation; oModel is a manual picker). `pattern` is stored as a string and `re.compile`d at
   load (negative-lookaheads like `k2(?![-.]?p\d)` verified to compile under Python `re`).
-- **Your config (runtime):** `$XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc` (fallback
-  `~/.config/...`), `--config` override; scaffold a bundled starter if missing.
+- **Your config (runtime):** the first EXISTING of `~/.omo/omo.jsonc` → `~/.omo/omo.json` → the
+  legacy `$XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc` (fallback `~/.config/...`); `--config`
+  override; scaffold a bundled starter at `~/.omo/omo.jsonc` if none exists. See §Config scope.
+
+## Config scope
+
+omo 4.19.3+ keeps one config at `~/.omo/omo.jsonc` and nests the OpenCode plugin configuration
+under `"[opencode]"`. The loader folds **base → `[opencode]` → profile → profile`[opencode]`**,
+last wins (`omo-config-core/src/loader/resolution.ts`), so a top-level `agents` is *legal* but
+**outranked** by the block. omodel therefore:
+
+- **Resolves** `~/.omo/omo.jsonc` → `~/.omo/omo.json` → legacy, and scaffolds the unified shape
+  when nothing exists — the legacy file is **never created**, because omo moved it aside and
+  recreating it hands the user an empty config omo does not read.
+- **Detects the scope from CONTENT, not the filename** (`config_io.scope_of`: an `"[opencode]"`
+  block, `_migrations`/`legacy_migrations`, or omo's unified `$schema`), so `--config <anywhere>`
+  still edits the right node.
+- **Writes `"[opencode]"` unconditionally** on a unified document — no "edit in place where the
+  key already lives" heuristic. omo has *no writer* that produces a top-level `agents`: both the
+  migration (`transform-opencode.ts`) and a **fresh install** (`cli/config-manager/
+  write-omo-config.ts`, `edits: [{path: ["[opencode]"], …}]`) target the block, so a root-level
+  pair can only ever be hand-written. omodel still *reads* one, but writes go where omo resolves.
+- **Falls back to the document root** for a legacy file — full read/write, since a user on
+  pre-4.19.3 omo genuinely has one — with a one-line notice. Never preferred once a unified
+  config exists.
+- Keeps its **sidecars beside the config** (`presets_path`, `.backup/`), so both follow to
+  `~/.omo/`. Presets stranded at the old location are adopted once and the original removed
+  (`presets.adopt`), gated on a verified read-back (whole-store fingerprint — the delete is
+  irreversible and that file has no backup ring) and on the config being a DEFAULT unified path
+  — `--config` at a scratch file must not drag the real presets into a temp dir. **This is the
+  one exception to the one-write rule** (decision #17): adoption writes the presets file at
+  launch, before any `s`, and it fires for read-only verbs too since they all open a Session. It
+  is a one-time hand-over of a file that already existed, not new state.
+- Only ever edits the **user** layer. omo also folds a **project** `<dir>/.omo/omo.jsonc` from
+  cwd upward, ahead of the user layer (`loader/paths.ts` `findProjectConfigPathsFarthestFirst`),
+  so a user with a project config can watch an omodel edit save correctly and still not take
+  effect. Pre-existing, but newly easy to hit now that `.omo/omo.jsonc` is the name everyone
+  types. Not handled; `omodel check` warning about a shadowing project layer is the obvious fix.
+
+### Backups across the move
+
+`.backup/` follows `dirname(config)` like everything else, so `~/.omo/.backup/` is created on the
+first save there. Two rules keep the old ring from becoming a trap:
+
+- **`restore` refuses a cross-scope snapshot** (`BackupScopeMismatch`, exit 3, **no `--force`**).
+  It is a verbatim copy, so writing a pre-4.19.3 snapshot over `~/.omo/omo.jsonc` would leave
+  legacy keys (`claude_code`, `experimental`, `team_mode`, …) at the root; omo's root schema is
+  `.strict()` and rejects them as `unrecognized_keys`, and its loader answers a failed validation
+  with the **all-default config** plus one diagnostic. The restore would silently reset the user's
+  whole omo setup, not just their models — and `--restore` is the recover-from-a-mistake path, so
+  it must not be the one that makes a bigger one. The check runs before the safety snapshot, so a
+  refusal consumes no slot in the ring.
+- **Only the pin is carried over**, as `.backup/original-legacy.jsonc`
+  (`config_io.adopt_original_backup`). It is the config as it was before omodel ever touched it
+  and is irreplaceable; the timestamped snapshots are stale legacy shapes `restore` would refuse
+  anyway, and stay at the old path. The **different name** is load-bearing twice over:
+  `list_backups` matches `original.jsonc` and the `[0-9]*.jsonc` ring, so the archive is preserved
+  and readable without becoming an entry every pick must refuse — and leaving `original.jsonc`
+  free lets the first save pin the **unified** config there, which is a pin that can actually be
+  restored.
+
+### Two places this scope split can silently desync
+
+Both were caught in review; both had the same shape — a comparison that stopped meaning what it
+said once the document grew a level.
+
+- **`presets.fingerprint` must be spelling-insensitive.** omodel respells a preset in memory
+  (`_normalize_store_spelling`) while the config keeps whatever is on disk, so a raw dict compare
+  makes `reasoning: high` ≠ `variant: high` and a config nobody edited reconciles against *no*
+  preset: `sync_conflict` every launch, permanently dirty, and every no-op verb reporting
+  `changed: true` on a byte-identical file — the exact failure this change exists to remove.
+  `_canon` folds the three spellings for comparison only.
+- **`is_dirty()` and the save path ask different questions.** `is_dirty()` compares
+  `serialize(cfg)` to `saved_text`; `save`/`diff_text` compare `render(cfg, on_disk)` to disk.
+  They diverge for an `agents`/`categories` key that is absent from the file and empty in cfg —
+  the canonical form always emits it, the splice skips it. So `app._save`'s empty-diff branch
+  **re-baselines through `save_config()` before returning**; without that, `q` warns about
+  unsaved work forever while `s` insists there is none. If you touch either function, check they
+  still agree (`tests/test_unified_config.py::TestDirtinessAgreesWithTheDiff`).
+
+### Reasoning level: two spellings, by depth
+
+`2026-08-reasoning-unification` renamed `variant` → `reasoning` on agents and categories, and
+deliberately **did not** touch `ultrawork`/`compaction`. omodel matches that exactly:
+
+| Node | Key written | Why |
+|---|---|---|
+| agent / category, unified doc | `reasoning` | `agent-variant.ts:80-83,102-109` resolves every source's `reasoning` before any source's `variant` |
+| agent / category, legacy doc | `variant` | pre-rename omo has no `reasoning` |
+| `ultrawork.*`, `compaction.*` | `variant` (both scopes) | `plugin/ultrawork-model-override.ts:81,84,93` reads `.variant` and nothing else; `reasoning` is in-schema there but no consumer reads it |
+
+Reads accept all three spellings in omo's own order (`session.read_variant`:
+`reasoning` → `variant` → `reasoningEffort`), so a config written before the rename still
+reports what omo will actually use. Writes clear the other two: a stale key beside the one
+omodel wrote is dead config — and because a **category's** `reasoning` outranks an **agent's**
+`variant`, a leftover can be overridden by an entirely different object. `variant` remains
+omodel's internal vocabulary (the candidate-row field, the `v` picker); the mapping happens only
+at the config write boundary.
 
 ## CLI
 

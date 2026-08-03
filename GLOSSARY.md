@@ -61,8 +61,26 @@ line when a new one does.
   bundled family registry is now only the fallback for the omo-suggestion `⚠` warn when opencode
   reports nothing for that model. Family *detection* itself stays heuristic-only — `--verbose.family`
   is never read. A `none` variant is treated as **no variant**: identical to the synthetic `(none)`
-  clear row, so the pickers never offer it and saving drops the `variant` key (`_is_no_variant`).
+  clear row, so the pickers never offer it and saving drops the key (`_is_no_variant`).
+  **`variant` is oModel's internal word for this** (the candidate-row field, the `v` picker); what
+  gets WRITTEN to config is a different question — see *reasoning*.
   → DESIGN decision #14
+- **reasoning** — omo's current *config key* for what oModel calls a **variant**.
+  `2026-08-reasoning-unification` renamed `variant` → `reasoning` on agents and categories but
+  deliberately left `ultrawork`/`compaction` alone, whose override reads `.variant` and nothing
+  else. So oModel writes `reasoning` for agents/categories on a unified document, `variant` on a
+  legacy one, and `variant` inside those two sub-objects in **both** scopes
+  (`session.variant_key_for`). Reads accept all three spellings in omo's order —
+  `reasoning` → `variant` → `reasoningEffort` (`session.read_variant`).
+  → DESIGN §Config scope
+- **config scope** — which node of the document holds the `agents`/`categories` oModel manages:
+  `"opencode"` (nested under `"[opencode]"`, omo 4.19.3+) or `"root"` (the legacy top level).
+  Detected from CONTENT, never the filename (`config_io.scope_of`), so `--config <anywhere>`
+  still edits the right place. → DESIGN §Config scope
+- **the `[opencode]` block** — the harness block in `~/.omo/omo.jsonc` carrying the whole OpenCode
+  plugin config. omo folds base → `[opencode]`, **last wins**, so a top-level `agents` is legal but
+  outranked — which is why oModel always writes the block on a unified document.
+  → DESIGN §Config scope
 - **warn-but-allow (⚠)** — oModel flags but never blocks you (bad variant, unavailable add). One hard
   exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, session.py `GPT_ONLY_AGENTS`
 
@@ -79,6 +97,13 @@ line when a new one does.
   *history* = the **in-session** undo/redo stack (`u` / `ctrl+r`); *preset* = one of any number of **named sets
   of assignments you switch between**, one of which is always active and mirrored by the config.
   → config_io.py / history.py / presets.py
+- **`original.jsonc` vs `original-legacy.jsonc`** — two pins that mean different things. The first
+  is the config as it was before oModel's first save *at the current location*, pinned
+  automatically, never pruned, and offered by `--restore`. The second is the pre-4.19.3 config
+  carried over when the config moved to `~/.omo/` (`adopt_original_backup`) — same-format-only
+  restore means it can never be restored onto a unified document, so it is deliberately **not**
+  listed, and its separate name is what leaves `original.jsonc` free for a pin that *is*
+  restorable. → DESIGN §Backups across the move
 - **preset / active preset** — one of **any number** of named sets of assignments in the `#presets`
   card (seeded with one `default`; `a` adds more); the **active** one (`●`) is what your
   edits go into and what `s` publishes to the config. `enter` switches (a staged, undoable replace),

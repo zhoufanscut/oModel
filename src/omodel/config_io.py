@@ -25,23 +25,130 @@ class ConfigParseError(ValueError):
     can print a friendly one-liner instead of letting a raw json5 traceback escape."""
 
 
-def config_path(cli_override: str | None = None) -> str:
-    """Resolve the config path: cli_override, else $XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc,
-    else ~/.config/opencode/oh-my-openagent.jsonc. Does NOT require the file to exist."""
-    if cli_override is not None:
-        return str(cli_override)
+class BackupScopeMismatch(ValueError):
+    """Raised by restore() when a snapshot's config format doesn't match the live config's.
+
+    `restore` is a VERBATIM copy, so writing a pre-4.19.3 snapshot over a unified
+    `~/.omo/omo.jsonc` would leave legacy keys (`claude_code`, `experimental`, `team_mode`, …)
+    at the document root. omo's root schema is `.strict()` and rejects them as
+    `unrecognized_keys`, and its loader answers a failed validation with the ALL-DEFAULT config
+    plus one diagnostic — so the restore would silently reset the user's entire omo setup, not
+    just their model assignments. There is deliberately no `--force`: `--restore` is the
+    recover-from-a-mistake path, and it must not be the one that makes a bigger one."""
+
+
+# --- config location + scope ------------------------------------------------------------
+# omo 4.19.3+ keeps ONE config at ~/.omo/omo.jsonc and nests the whole OpenCode plugin config
+# — agents/categories included — under `"[opencode]"`. The legacy
+# ~/.config/opencode/oh-my-openagent.jsonc is read by nothing but omo's migration engine, which
+# MOVES it aside on first launch. omodel therefore edits `"[opencode]"` on a unified document and
+# only falls back to the document root for a legacy one. See DESIGN §config scope.
+
+OPENCODE_BLOCK = "[opencode]"
+
+
+def _home() -> Path:
+    """omo's home resolution (`loader/paths.ts` resolveHomeDir): $HOME, else $USERPROFILE.
+    Deliberately NOT `Path.home()` — that flips the precedence on Windows — and deliberately
+    NOT $XDG_CONFIG_HOME: omo puts `.omo` under the home dir on every platform, so honoring XDG
+    here would point omodel at a directory omo never reads."""
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    return Path(home) if home else Path.home()
+
+
+def unified_config_path() -> str:
+    """`~/.omo/omo.jsonc` — omo's unified config. Does NOT require the file to exist; this is
+    also the scaffold target when nothing exists anywhere."""
+    return str(_home() / ".omo" / "omo.jsonc")
+
+
+def legacy_config_path() -> str:
+    """The pre-4.19.3 path: $XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc, else
+    ~/.config/opencode/oh-my-openagent.jsonc. Kept for users still on an omo that reads it;
+    omodel never CREATES this file (see load_config)."""
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return str(Path(xdg) / "opencode" / "oh-my-openagent.jsonc")
-    return str(Path.home() / ".config" / "opencode" / "oh-my-openagent.jsonc")
+    return str(_home() / ".config" / "opencode" / "oh-my-openagent.jsonc")
+
+
+def config_path(cli_override: str | None = None) -> str:
+    """Resolve the config path: cli_override, else the first EXISTING of
+    `~/.omo/omo.jsonc` → `~/.omo/omo.json` → the legacy path; else `~/.omo/omo.jsonc` (so a
+    from-scratch scaffold lands in the new format and the legacy file is never recreated).
+    Does NOT require the file to exist."""
+    if cli_override is not None:
+        return str(cli_override)
+    omo_dir = _home() / ".omo"
+    for name in ("omo.jsonc", "omo.json"):
+        candidate = omo_dir / name
+        if candidate.exists():
+            return str(candidate)
+    legacy = legacy_config_path()
+    if os.path.exists(legacy):
+        return str(legacy)
+    return str(omo_dir / "omo.jsonc")
+
+
+def scope_of(cfg) -> str:
+    """Which node of `cfg` holds the agents/categories omodel manages: `"opencode"` (nested under
+    `"[opencode]"`) or `"root"` (legacy, top level).
+
+    Detection is CONTENT-based, never filename-based, so `--config <anywhere>` behaves correctly
+    and a unified document opened by an explicit path is still edited in the right place. A
+    document counts as unified when it has an `"[opencode]"` block, an engine-managed migration
+    key, or omo's unified `$schema` — the last two catch a migrated document whose `[opencode]`
+    block has yet to be created."""
+    if not isinstance(cfg, dict):
+        return "root"
+    # PRESENCE of the key, not its type: a legacy document never has it at all, so a hand-edited
+    # `"[opencode]": null` is still a unified document with a broken block. Treating it as legacy
+    # would send writes to the document root, where they are outranked the moment the block comes
+    # back (`managed_root_for_write` coerces it to `{}` instead).
+    if OPENCODE_BLOCK in cfg:
+        return "opencode"
+    if "_migrations" in cfg or "legacy_migrations" in cfg:
+        return "opencode"
+    schema = cfg.get("$schema")
+    if isinstance(schema, str) and "omo.schema.json" in schema:
+        return "opencode"
+    return "root"
+
+
+def managed_root(cfg) -> dict:
+    """The node holding `agents`/`categories` for READS — `cfg["[opencode]"]` on a unified
+    document, `cfg` on a legacy one. Never creates anything; returns `{}` when the block is
+    absent or not a dict."""
+    if scope_of(cfg) != "opencode":
+        return cfg if isinstance(cfg, dict) else {}
+    block = cfg.get(OPENCODE_BLOCK)
+    return block if isinstance(block, dict) else {}
+
+
+def managed_root_for_write(cfg: dict) -> dict:
+    """The node holding `agents`/`categories` for WRITES, created on demand. On a unified
+    document this is `cfg["[opencode]"]`, coerced back to `{}` if a hand edit left a non-dict
+    there — writing agents at the document root instead would be accepted, saved, and then
+    silently outranked by the `[opencode]` block (omo folds base → `[opencode]`, last wins)."""
+    if scope_of(cfg) != "opencode":
+        return cfg
+    block = cfg.get(OPENCODE_BLOCK)
+    if not isinstance(block, dict):
+        block = {}
+        cfg[OPENCODE_BLOCK] = block
+    return block
 
 
 def load_config(path: str | None = None):
-    """Resolve via config_path(path); if missing, scaffold the bundled
-    data/default-config.jsonc to that location; json5.load → ordered dict.
-    Returns (cfg: dict, resolved_path: str). `agents`/`categories` are editable; every
-    other top-level key (claude_code, experimental, team_mode, $schema, …) passes through
-    by value. Raises ConfigParseError if the on-disk JSONC is malformed."""
+    """Resolve via config_path(path); if missing, scaffold a bundled default to that location;
+    json5.load → ordered dict. Returns (cfg: dict, resolved_path: str). `agents`/`categories`
+    (inside `"[opencode]"` on a unified document) are editable; every other key — the rest of
+    the `[opencode]` block, `_migrations`, `profiles`, other harness blocks, `$schema` — passes
+    through by value. Raises ConfigParseError if the on-disk JSONC is malformed.
+
+    The scaffold is the UNIFIED shape (`data/default-omo-config.jsonc`) everywhere except an
+    explicit legacy path: omo moves the legacy file aside on migration, and recreating it there
+    would hand the user an empty config that omo no longer reads."""
     import importlib.resources
 
     import json5
@@ -49,8 +156,12 @@ def load_config(path: str | None = None):
     resolved = config_path(path)
 
     if not os.path.exists(resolved):
-        # Scaffold from bundled default-config.jsonc
-        default_ref = importlib.resources.files("omodel.data") / "default-config.jsonc"
+        default_name = (
+            "default-config.jsonc"
+            if os.path.abspath(resolved) == os.path.abspath(legacy_config_path())
+            else "default-omo-config.jsonc"
+        )
+        default_ref = importlib.resources.files("omodel.data") / default_name
         default_text = default_ref.read_text(encoding="utf-8")
         # dirname() of a bare relative filename (no directory component) is "" — resolve via
         # abspath first so a relative `--config foo.jsonc` doesn't crash makedirs(exist_ok=True).
@@ -63,6 +174,15 @@ def load_config(path: str | None = None):
             cfg = json5.load(f)
         except ValueError as exc:
             raise ConfigParseError(f"could not parse config at {resolved}: {exc}") from exc
+
+    if not isinstance(cfg, dict):
+        # Valid JSON, wrong shape (a top-level array, string, number…). Every caller assumes a
+        # mapping, so without this the first `.items()`/`.get()` escapes as a raw traceback
+        # instead of the friendly one-liner a malformed file already gets.
+        raise ConfigParseError(
+            f"could not parse config at {resolved}: expected a JSON object at the top level, "
+            f"found {type(cfg).__name__}"
+        )
 
     return cfg, resolved
 
@@ -91,16 +211,26 @@ def serialize(cfg: dict) -> str:
       (2) within agents/categories, freshly-added sub-keys (ultrawork/compaction) APPENDED,
           cleared fields DELETED;
       (3) body = json.dumps(cfg, indent=2, ensure_ascii=False);  json.dumps cannot emit comments;
-      (4) return "// Generated by oModel — edit via `omodel`\\n" + body + "\\n" (single trailing \\n)."""
+      (4) return "// Generated by oModel — edit via `omodel`\\n" + body + "\\n" (single trailing \\n).
+
+    Scope-aware: on a unified document `agents` is cleaned inside the `"[opencode]"` block and the
+    header is omo's own `// OMO configuration`, so a from-scratch write still looks like a file omo
+    wrote. `cfg` is the WHOLE document either way, so this never invents a top-level `agents`."""
     # (1) Build ordered dict with $schema forced to position 0
+    scope = scope_of(cfg)
     ordered: dict = {}
     if "$schema" in cfg:
         ordered["$schema"] = cfg["$schema"]
     for k, v in cfg.items():
         if k == "$schema":
             continue  # already placed first
-        if k == "agents" and isinstance(v, dict):
+        if scope == "root" and k == "agents" and isinstance(v, dict):
             ordered[k] = _clean_agents(v)  # drop empty ultrawork/compaction sub-objects
+        elif scope == "opencode" and k == OPENCODE_BLOCK and isinstance(v, dict):
+            ordered[k] = {
+                ik: (_clean_agents(iv) if ik == "agents" and isinstance(iv, dict) else iv)
+                for ik, iv in v.items()
+            }
         else:
             ordered[k] = v
 
@@ -108,7 +238,8 @@ def serialize(cfg: dict) -> str:
     body = json.dumps(ordered, indent=2, ensure_ascii=False)
 
     # (4) Return with header and single trailing newline
-    return "// Generated by oModel — edit via `omodel`\n" + body + "\n"
+    header = "// OMO configuration" if scope == "opencode" else "// Generated by oModel — edit via `omodel`"
+    return header + "\n" + body + "\n"
 
 
 # --- text-preserving render -------------------------------------------------------------
@@ -197,12 +328,14 @@ def _skip_value(text: str, j: int) -> int:
     return j
 
 
-def _top_level_value_span(text: str, key: str):
-    """Locate `"key": <value>` among the DIRECT members of the root object in JSONC `text`.
-    Return (value_start, value_end) of the value, or None if `key` is not a direct root member
-    (malformed file, or it only appears nested). Honors strings, comments, and nesting."""
+def _value_span(text: str, key: str, start: int = 0):
+    """Locate `"key": <value>` among the DIRECT members of the object that begins at `start`
+    (trivia-skipped, must be `{`). Return (value_start, value_end) of the value, or None if `key`
+    is not a direct member (malformed file, or it only appears deeper). Honors strings, comments,
+    and nesting. `start=0` walks the root object; passing a parent's value_start walks that
+    parent's members, which is how the `"[opencode]"` block is entered."""
     n = len(text)
-    i = _skip_trivia(text, 0)
+    i = _skip_trivia(text, start)
     if i >= n or text[i] != "{":
         return None
     i += 1  # enter the root object
@@ -234,6 +367,20 @@ def _top_level_value_span(text: str, key: str):
         i = value_end
 
 
+def _span_for_path(text: str, path):
+    """Walk a chain of member keys from the root object and return the LAST one's value span, or
+    None if any link is missing. `["agents"]` is the legacy top-level lookup; `["[opencode]",
+    "agents"]` reaches into the unified document's harness block."""
+    start = 0
+    span = None
+    for key in path:
+        span = _value_span(text, key, start)
+        if span is None:
+            return None
+        start = span[0]
+    return span
+
+
 def _line_indent(text: str, pos: int) -> str:
     """Leading whitespace of the line containing `pos` — used to align a spliced value's
     continuation/closing lines under its key."""
@@ -254,25 +401,40 @@ def _reindent(value_text: str, indent: str) -> str:
 
 
 def render(cfg: dict, base_text: str) -> str:
-    """Text-preserving serialization. Return `base_text` with ONLY the top-level `agents` and
+    """Text-preserving serialization. Return `base_text` with ONLY the managed `agents` and
     `categories` value spans replaced by their clean (comment-free) form; comments, commented-out
     config, other keys, key order, and formatting OUTSIDE those two objects are preserved
     byte-for-byte — omodel manages only those two keys. Falls back to serialize(cfg) when there is
-    no base text, or either key is not a direct root member (can't splice safely)."""
+    no base text, or either key is missing from the managed node (can't splice safely).
+
+    On a unified document the managed node is `"[opencode]"`, so the spans are nested one level
+    down and everything around them — `$schema`, `_migrations`, `profiles`, the rest of the
+    `[opencode]` block, and any comments inside it — survives untouched. The serialize() fallback
+    stays safe in both scopes because `cfg` is the whole document: it rewrites the file cleanly
+    (losing comments) but never relocates agents/categories out of their scope."""
     if not base_text or not base_text.strip():
         return serialize(cfg)
-    spans = {}
-    for key in ("agents", "categories"):
-        span = _top_level_value_span(base_text, key)
-        if span is None:
-            return serialize(cfg)  # non-omo / hand-broken file: degrade to a clean rewrite
-        spans[key] = span
-
-    agents_val = cfg.get("agents")
+    managed = managed_root(cfg)
+    agents_val = managed.get("agents")
     agents_val = _clean_agents(agents_val) if isinstance(agents_val, dict) else (agents_val or {})
-    categories_val = cfg.get("categories")
+    categories_val = managed.get("categories")
     categories_val = categories_val if categories_val is not None else {}
     values = {"agents": agents_val, "categories": categories_val}
+
+    prefix = [OPENCODE_BLOCK] if scope_of(cfg) == "opencode" else []
+    spans = {}
+    for key in ("agents", "categories"):
+        span = _span_for_path(base_text, prefix + [key])
+        if span is not None:
+            spans[key] = span
+        elif values[key]:
+            # Something to write and nowhere to put it (non-omo / hand-broken file): degrade to a
+            # clean rewrite. The cost of that is every comment in the document, which on a unified
+            # config means omo's config and not just omodel's — so it is reserved for the case
+            # where splicing genuinely cannot express the change.
+            return serialize(cfg)
+        # else: the key is absent from the file AND empty in cfg — nothing to express. Leave the
+        # file alone rather than reformatting it to add `"categories": {}`.
 
     result = base_text
     # Splice the later span first so the earlier span's offsets stay valid.
@@ -425,12 +587,69 @@ def list_backups(path: str) -> list:
     return result
 
 
+def _file_scope(path: str):
+    """`scope_of` the JSONC at `path`, or None when it can't be read or parsed — an unreadable
+    file tells us nothing, and guessing would be worse than not guarding."""
+    import json5
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            return scope_of(json5.load(f))
+    except (OSError, ValueError):
+        return None
+
+
+def adopt_original_backup(src_config_path: str, dst_config_path: str) -> bool:
+    """Carry the pinned pre-omodel config across when the config moves to `~/.omo/`, as
+    `.backup/original-legacy.jsonc`.
+
+    Only the pin travels, not the timestamped ring: it is the config as it was before omodel ever
+    touched it (never pruned, decision #13) and is irreplaceable, while the snapshots are stale
+    pre-4.19.3 shapes that `restore` refuses anyway. They stay at the old path, reachable by hand.
+
+    It lands under a DIFFERENT name for two reasons, both about it being legacy-format:
+      * `list_backups` offers `original.jsonc` and the `[0-9]*.jsonc` ring, and neither pattern
+        matches this one — so it is preserved and readable without becoming an entry that
+        `restore` must refuse on every pick (`BackupScopeMismatch`, no override);
+      * an `original.jsonc` already present would suppress the first save's pin, and that pin —
+        taken from the UNIFIED config — is the one that can actually be restored.
+
+    Returns whether a copy was made; a no-op once the destination exists."""
+    src = os.path.join(os.path.dirname(os.path.abspath(src_config_path)), ".backup", "original.jsonc")
+    dst_dir = os.path.join(os.path.dirname(os.path.abspath(dst_config_path)), ".backup")
+    dst = os.path.join(dst_dir, "original-legacy.jsonc")
+    if os.path.abspath(src) == os.path.abspath(dst) or os.path.exists(dst) or not os.path.isfile(src):
+        return False
+    os.makedirs(dst_dir, exist_ok=True)
+    shutil.copy2(src, dst)  # the ORIGINAL stays put: this is a copy, never a move
+    return True
+
+
 def restore(path: str, backup_name: str) -> None:
     """Snapshot the CURRENT file first (restore is itself undoable), then copy the chosen
-    backup (by `backup_name` within .backup/) to `path`."""
+    backup (by `backup_name` within .backup/) to `path`.
+
+    REFUSES with `BackupScopeMismatch` when the snapshot's scope differs from the live config's
+    — see that exception for why a verbatim cross-format copy is destructive."""
     config_dir = os.path.dirname(os.path.abspath(path))
     backup_dir = os.path.join(config_dir, ".backup")
     os.makedirs(backup_dir, exist_ok=True)
+
+    # Scope check BEFORE anything is written, so a refusal leaves no snapshot behind either.
+    src_check = os.path.join(backup_dir, os.path.basename(backup_name))
+    backup_scope = _file_scope(src_check)
+    target_scope = _file_scope(path)
+    if target_scope is None and os.path.abspath(path) == os.path.abspath(unified_config_path()):
+        target_scope = "opencode"  # nothing on disk yet, but omo will read this path as unified
+    if backup_scope is not None and target_scope is not None and backup_scope != target_scope:
+        raise BackupScopeMismatch(
+            f"'{os.path.basename(backup_name)}' is in the "
+            f"{'pre-4.19.3' if backup_scope == 'root' else 'unified'} config format, but "
+            f"{path} is {'unified' if target_scope == 'opencode' else 'pre-4.19.3'}. "
+            "Restoring it would leave the file invalid for oh-my-openagent, which answers a "
+            "schema failure by falling back to its defaults — losing far more than the models. "
+            "Copy the values across by hand, or use `omodel set`."
+        )
 
     # Snapshot the current live config first (so the restore itself is undoable)
     now_utc = datetime.now(timezone.utc)

@@ -16,7 +16,7 @@ import pytest
 from omodel.config_io import (
     BackupInfo,
     ConfigParseError,
-    _top_level_value_span,
+    _value_span,
     diff_text,
     list_backups,
     load_config,
@@ -465,14 +465,17 @@ class TestRestore:
 class TestLoadConfig:
 
     def test_scaffold_when_missing(self):
-        """Missing config → scaffold default-config.jsonc and return a dict."""
+        """Missing config → scaffold the UNIFIED default and return a dict. omo 4.19.3+ reads
+        agents/categories from `"[opencode]"`, so a from-scratch scaffold must land there; a
+        top-level pair would be accepted, saved, and then silently outranked."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = os.path.join(tmpdir, "subdir", "oh-my-openagent.jsonc")
             cfg, resolved = load_config(cfg_path)
             assert os.path.exists(resolved)
             assert isinstance(cfg, dict)
-            assert "agents" in cfg
-            assert "categories" in cfg
+            assert "agents" not in cfg
+            assert "agents" in cfg["[opencode]"]
+            assert "categories" in cfg["[opencode]"]
 
     def test_existing_config_loaded(self):
         """Existing config is loaded as a dict."""
@@ -493,8 +496,8 @@ class TestLoadConfig:
         cfg, resolved = load_config("rel-missing.jsonc")
         assert os.path.exists(resolved)
         assert isinstance(cfg, dict)
-        assert "agents" in cfg
-        assert "categories" in cfg
+        assert "agents" in cfg["[opencode]"]
+        assert "categories" in cfg["[opencode]"]
 
     def test_malformed_config_raises_config_parse_error(self):
         """A JSONC syntax error raises ConfigParseError (not a raw json5 traceback), with the
@@ -669,22 +672,35 @@ class TestRender:
         assert render(cfg, None) == serialize(cfg)
         assert render(cfg, "   \n  ") == serialize(cfg)
 
-    def test_fallback_when_key_absent(self):
-        """If a top-level key isn't a direct root member, splicing is unsafe → clean rewrite."""
-        cfg = {"agents": {}, "categories": {}, "team_mode": False}
+    def test_fallback_when_absent_key_has_something_to_write(self):
+        """A key that isn't a direct root member has nowhere to be spliced, so a NON-EMPTY value
+        forces the clean rewrite — that is the only way to express the change."""
+        cfg = {"agents": {}, "categories": {"deep": {"model": "openai/gpt-5.5"}},
+               "team_mode": False}
         base_no_categories = '{\n  "agents": {},\n  "team_mode": false\n}\n'
         assert render(cfg, base_no_categories) == serialize(cfg)
 
+    def test_absent_but_empty_key_leaves_the_file_alone(self):
+        """...whereas an absent key that is ALSO empty has nothing to express, so the file keeps
+        its comments and formatting instead of being rewritten to add `"categories": {}`. The
+        rewrite costs every comment in the document — on a unified config that is omo's config,
+        not just omodel's — so it is reserved for when splicing genuinely cannot work."""
+        cfg = {"agents": {}, "categories": {}, "team_mode": False}
+        base = '// hi\n{\n  "agents": {},\n  "team_mode": false\n}\n'
+        out = render(cfg, base)
+        assert out == base
+        assert "// hi" in out
+
 
 # ---------------------------------------------------------------------------
-# _top_level_value_span() — the JSONC span scanner render() relies on
+# _value_span() — the JSONC span scanner render() relies on
 # ---------------------------------------------------------------------------
 
 class TestTopLevelValueSpan:
 
     def test_finds_agents_and_categories(self):
-        a = _top_level_value_span(RICH_JSONC, "agents")
-        c = _top_level_value_span(RICH_JSONC, "categories")
+        a = _value_span(RICH_JSONC, "agents")
+        c = _value_span(RICH_JSONC, "categories")
         assert a is not None and c is not None
         agents_text = RICH_JSONC[a[0]:a[1]]
         categories_text = RICH_JSONC[c[0]:c[1]]
@@ -696,15 +712,15 @@ class TestTopLevelValueSpan:
 
     def test_fakeout_string_does_not_match(self):
         """The real `agents` span (with sisyphus) is found, not the `"agents":` inside `note`."""
-        a = _top_level_value_span(RICH_JSONC, "agents")
+        a = _value_span(RICH_JSONC, "agents")
         assert "sisyphus" in RICH_JSONC[a[0]:a[1]]
 
     def test_nested_key_is_not_a_root_member(self):
-        assert _top_level_value_span(RICH_JSONC, "model") is None
-        assert _top_level_value_span(RICH_JSONC, "sisyphus") is None
+        assert _value_span(RICH_JSONC, "model") is None
+        assert _value_span(RICH_JSONC, "sisyphus") is None
 
     def test_absent_key_returns_none(self):
-        assert _top_level_value_span(RICH_JSONC, "does_not_exist") is None
+        assert _value_span(RICH_JSONC, "does_not_exist") is None
 
     def test_no_root_object_returns_none(self):
-        assert _top_level_value_span("// just a comment\n[1, 2, 3]\n", "agents") is None
+        assert _value_span("// just a comment\n[1, 2, 3]\n", "agents") is None
