@@ -284,8 +284,17 @@ class TestReasoningSpelling:
         session = _session(tmp_path)
         node = session.ensure_node("agent:probe")
         node["variant"] = "stale"
-        session.set_model("agent:probe", "openai", "gpt-5.5", variant="none")
+        session.set_model("agent:probe", "openai", "gpt-5.5", variant=None)
         assert node == {"model": "openai/gpt-5.5"}
+
+    def test_none_becomes_off_under_the_unified_spelling(self, tmp_path):
+        """The rename and the `variant` → `reasoning` spelling compose: on a unified document a
+        `none` lands as `reasoning: "off"`, and the stale `variant` key still goes."""
+        session = _session(tmp_path)
+        node = session.ensure_node("agent:probe")
+        node["variant"] = "stale"
+        session.set_model("agent:probe", "openai", "gpt-5.5", variant="none")
+        assert node == {"model": "openai/gpt-5.5", "reasoning": "off"}
 
     @pytest.mark.parametrize("node,expected", [
         ({"reasoning": "high", "variant": "low"}, "high"),

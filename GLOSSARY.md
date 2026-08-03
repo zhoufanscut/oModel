@@ -61,11 +61,17 @@ line when a new one does.
   cached `opencode --verbose` (`Catalog.variants_for`) — the source of truth for the pickers; the
   bundled family registry is now only the fallback for the omo-suggestion `⚠` warn when opencode
   reports nothing for that model. Family *detection* itself stays heuristic-only — `--verbose.family`
-  is never read. A `none` variant is treated as **no variant**: identical to the synthetic `(none)`
-  clear row, so the pickers never offer it and saving drops the key (`_is_no_variant`).
+  is never read. opencode still spells the bottom rung `none`; oModel renames it to omo's `off` at
+  the single seam where it enters (`catalog.normalize_variant`), so it IS offered and IS written.
   **`variant` is oModel's internal word for this** (the candidate-row field, the `v` picker); what
   gets WRITTEN to config is a different question — see *reasoning*.
   → DESIGN decision #14
+- **`off` vs `(default)`** — ⚠ the easiest confusion in the tool, and they are opposites. `off` is a
+  real rung of omo's reasoning ladder (`off < minimal < low < medium < high < xhigh < max`, plus an
+  `auto` sentinel) meaning *reasoning explicitly disabled*; `(default)` is the pickers' synthetic
+  clear row, which REMOVES the key so omo applies the model's default. `none` is omo's legacy alias
+  for `off` and oModel's old name for the clear row — which is exactly why the row was renamed.
+  → catalog.py `normalize_variant`, session.py `is_no_variant`
 - **reasoning** — omo's current *config key* for what oModel calls a **variant**.
   `2026-08-reasoning-unification` renamed `variant` → `reasoning` on agents and categories but
   deliberately left `ultrawork`/`compaction` alone, whose override reads `.variant` and nothing

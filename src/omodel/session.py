@@ -41,7 +41,7 @@ from . import catalog as catalog_mod
 from . import config_io
 from . import presets as presets_mod
 from . import suggestions as suggestions_mod
-from .catalog import Catalog, CatalogUnavailable
+from .catalog import Catalog, CatalogUnavailable, normalize_variant
 from .resolve import Resolver
 from .suggestions import Suggestions
 
@@ -78,15 +78,19 @@ def subkinds_for(name: str) -> tuple:
 
 
 def is_no_variant(variant) -> bool:
-    """True when `variant` means "no variant → drop the key": None, empty, or the literal "none"
-    (any case, surrounding whitespace tolerated). opencode's `--verbose` lists a "none" variant
-    that is identical to the synthetic "(none)" clear row the pickers append, so omodel never
-    offers it and never writes it — a "none" pick just removes the `variant` key (same as (none)).
+    """True when `variant` means "no level at all → drop the key": None or empty.
+
+    **NOT the literal "none" any more.** That was right while `none` and "no variant" were the
+    same thing; omo 4.19.4 made `off` a real bottom rung of the reasoning ladder and kept `none`
+    as its alias, so "none" now means *reasoning explicitly off*, which is the opposite of
+    dropping the key (that means "use the default"). The spelling is handled one layer down by
+    `catalog.normalize_variant`, which turns opencode's `none` into omo's `off` before this
+    predicate ever sees it; this one only answers "is there a level at all".
 
     NB a whitespace-ONLY string (`"   "`) is not "no variant" here; it can only arrive from a
     hand-edited config, and this predicate is deliberately unchanged from the TUI's original so
     the two surfaces agree. `cli.py` strips its `--variant` input before it ever reaches here."""
-    return not variant or str(variant).strip().lower() == "none"
+    return not variant
 
 
 def read_map(parent, key: str) -> dict:
@@ -521,14 +525,19 @@ class Session:
     def set_model(self, target: str, provider: str, model: str, variant=None) -> None:
         """Write `provider/model` (+ variant) into `target`'s cfg node.
 
-        The value written is `f"{provider}/{model}"` — the CONTRACTS-frozen rule. A "none"/empty
-        variant means "no variant", so the key is DROPPED rather than written as `variant:
-        "none"` (identical to `(none)`); this covers the picker, `v`, a restage, and a
-        pre-existing on-disk "none" (re-picking cleans it).
+        The value written is `f"{provider}/{model}"` — the CONTRACTS-frozen rule. An empty/None
+        variant means "no level", so the key is DROPPED rather than written; this covers the
+        picker, `v`, a restage, and a cleared target.
+
+        The level itself goes through `normalize_variant` first, so opencode's `none` is written
+        as omo's `off` — the same conversion `catalog.variants_for` already applies to the
+        offered set, repeated here because this is the write point and a value can also arrive
+        from `--variant` or a hand-edited config that never passed through a picker.
 
         The reasoning level is written under ONE spelling (`variant_key_for`) and the other two
         are removed from the node, so no stale key survives to outrank the one omodel just
         wrote."""
+        variant = normalize_variant(variant)
         node = self.ensure_node(target)
         node["model"] = f"{provider}/{model}"
         parsed = split_target(target)

@@ -956,6 +956,12 @@ def _cmd_set(config_override, target, value, variant, dry_run, force, as_json) -
     # A whitespace-only --variant is junk that would otherwise be written verbatim; treat it as
     # "no variant" here rather than loosening session.is_no_variant (which the TUI shares).
     variant = variant.strip() if isinstance(variant, str) else variant
+    # Convert BEFORE _validate, not just before the write: the guard compares against a set
+    # `variants_for` has already converted, so `--variant none` would otherwise be measured in
+    # opencode's vocabulary against omo's and refused. The payload below reports what was
+    # actually written, which is the converted value.
+    from omodel.catalog import normalize_variant
+    variant = normalize_variant(variant)
 
     problem = _validate(session, target, value, variant, force)
     if problem is not None:
@@ -1366,7 +1372,13 @@ def _variant_offered(session, provider: str, model: str, variant) -> bool:
     offered = _variant_guard_set(session, provider, model)
     if not offered:
         return True
-    return str(variant).strip().lower() in [v.strip().lower() for v in offered]
+    # Both sides normalized (`none` → `off`). `offered` already is, coming from `variants_for`;
+    # `variant` may not be — `check` reads it off disk, where a hand-edited or pre-4.19.4 config
+    # can still say `none`. omo resolves that to `off`, so refusing it would flag a config that
+    # works.
+    from omodel.catalog import normalize_variant
+    value = str(normalize_variant(variant)).strip().lower()
+    return value in [str(normalize_variant(v)).strip().lower() for v in offered]
 
 
 def _variant_guard_set(session, provider: str, model: str) -> list:

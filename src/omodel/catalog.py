@@ -28,6 +28,32 @@ _REFRESH_TIMEOUT = 90
 # see the rationale there; availability (`load`) and cost/context (`detail`) keep the 24h TTL.
 _STALE_OK = float("inf")
 
+# opencode and omo have drifted apart on ONE reasoning-level name, and omodel sits in the gap: it
+# reads variants from opencode but writes a config omo resolves. omo 4.19.4's
+# `2026-08-reasoning-unification` renamed the bottom rung `none` → `off`
+# (`normalizeReasoning("none") -> {level: "off"}`, the old spelling kept as an alias); opencode
+# still reports `none`. Converting HERE — the single seam where opencode's vocabulary enters
+# omodel — means every picker, guard and warning downstream speaks omo's, and what omodel writes
+# says what omo will read.
+#
+# `off` is a REAL rung of omo's ladder (off < minimal < low < medium < high < xhigh < max), NOT
+# "no variant": omitting the key means "use the default", which on a reasoning model is the
+# opposite end. That distinction is why this is a rename and not a drop — see
+# `session.is_no_variant`, which is the "is there a level at all" predicate and knows nothing
+# about spellings. DESIGN §Reasoning vocabulary.
+_VARIANT_ALIASES = {"none": "off"}
+
+
+def normalize_variant(variant):
+    """opencode's spelling of a reasoning level → omo's (`none` → `off`).
+
+    Anything else passes through UNTOUCHED, original casing and all: `None` (no level), a level
+    both already agree on, and an unknown value — which omo forwards to the provider verbatim
+    (`normalizeReasoning`'s `passthrough`), so omodel must not mangle it either."""
+    if variant is None:
+        return None
+    return _VARIANT_ALIASES.get(str(variant).strip().lower(), variant)
+
 
 class CatalogUnavailable(Exception):
     """`opencode` IS on PATH but `opencode models` exited != 0 or produced zero
@@ -149,7 +175,15 @@ class Catalog:
                 # provider's set.
                 if not stale_ok and cache.read(f"verbose-{prov}") is None:
                     return []
-                return variants
+                # Converted to omo's vocabulary on the way out (`normalize_variant`), so no
+                # caller ever handles both spellings. Deduped because the rename can collide with
+                # a level the same provider already reports under omo's name.
+                out: list = []
+                for v in variants:
+                    v = normalize_variant(v)
+                    if v not in out:
+                        out.append(v)
+                return out
         return []
 
 
