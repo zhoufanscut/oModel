@@ -12,7 +12,7 @@ import json
 import os
 
 from omodel import cache
-from omodel.suggestions import Suggestions
+from omodel.suggestions import Family, Suggestions
 from omodel.suggestions import load as load_suggestions
 
 
@@ -100,8 +100,11 @@ def frozen_suggestions() -> Suggestions:
     Chains churn weekly and are frozen above. Families are NOT frozen: `detect_family` is a
     faithful port of omo's heuristic and substitution depends on it, so a frozen copy would
     quietly stop testing the real thing. Families are also stable and independently pinned
-    (test_detect_family.py::test_15_families + the FAMILY_VENDOR key-set), so a change there
+    (test_detect_family.py's family-count pin + the FAMILY_VENDOR key-set), so a change there
     is meaningful and *should* reach these tests.
+
+    NOT sufficient for the `⚠ variant` tests: those need a family that lacks a variant, which
+    is exactly the property a real family can lose overnight — see PROBE_FAMILY below.
     """
     real = load_suggestions()
     return Suggestions(
@@ -109,5 +112,54 @@ def frozen_suggestions() -> Suggestions:
         agents=copy.deepcopy(FROZEN_AGENTS),
         categories=copy.deepcopy(FROZEN_CATEGORIES),
         families=real.families,
+        known_variants=real.known_variants,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Frozen probe FAMILY — for the ⚠ variant tests, which are about logic not data
+# ---------------------------------------------------------------------------
+
+# The `⚠ variant` tests need a family that demonstrably does NOT declare some variant. Three
+# of them borrowed a real one ("glm has no max"), which is omo's DATA, not resolve's logic --
+# and omo 5.0.0-beta.4 gave glm `max`, deleting the premise all three were built on and
+# reddening them on a release that changed nothing about the product.
+#
+# frozen_suggestions() is no help here: it freezes CHAINS and deliberately keeps the REAL
+# family registry (substitution + detect_family parity must exercise the real heuristic). So
+# freeze ONE EXTRA family instead of the registry. PROBE_FAMILY declares low/medium/high and
+# never `max`, so "this family lacks the variant" is a property of the fixture that upstream
+# cannot revoke.
+PROBE_MODEL = "probe-zeta"
+
+PROBE_FAMILY = Family(
+    family="probe-zeta",
+    pattern=None,
+    includes=[PROBE_MODEL],
+    variants=["low", "medium", "high"],   # deliberately NO "max" — that is the whole point
+    reasoning_efforts=[],
+    reasoning_effort_aliases={},
+    supports_thinking=False,
+)
+
+
+def probe_family_suggestions() -> Suggestions:
+    """Real families with PROBE_FAMILY PREPENDED; no chains (these tests synthesize their own).
+
+    Prepended, not appended, so first-match-wins puts PROBE_MODEL on the probe family BY
+    CONSTRUCTION -- an upstream family that someday matches the id cannot steal it, and the
+    fixture cannot rot into testing nothing. The real families stay behind it, so every other
+    id in these tests still resolves through the real heuristic.
+
+    PROBE_FAMILY is absent from FAMILY_VENDOR on purpose: vendor() then yields None, the probe
+    provider counts zero vendors, and it is treated as dedicated -- one row per provider, which
+    is what these single-entry tests assert.
+    """
+    real = load_suggestions()
+    return Suggestions(
+        meta={"omoVersion": "frozen-for-tests", "omoCommit": "", "generatedAt": ""},
+        agents={},
+        categories={},
+        families=[PROBE_FAMILY] + list(real.families),
         known_variants=real.known_variants,
     )

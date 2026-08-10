@@ -3351,27 +3351,30 @@ def test_pilot_candidates_rerender_when_verbose_lands(tmp_path):
     them until the next cfg mutation dropped it: the correction surfaced the moment you pressed
     enter, reading as "the list changed under me". The worker must re-render both panes.
 
-    Chain is defined inline (not from bundled omo data) so the ⚠ is deterministic: the heuristic
-    glm family lists low/medium/high, so omo's `max` reads as unsupported until opencode's
-    verbose — which does offer it — arrives."""
+    Chain AND family are fixtures here (not bundled omo data) so the ⚠ is deterministic: the
+    frozen probe family lists low/medium/high, so the chain's `max` reads as unsupported until
+    opencode's verbose — which does offer it — arrives. This used to borrow the real glm family
+    for the "lacks max" half, and omo 5.0.0-beta.4 gave glm `max`, killing the cold ⚠ this test
+    is built on. See _helpers.PROBE_FAMILY."""
+    from _helpers import PROBE_MODEL, probe_family_suggestions
+
     from omodel.suggestions import Suggestions
-    from omodel.suggestions import load as _load_suggestions
 
     cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write('{ "agents": {}, "categories": {} }')
 
-    real = _load_suggestions()
+    probe = probe_family_suggestions()
     suggestions = Suggestions(
         meta={"omoVersion": "inline-for-test", "omoCommit": "", "generatedAt": ""},
         agents={},
         categories={"probe-cat": {"fallbackChain": [
-            {"providers": ["opencode"], "model": "glm-5", "variant": "max"},
+            {"providers": ["opencode"], "model": PROBE_MODEL, "variant": "max"},
         ]}},
-        families=real.families,
-        known_variants=real.known_variants,
+        families=probe.families,
+        known_variants=probe.known_variants,
     )
-    catalog = Catalog(available={"opencode": ["glm-5"]}, connected=["opencode"])
+    catalog = Catalog(available={"opencode": [PROBE_MODEL]}, connected=["opencode"])
 
     def _labels(pilot):
         c = pilot.app.query_one("#candidates", OptionList)
@@ -3389,7 +3392,7 @@ def test_pilot_candidates_rerender_when_verbose_lands(tmp_path):
         def _detail_that_warms_cache(model_id, use_cache=True, provider=None):
             """Stands in for catalog.detail(): the real one WRITES verbose-<prov> as a side
             effect of its `--verbose` call, which is the whole point here."""
-            _seed_verbose("opencode", {"glm-5": ["high", "max"]})
+            _seed_verbose("opencode", {PROBE_MODEL: ["high", "max"]})
             return {"context": 128000, "cost": None, "reasoning": False, "image": False}
 
         app.catalog.detail = _detail_that_warms_cache
@@ -3402,7 +3405,7 @@ def test_pilot_candidates_rerender_when_verbose_lands(tmp_path):
             )
 
             # The fetch lands. NOTHING is selected — the pane must correct itself.
-            pilot.app._fetch_detail("cat:probe-cat", "opencode", "glm-5")
+            pilot.app._fetch_detail("cat:probe-cat", "opencode", PROBE_MODEL)
             await pilot.app.workers.wait_for_complete()
             await pilot.pause()
 
@@ -3410,7 +3413,7 @@ def test_pilot_candidates_rerender_when_verbose_lands(tmp_path):
             assert not any("⚠ variant" in s for s in after), (
                 f"rows must re-resolve against the verbose the fetch just wrote: {after}"
             )
-            assert any("opencode/glm-5 (max)" in s for s in after), after
+            assert any(f"opencode/{PROBE_MODEL} (max)" in s for s in after), after
             assert pilot.app.cfg["categories"] == {}, (
                 f"a re-render must not stage anything: {pilot.app.cfg}"
             )

@@ -18,7 +18,12 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from _helpers import frozen_suggestions, seed_verbose
+from _helpers import (
+    PROBE_MODEL,
+    frozen_suggestions,
+    probe_family_suggestions,
+    seed_verbose,
+)
 
 from omodel.catalog import Catalog
 from omodel.resolve import Resolver
@@ -381,20 +386,33 @@ class TestWarnFlags:
         assert "claude-opus-4-7" not in models
         assert models == ["kimi-k2.5", "gpt-5.5", "glm-5"], f"Unexpected: {models}"
 
-    def test_candidates_variant_warn(self, sugg):
+    def test_candidates_variant_warn(self):
         """A row whose variant ∉ family.variants gets warn=['variant'] (via candidates()).
-        glm has no 'max' → glm-5 + max warns."""
-        cat = _make_catalog(["zhipuai/glm-5"])
+
+        Uses the frozen PROBE_FAMILY (low/medium/high, never `max`), not a real family: this
+        asserts resolve's LOGIC, and borrowing omo's data for the "lacks it" half means an
+        upstream release can delete the premise. It did — this test read `glm has no max`
+        until omo 5.0.0-beta.4 gave glm `max`."""
+        sugg = probe_family_suggestions()
+        cat = _make_catalog([f"p/{PROBE_MODEL}"])
         res = Resolver.build(cat, sugg)
         synth = {
             "variant": "",
-            "fallbackChain": [{"providers": ["zhipuai"], "model": "glm-5", "variant": "max"}],
+            "fallbackChain": [{"providers": ["p"], "model": PROBE_MODEL, "variant": "max"}],
         }
         with patch.object(res, "_requirement_for", return_value=synth):
             rows = res.candidates("agent:sisyphus")
-        glm = [r for r in rows if r["model"] == "glm-5"]
-        assert len(glm) == 1
-        assert glm[0]["warn"] == ["variant"]
+        hit = [r for r in rows if r["model"] == PROBE_MODEL]
+        assert len(hit) == 1
+        assert hit[0]["warn"] == ["variant"]
+
+    def test_probe_family_really_lacks_max(self):
+        """Guards the fixture the test above depends on. Without this, a probe family that
+        silently gained `max` would turn that test green-but-vacuous rather than red."""
+        sugg = probe_family_suggestions()
+        fam = sugg.detect_family(PROBE_MODEL)
+        assert fam is not None and fam.family == "probe-zeta", fam
+        assert "max" not in fam.variants
 
     def test_valid_variant_no_warn(self, frozen_resolver):
         """claude-opus-4-7 with variant='max' — max IS in claude-opus.variants → no 'variant'
@@ -869,12 +887,16 @@ class TestVariantWarnOpencodeFirst:
         res = Resolver.build(_make_catalog(["opencode/claude-haiku-4-5"]), sugg)
         assert self._warn_for(res, "claude-haiku-4-5", "opencode", "max") == []
 
-    def test_opencode_empty_falls_back_to_heuristic_warn(self, sugg):
-        """opencode reports `{}` (glm-5, kimi, …) → heuristic fallback: glm has no 'max' → still
-        warns. The conservative empty handling is identical for every such model (not glm-only)."""
-        self._seed("zhipuai", {"glm-5": []})
-        res = Resolver.build(_make_catalog(["zhipuai/glm-5"]), sugg)
-        assert self._warn_for(res, "glm-5", "zhipuai", "max") == ["variant"]
+    def test_opencode_empty_falls_back_to_heuristic_warn(self):
+        """opencode reports `{}` (glm-5, kimi, …) → heuristic fallback: the family has no 'max'
+        → still warns. The conservative empty handling is identical for every such model.
+
+        Frozen PROBE_FAMILY rather than a real one — the "family lacks max" half is the fixture's
+        job, not omo's (omo 5.0.0-beta.4 gave glm `max` and deleted it)."""
+        sugg = probe_family_suggestions()
+        self._seed("p", {PROBE_MODEL: []})
+        res = Resolver.build(_make_catalog([f"p/{PROBE_MODEL}"]), sugg)
+        assert self._warn_for(res, PROBE_MODEL, "p", "max") == ["variant"]
 
     def test_cold_cache_no_spurious_warn(self, sugg):
         """Nothing cached (cold --verbose) → heuristic fallback, NOT a blanket warn: a valid
