@@ -293,15 +293,22 @@ commit.
   object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
 ## Bundled data (generated — do not hand-edit; regenerate with `--refresh-omo`)
-- `data/omo-suggestions.json` — 11 agents, 8 categories, 15 families. Consume via
-  `suggestions.load()`. **The omo version/commit is not pinned here** — a weekly CI job refreshes
-  this file from omo's newest stable tag, so any number written down goes stale within days; read
-  `meta.omoVersion` / `meta.omoCommit` out of the file itself. Only those THREE counts are pinned
-  (asserted by `test_detect_family.py::TestBundledSuggestionsLoad`), because a change in *those* is
-  a real event. `knownVariants` is deliberately NOT pinned — it has no consumer in `src/` (variant
-  validity is opencode's, decision #14), so its size is pure upstream churn: omo 4.19.4 renamed
-  `none` → `off` and dropped `thinking`, reddening a `== 9` pin on a rename that changed no
-  behaviour. It is checked structurally instead (`test_known_variants_cover_what_chains_use`).
+- `data/omo-suggestions.json` — 11 agents, 8 categories. Consume via `suggestions.load()`.
+  **The omo version/commit is not pinned here** — a weekly CI job refreshes this file from omo's
+  newest stable tag, so any number written down goes stale within days; read `meta.omoVersion` /
+  `meta.omoCommit` out of the file itself. Only those TWO counts are pinned (asserted by
+  `test_detect_family.py::TestBundledSuggestionsLoad`), because they back target coverage and a
+  change in *those* is a real event. Two things are deliberately NOT counted:
+  - **families** — the *set* is what matters, and `TestFamilyVendorSync` pins it against
+    `FAMILY_VENDOR` while naming the drifted key. A `== 15` alongside it only added a second red
+    with no instruction on every upstream family add. The one thing a count uniquely caught — a
+    duplicate name, which that set comparison cannot see and which would silently reorder
+    `detect_family`'s first-match-wins precedence — is asserted directly by
+    `test_families_are_unique_and_nonempty`.
+  - **knownVariants** — no consumer in `src/` (variant validity is opencode's, decision #14), so
+    its size is pure upstream churn: omo 4.19.4 renamed `none` → `off` and dropped `thinking`,
+    reddening a `== 9` pin on a rename that changed no behaviour. Checked structurally instead
+    (`test_known_variants_cover_what_chains_use`).
 - `data/default-config.jsonc` — oModel's own minimal starter.
 
 ## Appendix — module ownership (from the original fan-out)

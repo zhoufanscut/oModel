@@ -191,8 +191,21 @@ class TestBundledSuggestionsLoad:
             f"-{CATEGORY_NAMES - set(sugg.categories)}"
         )
 
-    def test_15_families(self, sugg):
-        assert len(sugg.families) == 15, f"Expected 15 families, got {len(sugg.families)}"
+    def test_families_are_unique_and_nonempty(self, sugg):
+        """Structural, not a count. A family add/remove/rename is already caught — and caught
+        ACTIONABLY — by TestFamilyVendorSync, which names the drifted key and says to update
+        FAMILY_VENDOR. A hardcoded `== 15` only added a second red carrying no instruction, on
+        every upstream family add (omo 5.0.0-beta.4 added `openai-deep-research`).
+
+        What the count uniquely caught is a DUPLICATE family name: that sync test compares a
+        SET, so a duplicate moves len() without moving the key set and sails through it. A
+        duplicate matters because `families` is ORDERED and detect_family is first-match-wins
+        (kimi-thinking before kimi, claude-opus before claude-non-opus, openai-deep-research
+        before openai-reasoning) — a second entry under a live name silently reorders that.
+        So assert the property directly instead of a number standing in for it."""
+        names = [f.family for f in sugg.families]
+        assert names, "no families in the bundled data"
+        assert len(set(names)) == len(names), f"duplicate family names: {names}"
 
     def test_known_variants_cover_what_chains_use(self, sugg):
         """Structural, not a count. The old pin was `== 9`, which guards nothing real:
@@ -218,8 +231,9 @@ class TestBundledSuggestionsLoad:
         Deliberately structural, NOT a count. Chain *lengths* are pure upstream churn — a
         weekly `--refresh-omo` routinely adds or drops entries (omo 4.19.0 alone moved five
         chains), so pinning one fails on data that is perfectly fine. The counts worth
-        pinning are the ones above, which guard something real: `test_15_families` backs
-        the FAMILY_VENDOR key-set, agents/categories back target coverage.
+        pinning are the agent/category ones above, which back target coverage. Families are
+        deliberately NOT counted — TestFamilyVendorSync guards that set actionably, and
+        test_families_are_unique_and_nonempty guards the one thing a count added.
         """
         for section in ("agents", "categories"):
             for name, body in getattr(sugg, section).items():

@@ -1,7 +1,9 @@
 """Bundled omo suggestion data + family heuristics.  DESIGN.md §suggestions.py.
 
 FROZEN CONTRACT — owned by the Core-logic specialist. `FAMILY_VENDOR` below is part of
-the contract (verified complete: its 15 keys == the 15 families in the bundled data).
+the contract: its key set must equal the bundled family set exactly, which
+`test_detect_family.py::TestFamilyVendorSync` asserts (no count is written down here —
+an upstream family add would only make it stale).
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import re
 from dataclasses import dataclass
 from importlib.resources import files
 
-# Hardcoded in oModel (omo has NO such table). 15-family → vendor map (DESIGN §suggestions.py).
+# Hardcoded in oModel (omo has NO such table). family → vendor map (DESIGN §suggestions.py).
 # Models whose detect_family is None contribute NO vendor — do not invent a family for them.
 FAMILY_VENDOR = {
     "claude-opus": "anthropic", "claude-non-opus": "anthropic",

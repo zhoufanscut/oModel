@@ -100,8 +100,8 @@ def frozen_suggestions() -> Suggestions:
     Chains churn weekly and are frozen above. Families are NOT frozen: `detect_family` is a
     faithful port of omo's heuristic and substitution depends on it, so a frozen copy would
     quietly stop testing the real thing. Families are also stable and independently pinned
-    (test_detect_family.py's family-count pin + the FAMILY_VENDOR key-set), so a change there
-    is meaningful and *should* reach these tests.
+    (test_detect_family.py's FAMILY_VENDOR key-set + uniqueness checks), so a change there is
+    meaningful and *should* reach these tests.
 
     NOT sufficient for the `⚠ variant` tests: those need a family that lacks a variant, which
     is exactly the property a real family can lose overnight — see PROBE_FAMILY below.

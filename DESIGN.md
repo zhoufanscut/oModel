@@ -104,8 +104,8 @@ prefix and a valid variant, and saves a clean config.
   everywhere (kimi) or uncached.
 - **What omo suggests (bundled, build-time):** `omo-suggestions.json`, generated from
   `~/source/oh-my-openagent/packages/model-core/src/` (verified importable & serializable under bun:
-  11 agents, 8 categories, 15 families — `knownVariants` is unpinned churn, see CONTRACTS
-  §Bundled data). Schema the app **consumes**:
+  11 agents, 8 categories — the family and `knownVariants` counts are unpinned churn, see
+  CONTRACTS §Bundled data). Schema the app **consumes**:
   ```json
   { "meta": {"omoVersion":"","omoCommit":"","generatedAt":""},
     "agents":   {"<name>": {"fallbackChain":[{"providers":[],"model":"","variant":""}], "variant":"",

@@ -31,7 +31,7 @@ pytest tests/ -v --tb=short      # full suite
 pytest tests/ -x -q              # fast, stop on first failure
 pytest tests/test_resolve.py -v                              # one file
 pytest tests/test_catalog_parse.py::TestVerboseParsing -v    # one class
-pytest tests/test_detect_family.py::TestBundledSuggestionsLoad::test_15_families -v   # one test
+pytest tests/test_detect_family.py::TestBundledSuggestionsLoad::test_11_agents -v    # one test
 
 # Run the app / CLI (also `python -m omodel ...`)
 omodel                           # launch TUI
