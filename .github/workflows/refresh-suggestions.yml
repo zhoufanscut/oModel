@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       omo_ref:
-        description: "oh-my-openagent ref to check out (branch, tag, or SHA)"
+        description: "omo ref to check out (branch, tag, or SHA). Empty = newest stable tag."
         required: false
-        default: "dev"
+        default: ""
   # Or run on a schedule: weekly on Mondays
   schedule:
     - cron: "0 6 * * 1"
@@ -26,11 +26,44 @@ jobs:
       - name: Checkout oModel
         uses: actions/checkout@v7
 
+      # omo's default branch is `dev`, and `dev` carries UNRELEASED work: on 2026-08-10 it had
+      # moved to `5.0.0-beta.4`, whose data red the suite (a new `openai-deep-research` family,
+      # and `glm` gaining `max`). Tracking it also ships suggestions no released omo honours —
+      # a user on stable omo would be handed variants their omo does not accept. So default to
+      # the newest STABLE tag; pass `omo_ref` explicitly to snapshot a beta on purpose.
+      #
+      # Selection is by tag SHAPE (`vX.Y.Z`, no `-suffix`), NOT the release API: omo publishes
+      # its betas with `prerelease: false`, so `releases/latest` answers `v5.0.0-beta.4` and
+      # that flag cannot be trusted here. `git ls-remote` also sidesteps the API's pagination —
+      # a long beta run can push the newest stable off the first page of /releases.
+      - name: Resolve omo ref
+        id: ref
+        env:
+          REQUESTED: ${{ github.event.inputs.omo_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            echo "ref=$REQUESTED" >> "$GITHUB_OUTPUT"
+            echo "using requested ref: $REQUESTED"
+            exit 0
+          fi
+          # `|| tag=""` so an ls-remote/grep failure lands on the explicit check below with a
+          # readable error, instead of `set -e` killing the step on the bare assignment.
+          tag="$(git ls-remote --tags --refs https://github.com/code-yeongyu/oh-my-openagent \
+                 | awk '{print $2}' | sed 's#refs/tags/##' \
+                 | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                 | sort -V | tail -1)" || tag=""
+          # Fail loudly. An empty ref would fall through to omo's default branch — `dev`, the
+          # one thing this step exists to avoid — and silently snapshot a beta anyway.
+          [ -n "$tag" ] || { echo "::error::could not resolve a stable omo tag"; exit 1; }
+          echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          echo "newest stable omo tag: $tag"
+
       - name: Checkout oh-my-openagent
         uses: actions/checkout@v7
         with:
           repository: code-yeongyu/oh-my-openagent
-          ref: ${{ github.event.inputs.omo_ref || 'dev' }}
+          ref: ${{ steps.ref.outputs.ref }}
           path: oh-my-openagent
           # The extractor only reads packages/model-core/src (a self-contained
           # closure, ~240 KB) plus the root package.json. Sparse-checkout (cone
@@ -111,7 +144,7 @@ jobs:
           title: "chore: refresh omo-suggestions.json"
           body: |
             Automated refresh of `src/omodel/data/omo-suggestions.json` from the latest
-            oh-my-openagent source (${{ github.event.inputs.omo_ref || 'dev' }}).
+            oh-my-openagent source (${{ steps.ref.outputs.ref }}).
 
             ${{ steps.validate.outcome == 'failure' && '⚠️ **Validation FAILED** in the refresh run below, against the data as first pushed. Do not merge until the checks are green.' || '✅ Lint + tests passed in the refresh run below, against the data as first pushed.' }}
 
