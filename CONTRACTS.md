@@ -293,11 +293,15 @@ commit.
   object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
 ## Bundled data (generated — do not hand-edit; regenerate with `--refresh-omo`)
-- `data/omo-suggestions.json` — 11 agents, 8 categories, 15 families, 9 knownVariants. Consume via
+- `data/omo-suggestions.json` — 11 agents, 8 categories, 15 families. Consume via
   `suggestions.load()`. **The omo version/commit is not pinned here** — a weekly CI job refreshes
-  this file, so any number written down goes stale within days; read `meta.omoVersion` /
-  `meta.omoCommit` out of the file itself. Only the four counts are pinned (they are asserted by
-  `test_detect_family.py::TestBundledSuggestionsLoad`), because a change in *those* is a real event.
+  this file from omo's newest stable tag, so any number written down goes stale within days; read
+  `meta.omoVersion` / `meta.omoCommit` out of the file itself. Only those THREE counts are pinned
+  (asserted by `test_detect_family.py::TestBundledSuggestionsLoad`), because a change in *those* is
+  a real event. `knownVariants` is deliberately NOT pinned — it has no consumer in `src/` (variant
+  validity is opencode's, decision #14), so its size is pure upstream churn: omo 4.19.4 renamed
+  `none` → `off` and dropped `thinking`, reddening a `== 9` pin on a rename that changed no
+  behaviour. It is checked structurally instead (`test_known_variants_cover_what_chains_use`).
 - `data/default-config.jsonc` — oModel's own minimal starter.
 
 ## Appendix — module ownership (from the original fan-out)

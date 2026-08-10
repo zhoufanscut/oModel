@@ -104,7 +104,8 @@ prefix and a valid variant, and saves a clean config.
   everywhere (kimi) or uncached.
 - **What omo suggests (bundled, build-time):** `omo-suggestions.json`, generated from
   `~/source/oh-my-openagent/packages/model-core/src/` (verified importable & serializable under bun:
-  11 agents, 8 categories, 15 families, 9 variants). Schema the app **consumes**:
+  11 agents, 8 categories, 15 families — `knownVariants` is unpinned churn, see CONTRACTS
+  §Bundled data). Schema the app **consumes**:
   ```json
   { "meta": {"omoVersion":"","omoCommit":"","generatedAt":""},
     "agents":   {"<name>": {"fallbackChain":[{"providers":[],"model":"","variant":""}], "variant":"",
@@ -112,7 +113,7 @@ prefix and a valid variant, and saves a clean config.
     "categories":{"<name>": {"fallbackChain":[], "variant":""}},
     "families": [{"family":"","pattern":"<RegExp.source|null>","includes":[],"variants":[],
                   "reasoningEfforts":[],"reasoningEffortAliases":{},"supportsThinking":false}],
-    "knownVariants": ["low","medium","high","xhigh","max","minimal","none","auto","thinking"] }
+    "knownVariants": ["off","minimal","low","medium","high","xhigh","max","auto"] }
   ```
   `requiresProvider`/`requiresModel`/`requiresAnyModel` are **carried but IGNORED** (they gate omo's
   auto-activation; oModel is a manual picker). `pattern` is stored as a string and `re.compile`d at
