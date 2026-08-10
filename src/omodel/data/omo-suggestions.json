@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "4.19.4",
-    "omoCommit": "55ea9490b70b2f2017077e3f78d4bf7db3555bc8",
-    "generatedAt": "2026-08-03T09:41:57.490Z"
+    "omoVersion": "5.0.0-beta.4",
+    "omoCommit": "8a49796f3f4ac7a8d902cbdbf2a83485b3ed2e82",
+    "generatedAt": "2026-08-10T07:38:36.430Z"
   },
   "agents": {
     "sisyphus": {
@@ -926,6 +926,28 @@
       "supportsThinking": true
     },
     {
+      "family": "openai-deep-research",
+      "pattern": null,
+      "includes": [
+        "o3-deep-research",
+        "o4-mini-deep-research"
+      ],
+      "variants": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningEfforts": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningEffortAliases": {},
+      "supportsThinking": false
+    },
+    {
       "family": "openai-reasoning",
       "pattern": "(?:^|\\/)o\\d(?:$|-)",
       "includes": [],
@@ -1067,10 +1089,18 @@
       "variants": [
         "low",
         "medium",
-        "high"
+        "high",
+        "max"
       ],
-      "reasoningEfforts": [],
-      "reasoningEffortAliases": {},
+      "reasoningEfforts": [
+        "high",
+        "max"
+      ],
+      "reasoningEffortAliases": {
+        "low": "high",
+        "medium": "high",
+        "xhigh": "max"
+      },
       "supportsThinking": false
     },
     {
