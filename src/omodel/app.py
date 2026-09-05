@@ -941,7 +941,10 @@ class ConfirmModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(self._title)
+            # markup=False: the class is generic and a caller's title may quote data (a preset
+            # name already reaches the delete prompt's body) — the one data-capable Label that
+            # lacked the flag.
+            yield Label(self._title, markup=False)
             with VerticalScroll(id="confirm-body") as body:
                 # Non-focusable so default focus stays on the Yes button (Enter still confirms);
                 # scrolling is driven by this screen's own bindings, not the scroller's focus.

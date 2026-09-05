@@ -487,3 +487,22 @@ class TestSave:
         assert s.is_dirty() is False
         s.store.presets[0].name = "renamed"
         assert s.is_dirty() is True
+
+
+class TestPresetIndexNeverRaises:
+    """`preset_index` answers None for anything that is neither a name nor an index — the CLI
+    turns None into an `unknown_preset` refusal. It used to guard with `lstrip("+-").isdigit()`
+    and then call `int()`, two different predicates: `+-1` passed the first and blew up in the
+    second (a traceback with an empty `--json` stdout), and so did a superscript digit."""
+
+    @pytest.mark.parametrize("ref", ["+-1", "³", "1 2", "--", "+", "1e3", "0x1", ""])
+    def test_unparseable_refs_are_not_indices(self, tmp_path, ref):
+        s = _session(tmp_path)
+        assert s.preset_index(ref) is None
+
+    def test_spellings_int_accepts_still_resolve(self, tmp_path):
+        s = _session(tmp_path)
+        s.store.presets.append(presets.capture("cheap", {"agents": {}, "categories": {}}))
+        assert s.preset_index("+2") == 1
+        assert s.preset_index(" 2 ") == 1
+        assert s.preset_index("-1") is None

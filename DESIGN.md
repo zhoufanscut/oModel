@@ -362,7 +362,12 @@ there is no repo to read.
 
 CLI error behavior: a malformed (unparseable) config makes the TUI launch and `--print` exit 1 with
 a one-line friendly message + a "fix the file or `omodel --restore`" hint (`ConfigParseError` from
-`config_io.load_config`) — never a raw json5 traceback. (`--check` never parses the config, so it
+`config_io.load_config`) — never a raw json5 traceback. A config that cannot be OPENED at all — a
+directory at the path (`--config ~/.omo`, one component short), a file the user may not read, a
+scaffold that cannot be written — is its subclass `ConfigReadError`, handled identically (it used
+to escape as an OSError traceback). Under `--json` every subcommand reports either one as the
+standard failure payload, `error: bad_config`, exit 1: the guide promises failures come back as
+JSON, and this was the one path that printed nothing. (`--check` never parses the config, so it
 stays exit-0/CI-safe regardless.) `--restore`'s interactive prompt treats Ctrl-D/Ctrl-C as
 "Cancelled." (exit 1) rather than crashing. `--config` accepts a bare relative filename (scaffold
 resolves the parent via `abspath` — `dirname("x.jsonc") == ""` used to crash `makedirs`).
@@ -643,9 +648,14 @@ In summary:
   `claude-haiku-4-5-20251001` or `claude-sonnet-4-8-jibao` fills the bare `claude-haiku-4-5` /
   `claude-sonnet-4-8`) → that **concrete available id** (`substitute_for=None`). A real modifier
   token (`mini`/`fast`/`nano`/`flash`/…) is *not* stripped — derived from omo's own chain ids,
-  over a fixed floor of size/tier words (`_TIER_TOKENS`) so one stays protected through a release
-  where omo names none of them (4.19.4 dropped its last `mini` id, and a cheaper `gpt-5.4-mini`
-  briefly exact-filled a `gpt-5.4` entry) — and a short trailing digit stays a version
+  over a fixed floor of size/tier **and serving-mode** words (`_TIER_TOKENS`: `mini`/`nano`/…,
+  `flash`/`fast`/…, `pro`/`max`/…, plus `thinking`/`free`/`base`/`instruct`/`chat`/`draft`) so
+  one stays protected through a release where omo names none of them (4.19.4 dropped its last
+  `mini` id, and a cheaper `gpt-5.4-mini` briefly exact-filled a `gpt-5.4` entry; a `-thinking`
+  or `-free` build did the same for every bare id until the mode words joined the floor — such a
+  build now takes the same-line path below, so it is a marked substitute when it shares the
+  entry's family and hidden when it does not: `kimi-*-thinking` is omo's own family, `big-pickle`
+  has none) — and a short trailing digit stays a version
   (`glm-5.1` ≠ `glm-5`); **(2) same-line** —
   else the **newest connected model of the same `detect_family`** (version-agnostic: `glm-5` →
   `glm-5.1`; "newest" = highest digit-tuple, ties → first-seen) — except within the coarse
@@ -760,9 +770,15 @@ In summary:
   **scrollable** — ↑↓/`j``k`, PageUp/PageDown, Home/End — since a real config diff easily exceeds the
   modal's height, while the Yes button keeps focus so Enter still confirms) → on accept, snapshot the
   current on-disk file to `<config_dir>/.backup/<ts>.jsonc` (**verbatim byte copy** — preserves
-  comments), then atomic temp+rename of `render(cfg, on-disk)`. No diff → "nothing to save".
+  comments), then atomic temp+rename of `render(cfg, on-disk)` — onto the file the path
+  *resolves* to (a symlinked config is written through, never replaced by a detached copy), with
+  the file's own permission bits and line endings (read and written with `newline=""`; a spliced
+  block takes the ending of its own line, so a file that mixes them is left mixed; a BOM is
+  trivia to the span scanner, and a lone `\r` ends a `//` comment), so a save changes the two
+  spans and nothing else about the file — and `diff_text` compares the same bytes `save` does.
+  No diff → "nothing to save".
 - **Backups & rollback:** `<config_dir>/.backup/` (next to the config; `<config_dir>` = dir of the
-  active config, default `~/.config/opencode/`). **Exact save order (this sequence):** (1) if
+  active config — `~/.omo/` on omo 4.19.3+, `~/.config/opencode/` for a pre-4.19.3 config). **Exact save order (this sequence):** (1) if
   `.backup/original.jsonc` does **not** exist, copy the current on-disk config to it (verbatim);
   (2) write the verbatim timestamped snapshot `YYYYMMDD-HHMMSS[.mmm].jsonc` (UTC, sorts
   lexicographically; `.mmm` avoids same-second collisions); (3) prune **only** timestamped snapshots —
@@ -1506,7 +1522,7 @@ dependency added here would ship inside the very binary this replaces.
 > **This section is a record, not an instruction.** oModel shipped; the fan-out below is how the
 > initial build was organised and is kept because the dependency analysis in §Notes still explains
 > *why* the module boundaries fall where they do. Nothing here describes current process, and its
-> counts are frozen at v0.1.0: there are 12 test files today, and `tests/verification.md` runs 10
+> counts are frozen at v0.1.0: there are 14 test files today, and `tests/verification.md` runs 10
 > checks — §Verification below still lists 9, because decision #18's Check 10 (the agent surface)
 > was only ever written up there. Don't act on it.
 

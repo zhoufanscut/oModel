@@ -5,6 +5,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `show`, `candidates` and `check` (`--json`) carry `degraded_reason`: why availability is
+  unknown — `opencode is not on PATH`, or what `opencode models` did instead of answering
+  (exited non-zero, printed nothing, timed out). `degraded: true` alone read the same for a
+  missing opencode and a broken one, and only the first is fixed by installing it. Every verb
+  now also says so on stderr.
+
+### Fixed
+
+- A provider's `-thinking`, `-free`, `-base`, `-instruct`, `-chat` or `-draft` build no longer
+  stands in for the bare model omo named as if it were that model. `glm-5.2-thinking` filled a
+  `glm-5.2` slot as an exact match — no `≈`, no warning — the same hole `mini` fell through in
+  0.5.1, one suffix family over. Such a build now shows as a marked `≈` substitute when it is
+  the same family as the model omo named, and is not offered at all when it is not (omo files
+  `kimi-*-thinking` as its own family; `big-pickle` has none) — never as the model itself.
+- Saving no longer changes what kind of file your config is. A save used to reset its permission
+  bits to 0600, replace a symlinked config (a dotfile manager pointing `~/.omo/omo.jsonc` at a
+  repo file) with a detached copy, turn every CRLF line ending into LF, and — for a file with a
+  UTF-8 byte-order mark — drop every comment in the document. Bits, link, endings and comments
+  all survive now (a file that mixes endings keeps each line's own), and the preview diff
+  compares exactly what the save compares, listing only the lines that change.
+- `--json` always answers with JSON. A config that could not be parsed — or could not be opened
+  at all: `--config ~/.omo`, one component short of the file, or a file you cannot read — made
+  every verb exit 1 with an empty stdout (the unreadable case as a raw traceback). Both now
+  return the standard failure payload with `error: bad_config`.
+- `omodel preset use +-1` (any preset reference `int()` refuses) is an `unknown_preset` refusal
+  instead of a traceback.
+- `--dry-run` reports `changed: true` whenever the real run would write. It looked at the config
+  diff alone, so a write that only adopts a foreign config into the active preset (a sync
+  conflict) previewed as a no-op and then wrote.
+- `apply --json` reports the reasoning level it actually wrote: asked for `none`, it echoed
+  `none` back for a file that now said `off`.
+- `omodel --check` counts the targets omo actually defines (31), not an `ultrawork` sub-target
+  on every agent (41) — ten of which every other verb refuses.
+- `omodel --restore` no longer burns a backup slot when asked for a backup that does not exist.
+
 ## [0.5.1] — 2026-08-03
 
 Catches up with oh-my-openagent 4.19.4, which moved a number of model ids and

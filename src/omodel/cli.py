@@ -505,9 +505,15 @@ def _fail(error: str, message: str, as_json: bool, code: int = EXIT_REJECTED, **
     return code
 
 
-def _open_session(config_override):
-    """`(session, None)` or `(None, exit_code)` — builds a Session, turning a malformed config
-    into the same friendly exit-1 the TUI path gives.
+def _open_session(config_override, as_json: bool = False):
+    """`(session, None)` or `(None, exit_code)` — builds a Session, turning a malformed (or
+    unreadable) config into the same friendly exit-1 the TUI path gives.
+
+    Under `--json` that failure ALSO goes out as the standard payload (`error: bad_config`):
+    the guide promises failures come back as JSON, and this was the one path that printed zero
+    bytes on stdout — on exactly the exit code an agent is told to stop and report on, so the
+    report it built was a JSONDecodeError. The stderr hint stays in both modes; a human watching
+    an agent's run still gets a sentence and the path.
 
     Also the single place the two one-time config-location notices are emitted, so every verb
     reports them exactly once. They go to STDERR: `--json` callers parse stdout, and a notice
@@ -518,6 +524,8 @@ def _open_session(config_override):
         session = Session.build(config_override)
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
+        if as_json:
+            return None, _fail("bad_config", str(exc), True, code=EXIT_ERROR)
         return None, EXIT_ERROR
     if session.adopted_presets:
         print(
@@ -529,6 +537,15 @@ def _open_session(config_override):
         print(
             "[note] Using the pre-4.19.3 config path. oh-my-openagent 4.19.3+ reads "
             "~/.omo/omo.jsonc instead — launch omo once to migrate.",
+            file=sys.stderr,
+        )
+    # A BROKEN opencode (on PATH, but `opencode models` failed) was silent here: the same
+    # `degraded` as an absent one, with nothing on stderr to say which. Only `--check` and
+    # `--print` named the failure, and neither is what an agent runs.
+    if session.catalog_error is not None:
+        print(
+            f"[note] opencode is installed but could not be read ({session.catalog_error}) — "
+            "availability is unknown; `omodel --refresh-models` retries it.",
             file=sys.stderr,
         )
     return session, None
@@ -548,6 +565,21 @@ def _split_value(value):
     if not provider or not model:
         return None
     return provider, model
+
+
+def _degraded_reason(session):
+    """Why availability is unknown, or None when it isn't.
+
+    `degraded` alone reads the same for an ABSENT `opencode` and a BROKEN one — crashing,
+    printing nothing, hanging past its timeout — and only the first is fixed by installing it.
+    The reason is the `CatalogUnavailable` message when there is one (`Session.catalog_error`),
+    else the one remaining way to be degraded: not on PATH. Additive payload field; the prose
+    surface says the same on stderr (`_open_session`)."""
+    if not session.degraded:
+        return None
+    if session.catalog_error is not None:
+        return str(session.catalog_error)
+    return "opencode is not on PATH"
 
 
 def _assignment_row(session, target: str) -> dict:
@@ -707,11 +739,18 @@ def _publish(session, dry_run: bool):
 
     Config first, presets second (decision #17's order). If the presets write fails after the
     config landed, that is NOT a plain failure: the config is ahead of the store and a retry
-    heals it, so it is raised as `_StoreWriteFailed` and reported distinctly."""
+    heals it, so it is raised as `_StoreWriteFailed` and reported distinctly.
+
+    `changed` answers the same question on a dry run as on the real one: the config diff OR a
+    presets-file change. The preview used to look at the diff alone, so under a sync conflict a
+    `set` whose config effect was a no-op previewed as `changed: false` and then ran as
+    `changed: true` — writing the presets file and adopting the foreign config, which is the
+    one write a careful agent would dry-run first."""
     diff = session.diff()
     store_dirty = session.store_is_dirty()
     if dry_run:
-        return {"changed": bool(diff.strip()), "dry_run": True, "backup": None, "diff": diff}
+        return {"changed": bool(diff.strip()) or store_dirty, "dry_run": True,
+                "backup": None, "diff": diff}
     if not diff.strip() and not store_dirty:
         return {"changed": False, "dry_run": False, "backup": None, "diff": ""}
 
@@ -749,7 +788,7 @@ def _cmd_agent_guide() -> int:
 
 
 def _cmd_targets(config_override, as_json: bool) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
     targets = session.known_targets()
@@ -763,7 +802,7 @@ def _cmd_targets(config_override, as_json: bool) -> int:
 
 
 def _cmd_show(config_override, as_json: bool) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
 
@@ -785,6 +824,7 @@ def _cmd_show(config_override, as_json: bool) -> int:
         # "root" = the pre-4.19.3 file with agents/categories at the top level.
         "config_scope": session.scope,
         "degraded": session.degraded,
+        "degraded_reason": _degraded_reason(session),
         "providers": list(session.catalog.connected),
         "active_preset": (
             {"index": session.store.active, "name": current.name} if current else None
@@ -813,7 +853,7 @@ def _cmd_show(config_override, as_json: bool) -> int:
 
 
 def _cmd_candidates(config_override, target: str, as_json: bool) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
     from omodel import session as session_mod
@@ -834,6 +874,7 @@ def _cmd_candidates(config_override, target: str, as_json: bool) -> int:
     payload = {
         "target": target,
         "degraded": session.degraded,
+        "degraded_reason": _degraded_reason(session),
         "sync_conflict": session.sync_conflict,
         "gpt_only": session_mod.gpt_only(target),
         "current": current_model or None,
@@ -860,7 +901,7 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
 
     Distinct from the flat `--check` flag, which resolves every target and ALWAYS exits 0 so CI
     can run it unconditionally. This one is for an agent verifying its own work."""
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
     from omodel import session as session_mod
@@ -923,6 +964,7 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
         "ok": not problems,
         "config_path": session.config_path,
         "degraded": session.degraded,
+        "degraded_reason": _degraded_reason(session),
         "sync_conflict": session.sync_conflict,
         "problems": problems,
     }
@@ -949,7 +991,7 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
 
 
 def _cmd_set(config_override, target, value, variant, dry_run, force, as_json) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
 
@@ -991,7 +1033,7 @@ def _cmd_set(config_override, target, value, variant, dry_run, force, as_json) -
 
 
 def _cmd_clear(config_override, target, dry_run, as_json) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
     if not session.is_known(target):
@@ -1022,7 +1064,7 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
     is all-or-nothing — a single bad entry writes nothing, so a partial config never lands."""
     import json
 
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
 
@@ -1035,6 +1077,8 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
                      'expected an object mapping target -> {"model": ..., "variant": ...}',
                      as_json, code=EXIT_USAGE)
 
+    from omodel.catalog import normalize_variant
+
     planned = []
     for target, spec in raw.items():
         if isinstance(spec, str):
@@ -1045,6 +1089,10 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
         value = spec.get("model")
         variant = spec.get("variant")
         variant = variant.strip() if isinstance(variant, str) else variant
+        # The same conversion `set` applies (opencode's `none` → omo's `off`), for the same two
+        # reasons: the guard measures in omo's vocabulary, and `applied` below must report what
+        # was actually written — it used to echo `none` for a file that now said `off`.
+        variant = normalize_variant(variant)
         problem = _validate(session, target, value or "", variant, force)
         if problem is not None:
             # All-or-nothing: refuse the whole batch so a half-applied config never lands.
@@ -1073,7 +1121,7 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
 
 
 def _cmd_preset(config_override, args, as_json: bool) -> int:
-    session, rc = _open_session(config_override)
+    session, rc = _open_session(config_override, as_json)
     if session is None:
         return rc
     from omodel import presets as presets_mod
@@ -1583,13 +1631,16 @@ def _cmd_check(config_override: str | None) -> int:
         print(f"[check] Could not build resolver ({exc}); suggestions-only.", file=sys.stderr)
         return EXIT_OK
 
-    # Build the list of all known targets from bundled suggestions
+    # Every target omo defines — the same enumeration `omodel targets` reports, sub-targets
+    # filtered per agent (`ultrawork` only where omo honors it, `subkinds_for`). This used to
+    # append `.ultrawork` to all 11 agents, so it counted 41 targets where every other verb
+    # offers 31 and resolved ten that `set` refuses with `unknown_target`.
+    from omodel.session import subkinds_for
     targets = []
     for name in suggestions.agents:
         targets.append(f"agent:{name}")
-        # Always include sub-targets that omo knows about; app adds them from config
-        targets.append(f"agent:{name}.ultrawork")
-        targets.append(f"agent:{name}.compaction")
+        for kind in subkinds_for(name):
+            targets.append(f"agent:{name}.{kind}")
     for name in suggestions.categories:
         targets.append(f"cat:{name}")
 

@@ -8,12 +8,13 @@ passes an explicit temp `path`; the live ~/.config/opencode/oh-my-openagent.json
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import glob
 import json
 import os
 import shutil
-import tempfile
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,17 @@ class ConfigParseError(ValueError):
     """Raised by load_config() when the on-disk JSONC fails to parse (malformed syntax).
     The message includes the config path and the underlying json5 error, so callers (cli.py)
     can print a friendly one-liner instead of letting a raw json5 traceback escape."""
+
+
+class ConfigReadError(ConfigParseError):
+    """Raised by load_config() when the config path cannot be opened at all — a directory
+    where the file should be (`--config ~/.omo` for `~/.omo/omo.jsonc`, one component short),
+    a file this user may not read, or a scaffold that cannot be written.
+
+    A subclass of ConfigParseError on purpose: every caller already turns a malformed config
+    into a friendly exit 1, and an unreadable one deserves exactly that handling. Before it
+    existed the `OSError` escaped every verb as a traceback — exit 1 only because that is
+    Python's default for an uncaught exception, with an EMPTY `--json` stdout."""
 
 
 class BackupScopeMismatch(ValueError):
@@ -165,15 +177,23 @@ def load_config(path: str | None = None):
         default_text = default_ref.read_text(encoding="utf-8")
         # dirname() of a bare relative filename (no directory component) is "" — resolve via
         # abspath first so a relative `--config foo.jsonc` doesn't crash makedirs(exist_ok=True).
-        os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
-        with open(resolved, "w", encoding="utf-8") as f:
-            f.write(default_text)
-
-    with open(resolved, encoding="utf-8") as f:
         try:
-            cfg = json5.load(f)
-        except ValueError as exc:
-            raise ConfigParseError(f"could not parse config at {resolved}: {exc}") from exc
+            os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
+            with open(resolved, "w", encoding="utf-8") as f:
+                f.write(default_text)
+        except OSError as exc:
+            raise ConfigReadError(f"could not create config at {resolved}: {exc}") from exc
+
+    # The OPEN is guarded as well as the parse: a directory at the path, or a file this user
+    # cannot read, is an error to report, not a traceback (see ConfigReadError).
+    try:
+        with open(resolved, encoding="utf-8") as f:
+            try:
+                cfg = json5.load(f)
+            except ValueError as exc:
+                raise ConfigParseError(f"could not parse config at {resolved}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigReadError(f"could not read config at {resolved}: {exc}") from exc
 
     if not isinstance(cfg, dict):
         # Valid JSON, wrong shape (a top-level array, string, number…). Every caller assumes a
@@ -251,15 +271,21 @@ def serialize(cfg: dict) -> str:
 # fallback) and is never required to equal the on-disk bytes.
 
 def _skip_trivia(text: str, j: int) -> int:
-    """Advance past JSON whitespace and // line / /* block */ comments; return the new index."""
+    """Advance past JSON whitespace and // line / /* block */ comments; return the new index.
+
+    Whitespace is everything json5 reads as whitespace — `str.isspace` (NBSP, U+2028/2029, form
+    feed, …) plus the UTF-8 BOM, which is not a space to Python but is trivia to json5. Any of
+    them ahead of the root `{` used to hide it from this scanner, so both spans came back None
+    and `render` fell back to the clean rewrite — which cost the user every comment in the
+    document for one invisible character at the front of it."""
     n = len(text)
     while j < n:
         c = text[j]
-        if c in " \t\r\n":
+        if c.isspace() or c == "\ufeff":
             j += 1
         elif c == "/" and j + 1 < n and text[j + 1] == "/":
             j += 2
-            while j < n and text[j] != "\n":
+            while j < n and text[j] not in "\r\n":  # a lone `\r` ends a line too
                 j += 1
         elif c == "/" and j + 1 < n and text[j + 1] == "*":
             j += 2
@@ -303,7 +329,7 @@ def _skip_value(text: str, j: int) -> int:
                 continue
             if c == "/" and j + 1 < n and text[j + 1] == "/":
                 j += 2
-                while j < n and text[j] != "\n":
+                while j < n and text[j] not in "\r\n":  # a lone `\r` ends a line too
                     j += 1
                 continue
             if c == "/" and j + 1 < n and text[j + 1] == "*":
@@ -384,20 +410,59 @@ def _span_for_path(text: str, path):
 def _line_indent(text: str, pos: int) -> str:
     """Leading whitespace of the line containing `pos` — used to align a spliced value's
     continuation/closing lines under its key."""
-    line_start = text.rfind("\n", 0, pos) + 1
+    # A line starts after the nearest `\n` OR `\r`: a lone-CR file has no `\n` to find, and
+    # measuring from byte 0 would indent the block by the whole document.
+    line_start = max(text.rfind("\n", 0, pos), text.rfind("\r", 0, pos)) + 1
     j = line_start
     while j < len(text) and text[j] in " \t":
         j += 1
     return text[line_start:j]
 
 
-def _reindent(value_text: str, indent: str) -> str:
+def _reindent(value_text: str, indent: str, newline: str = "\n") -> str:
     """Prefix `indent` to every line after the first (the first follows `"key": ` inline), so a
-    json.dumps(indent=2) block sits correctly under a key at arbitrary depth."""
+    json.dumps(indent=2) block sits correctly under a key at arbitrary depth. `newline` is the
+    FILE's line ending (see `_newline_of`), so a spliced block never introduces a second kind."""
     lines = value_text.split("\n")
     if len(lines) == 1:
         return value_text
-    return lines[0] + "\n" + "\n".join((indent + ln) if ln else ln for ln in lines[1:])
+    return lines[0] + newline + newline.join((indent + ln) if ln else ln for ln in lines[1:])
+
+
+def _newline_of(text: str) -> str:
+    """The line ending `text` uses — `\\r\\n` if any line ends that way, else a lone `\\r` if
+    any does, else `\\n`. The file-wide answer, for the clean-rewrite fallback.
+
+    Reads and writes of the config go through `newline=""` (no translation), so a CRLF (or
+    classic-Mac CR) file is seen as it is on disk and written back the same way. It used to be
+    read with universal newlines, so `render` never saw a `\\r`, and the rewrite flipped every
+    line of a Windows file to LF while the diff shown beforehand admitted only the lines that
+    changed. The scanner therefore has to treat `\\r` as a line end itself (`_skip_trivia`,
+    `_skip_value`, `_line_indent`), or a `//` comment on a CR-only file swallows the document."""
+    if "\r\n" in text:
+        return "\r\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
+
+
+def _newline_at(text: str, pos: int) -> str:
+    """The line ending of the line containing `pos` — what a value spliced there should use.
+
+    Per line rather than file-wide, so a block adopts its NEIGHBOURS' endings even in a file
+    that mixes them: with the file-wide answer, one stray CRLF line anywhere turned a spliced LF
+    block into CRLF, and an unchanged config then rendered differently from disk — `save`
+    wrote (and burnt a backup slot) while `diff_text` had nothing to show. Falls back to the
+    file-wide answer when the line has no terminator at all."""
+    n = len(text)
+    k = pos
+    while k < n and text[k] not in "\r\n":
+        k += 1
+    if k >= n:
+        return _newline_of(text)
+    if text[k] == "\r":
+        return "\r\n" if k + 1 < n and text[k + 1] == "\n" else "\r"
+    return "\n"
 
 
 def render(cfg: dict, base_text: str) -> str:
@@ -414,6 +479,7 @@ def render(cfg: dict, base_text: str) -> str:
     (losing comments) but never relocates agents/categories out of their scope."""
     if not base_text or not base_text.strip():
         return serialize(cfg)
+    newline = _newline_of(base_text)
     managed = managed_root(cfg)
     agents_val = managed.get("agents")
     agents_val = _clean_agents(agents_val) if isinstance(agents_val, dict) else (agents_val or {})
@@ -431,8 +497,9 @@ def render(cfg: dict, base_text: str) -> str:
             # Something to write and nowhere to put it (non-omo / hand-broken file): degrade to a
             # clean rewrite. The cost of that is every comment in the document, which on a unified
             # config means omo's config and not just omodel's — so it is reserved for the case
-            # where splicing genuinely cannot express the change.
-            return serialize(cfg)
+            # where splicing genuinely cannot express the change. The file's own line ending is
+            # the one thing about its formatting the rewrite can still honour.
+            return serialize(cfg).replace("\n", newline)
         # else: the key is absent from the file AND empty in cfg — nothing to express. Leave the
         # file alone rather than reformatting it to add `"categories": {}`.
 
@@ -441,17 +508,33 @@ def render(cfg: dict, base_text: str) -> str:
     for key in sorted(spans, key=lambda k: spans[k][0], reverse=True):
         value_start, value_end = spans[key]
         indent = _line_indent(base_text, value_start)
-        rendered = _reindent(json.dumps(values[key], indent=2, ensure_ascii=False), indent)
+        rendered = _reindent(
+            json.dumps(values[key], indent=2, ensure_ascii=False),
+            indent,
+            _newline_at(base_text, value_start),
+        )
         result = result[:value_start] + rendered + result[value_end:]
     return result
 
 
+def _read_verbatim(path: str) -> str:
+    """The file's text with its line endings untouched (`newline=""`) — what `render` splices
+    into, and what `save` compares against. Raises FileNotFoundError like a plain open."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
 def diff_text(cfg: dict, path: str) -> str:
     """Unified diff of render(cfg, on-disk) vs the current on-disk file (for the confirm modal),
-    so the modal shows exactly what changes — agents/categories only, comments outside intact."""
+    so the modal shows exactly what changes — agents/categories only, comments outside intact.
+
+    Compared BYTE-EXACT, endings included — the same comparison `save` makes, so the two can't
+    disagree about whether anything changes (normalizing the inputs first let a mixed-endings
+    file preview as "nothing to save" and then write). Only the OUTPUT is shown with `\\n`: the
+    diff is display text, and a `\\r` on every line is noise in a modal and a `--json` payload
+    alike. A uniform-CRLF file still diffs only the lines that change."""
     try:
-        with open(path, encoding="utf-8") as f:
-            old_text = f.read()
+        old_text = _read_verbatim(path)
     except FileNotFoundError:
         old_text = ""
     new_text = render(cfg, old_text)
@@ -462,7 +545,7 @@ def diff_text(cfg: dict, path: str) -> str:
         fromfile=path,
         tofile=path + " (new)",
     )
-    return "".join(diff_lines)
+    return "".join(diff_lines).replace("\r\n", "\n").replace("\r", "\n")
 
 
 @dataclass
@@ -479,11 +562,14 @@ def save(cfg: dict, path: str) -> SaveResult:
       (3) prune ONLY glob('[0-9]*.jsonc') (EXCLUDES original.jsonc) to the newest 20;
     then atomic temp+rename of render(cfg, on-disk). <dir> = dir of `path`. The write is
     text-preserving: only agents/categories are rewritten; comments / commented-out config
-    outside them survive (render() splices in place; missing file → serialize(cfg))."""
+    outside them survive (render() splices in place; missing file → serialize(cfg)).
+
+    The file's IDENTITY is preserved along with its text: line endings (`_newline_of`), its
+    permission bits, and — when `path` is a symlink — the link itself, which is written THROUGH
+    (the rename lands on the file it resolves to). `.backup/` stays beside `path` as given."""
     # Check whether anything changed
     try:
-        with open(path, encoding="utf-8") as f:
-            old_text = f.read()
+        old_text = _read_verbatim(path)
     except FileNotFoundError:
         old_text = None
 
@@ -530,18 +616,29 @@ def save(cfg: dict, path: str) -> SaveResult:
             except OSError:
                 pass  # best-effort prune
 
-    # Atomic temp-write + os.replace
-    config_parent = os.path.dirname(os.path.abspath(path))
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=config_parent,
-        delete=False,
-        suffix=".tmp",
-    ) as tmp:
-        tmp.write(new_text)
-        tmp_path = tmp.name
-    os.replace(tmp_path, path)
+    # Atomic temp-write + os.replace, onto the file `path` RESOLVES to. Replacing the path itself
+    # turned a symlinked config (a dotfile manager pointing ~/.omo/omo.jsonc at a repo file)
+    # into a detached regular file, with the repo copy stuck on the old model. The temp lives in
+    # the target's own directory — os.replace is atomic only within one filesystem — and takes
+    # the old file's permission bits before the rename: a temp file's default mode (0600 from
+    # NamedTemporaryFile, which this used) must not silently become the config's.
+    target = os.path.realpath(path)
+    mode = None
+    try:
+        mode = stat.S_IMODE(os.stat(target).st_mode)
+    except OSError:
+        pass  # nothing there yet — the new file keeps the umask default, like any fresh file
+    tmp_path = f"{target}.tmp-{os.getpid()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8", newline="") as tmp:
+            tmp.write(new_text)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
 
     return SaveResult(changed=True, backup=snapshot_path, original_created=original_created)
 
@@ -633,11 +730,17 @@ def restore(path: str, backup_name: str) -> None:
     — see that exception for why a verbatim cross-format copy is destructive."""
     config_dir = os.path.dirname(os.path.abspath(path))
     backup_dir = os.path.join(config_dir, ".backup")
-    os.makedirs(backup_dir, exist_ok=True)
 
-    # Scope check BEFORE anything is written, so a refusal leaves no snapshot behind either.
-    src_check = os.path.join(backup_dir, os.path.basename(backup_name))
-    backup_scope = _file_scope(src_check)
+    # Sanitize backup_name to a bare basename so it cannot escape .backup/ (path traversal), and
+    # require it to exist BEFORE anything is written — a name that isn't there must not burn a
+    # ring slot (or leave an empty `.backup/` behind) on its way to the error.
+    safe_name = os.path.basename(backup_name)
+    src = os.path.join(backup_dir, safe_name)
+    if not os.path.isfile(src):
+        raise FileNotFoundError(f"backup not found: {safe_name}")
+
+    # Scope check likewise BEFORE anything is written, so a refusal leaves no snapshot behind.
+    backup_scope = _file_scope(src)
     target_scope = _file_scope(path)
     if target_scope is None and os.path.abspath(path) == os.path.abspath(unified_config_path()):
         target_scope = "opencode"  # nothing on disk yet, but omo will read this path as unified
@@ -652,6 +755,7 @@ def restore(path: str, backup_name: str) -> None:
         )
 
     # Snapshot the current live config first (so the restore itself is undoable)
+    os.makedirs(backup_dir, exist_ok=True)
     now_utc = datetime.now(timezone.utc)
     ts = now_utc.strftime("%Y%m%d-%H%M%S") + f".{now_utc.microsecond // 1000:03d}"
     snapshot_path = os.path.join(backup_dir, f"{ts}.jsonc")
@@ -662,10 +766,5 @@ def restore(path: str, backup_name: str) -> None:
         with open(snapshot_path, "w", encoding="utf-8") as f:
             f.write("")
 
-    # Copy the chosen backup verbatim to the live config path. Sanitize backup_name to a
-    # bare basename so it cannot escape .backup/ (path traversal), and require it to exist.
-    safe_name = os.path.basename(backup_name)
-    src = os.path.join(backup_dir, safe_name)
-    if not os.path.isfile(src):
-        raise FileNotFoundError(f"backup not found: {safe_name}")
+    # Copy the chosen backup verbatim to the live config path (checked to exist above).
     shutil.copy2(src, path)

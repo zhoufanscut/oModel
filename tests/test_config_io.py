@@ -8,6 +8,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import stat
 import tempfile
 import time
 
@@ -724,3 +725,379 @@ class TestTopLevelValueSpan:
 
     def test_no_root_object_returns_none(self):
         assert _value_span("// just a comment\n[1, 2, 3]\n", "agents") is None
+
+
+# ---------------------------------------------------------------------------
+# save() keeps the file's identity — BOM, line endings, permission bits, a symlink
+# ---------------------------------------------------------------------------
+
+# A unified-scope config with comments in the three places that must survive: above the
+# document, inside `[opencode]` but outside agents/categories, and inside another top-level key.
+IDENTITY_SEED = """\
+// hand-curated banner — outside agents/categories, must survive
+{
+  "team_mode": true,
+  "[opencode]": {
+    // a note about the agents below
+    "agents": {
+      "sisyphus": {"model": "opencode/glm-5"}
+    },
+    "categories": {}
+  },
+  "claude_code": {
+    // keep me too
+    "enabled": false
+  }
+}
+"""
+IDENTITY_COMMENTS = ("// hand-curated banner", "// a note about the agents below", "// keep me too")
+BOM = "\ufeff"
+
+
+def _write_bytes(path: str, data: bytes) -> None:
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _set_sisyphus(cfg_path: str, model: str = "opencode/glm-9"):
+    """Load, change one model, save — the smallest edit `omodel set` performs."""
+    cfg, resolved = load_config(cfg_path)
+    cfg["[opencode]"]["agents"]["sisyphus"]["model"] = model
+    return save(cfg, resolved)
+
+
+class TestSaveKeepsFileIdentity:
+    """`save` rewrites two value spans and leaves the rest of the file — its bytes AND what kind
+    of file it is — as it found it. Each test here is a defect the 0.5.1 review/test pass found:
+    a BOM cost every comment, CRLF became LF, 0644 became 0600, a symlink became a file."""
+
+    def test_bom_prefixed_config_keeps_its_comments(self, tmp_path):
+        """U+FEFF hid the root `{` from the span scanner, so both spans came back None and
+        `render` fell back to the clean rewrite: one `set` and every comment — omo's own
+        included — was gone. The BOM is trivia now, and is kept like any other byte."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, (BOM + IDENTITY_SEED).encode("utf-8"))
+
+        _set_sisyphus(cfg_path)
+
+        after = _read_bytes(cfg_path)
+        assert after.startswith(b"\xef\xbb\xbf")
+        for comment in IDENTITY_COMMENTS:
+            assert comment.encode("utf-8") in after, comment
+        assert b'"model": "opencode/glm-9"' in after
+
+    def test_bom_and_bomless_saves_agree(self, tmp_path):
+        """Control: the BOM is the ONLY difference between the two results."""
+        bom_path = str(tmp_path / "with-bom" / "omo.jsonc")
+        plain_path = str(tmp_path / "no-bom" / "omo.jsonc")
+        _write_file(bom_path, BOM + IDENTITY_SEED)
+        _write_file(plain_path, IDENTITY_SEED)
+
+        _set_sisyphus(bom_path)
+        _set_sisyphus(plain_path)
+
+        assert _read_bytes(bom_path) == BOM.encode("utf-8") + _read_bytes(plain_path)
+
+    def test_crlf_config_stays_crlf(self, tmp_path):
+        """Read and written with `newline=""`, so the endings a Windows file arrives with are
+        the endings it keeps; the rewrite used to flip every line of the file to LF."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, IDENTITY_SEED.replace("\n", "\r\n").encode("utf-8"))
+
+        _set_sisyphus(cfg_path)
+
+        after = _read_bytes(cfg_path)
+        assert after.count(b"\r\n") == after.count(b"\n") > 5, "every line ending is CRLF"
+        assert b'"model": "opencode/glm-9"' in after
+        for comment in IDENTITY_COMMENTS:
+            assert comment.encode("utf-8") in after, comment
+
+    def test_crlf_preview_diff_lists_only_the_changed_lines(self, tmp_path):
+        """`diff_text` compares with the file's own endings (else every line differed, while
+        the preview claimed a one-line change) and renders with `\\n` — a `\\r` on every diff
+        line is noise in the modal and in the `--json` payload."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, IDENTITY_SEED.replace("\n", "\r\n").encode("utf-8"))
+        cfg, resolved = load_config(cfg_path)
+        cfg["[opencode]"]["agents"]["sisyphus"]["model"] = "opencode/glm-9"
+
+        diff = diff_text(cfg, resolved)
+
+        assert "\r" not in diff
+        changed = [ln for ln in diff.splitlines()
+                   if ln[:1] in "+-" and not ln.startswith(("+++", "---"))]
+        # One line out, three in: json.dumps expands the one-line object. Nothing else moves.
+        assert len(changed) == 4, changed
+        assert not any("team_mode" in ln or "keep me" in ln for ln in changed)
+
+    def test_unchanged_crlf_config_is_a_no_op_save(self, tmp_path):
+        """With the endings read verbatim, `render(cfg, on-disk) == on-disk` holds for an
+        unchanged CRLF file — nothing is written, no backup slot is spent."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, IDENTITY_SEED.replace("\n", "\r\n").encode("utf-8"))
+        cfg, resolved = load_config(cfg_path)
+        assert save(cfg, resolved).changed is True  # canonicalizes the one-line agents object
+        before = _read_bytes(cfg_path)
+        # Still CRLF after that first save — HEAD passed the no-op half of this test only
+        # because it had already flipped the whole file to LF.
+        assert before.count(b"\r\n") == before.count(b"\n") > 5
+
+        assert save(cfg, resolved).changed is False
+        assert _read_bytes(cfg_path) == before
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_save_keeps_the_permission_bits(self, tmp_path):
+        """The temp file's mode (0600, from the NamedTemporaryFile `save` used) rode the rename
+        onto the config, silently retightening a 0644 file on its first save."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, IDENTITY_SEED)
+        os.chmod(cfg_path, 0o640)
+
+        _set_sisyphus(cfg_path)
+
+        assert stat.S_IMODE(os.stat(cfg_path).st_mode) == 0o640
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks need a privilege on Windows")
+    def test_save_writes_through_a_symlinked_config(self, tmp_path):
+        """A dotfile manager (stow/chezmoi/yadm) points ~/.omo/omo.jsonc at a repo file.
+        Renaming over the link replaced it with a detached regular file: the repo copy stayed on
+        the old model and the next `stow` run would have clobbered the new one. The rename now
+        lands on the file the link resolves to; `.backup/` stays beside the link, where the
+        user pointed omodel."""
+        real = tmp_path / "dotfiles" / "omo.jsonc"
+        link_dir = tmp_path / "home" / ".omo"
+        _write_file(str(real), IDENTITY_SEED)
+        os.makedirs(str(link_dir))
+        link = link_dir / "omo.jsonc"
+        os.symlink(str(real), str(link))
+
+        _set_sisyphus(str(link))
+
+        assert os.path.islink(str(link))
+        assert '"opencode/glm-9"' in real.read_text(encoding="utf-8")
+        assert os.path.isdir(str(link_dir / ".backup"))
+        assert not os.path.exists(str(tmp_path / "dotfiles" / ".backup"))
+        assert not [n for n in os.listdir(str(tmp_path / "dotfiles")) if ".tmp" in n]
+
+    def test_no_temp_file_is_left_behind(self, tmp_path):
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, IDENTITY_SEED)
+        _set_sisyphus(cfg_path)
+        assert not [n for n in os.listdir(str(tmp_path)) if ".tmp" in n]
+
+
+class TestLoadConfigReportsUnreadablePaths:
+    """`load_config` guarded the parse but not the open: a directory at the path (`--config
+    ~/.omo`, one component short of the file) or an unreadable file escaped as a raw OSError
+    traceback. Both are `ConfigReadError` now — a ConfigParseError, so every caller's friendly
+    exit-1 handling covers them without knowing the difference."""
+
+    def test_directory_at_the_path(self, tmp_path):
+        from omodel.config_io import ConfigReadError
+        with pytest.raises(ConfigReadError, match="could not read config at"):
+            load_config(str(tmp_path))
+
+    def test_it_is_a_config_parse_error(self, tmp_path):
+        from omodel.config_io import ConfigReadError
+        assert issubclass(ConfigReadError, ConfigParseError)
+        with pytest.raises(ConfigParseError):
+            load_config(str(tmp_path))
+
+    @pytest.mark.skipif(os.name == "nt" or os.getuid() == 0, reason="needs POSIX, non-root")
+    def test_unreadable_file(self, tmp_path):
+        from omodel.config_io import ConfigReadError
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, IDENTITY_SEED)
+        os.chmod(cfg_path, 0o000)
+        try:
+            with pytest.raises(ConfigReadError, match=re.escape(cfg_path)):
+                load_config(cfg_path)
+        finally:
+            os.chmod(cfg_path, 0o644)
+
+    def test_unwritable_scaffold_location(self, tmp_path):
+        """A missing config is scaffolded; a path whose parent cannot be created (a FILE where
+        a directory is needed) is the same class of failure on the write side."""
+        from omodel.config_io import ConfigReadError
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        with pytest.raises(ConfigReadError, match="could not create config at"):
+            load_config(str(blocker / "sub" / "omo.jsonc"))
+
+
+class TestRestoreRefusesBeforeWriting:
+
+    def test_unknown_backup_name_burns_no_snapshot(self):
+        """A name that isn't in .backup/ used to take the safety snapshot first and raise
+        after — one ring slot spent on the way to an error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "oh-my-openagent.jsonc")
+            _write_file(cfg_path, ORIGINAL_JSONC)
+            save(MINIMAL_CONFIG, cfg_path)
+            backup_dir = os.path.join(tmpdir, ".backup")
+            before = sorted(os.listdir(backup_dir))
+            live = _read_file(cfg_path)
+
+            with pytest.raises(FileNotFoundError):
+                restore(cfg_path, "nope.jsonc")
+
+            assert sorted(os.listdir(backup_dir)) == before
+            assert _read_file(cfg_path) == live
+
+
+class TestMixedAndLegacyLineEndings:
+    """The two edge cases the CRLF change opened (found by the diff review), pinned."""
+
+    def test_preview_and_save_agree_on_a_mixed_endings_file(self, tmp_path):
+        """One stray CRLF line outside the spans in an otherwise-LF file. `diff_text` used to
+        normalize its inputs while `save` compared raw bytes — so with NO edit the preview said
+        nothing changes and the write flipped the spliced block to CRLF (burning a backup
+        slot; in the TUI it took the no-confirm "Nothing to save." path and wrote anyway).
+        A spliced block now takes its own line's ending, and the two compare the same bytes."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        mixed = IDENTITY_SEED.replace('  "team_mode": true,\n', '  "team_mode": true,\r\n')
+        _write_bytes(cfg_path, mixed.encode("utf-8"))
+        cfg, resolved = load_config(cfg_path)
+        assert save(cfg, resolved).changed is True  # canonicalizes the one-line agents object
+        before = _read_bytes(cfg_path)
+        assert before.count(b"\r\n") == 1, "the stray line is still the only CRLF one"
+
+        assert diff_text(cfg, resolved) == ""
+        assert save(cfg, resolved).changed is False
+        assert _read_bytes(cfg_path) == before
+
+    def test_spliced_block_takes_its_neighbours_ending(self, tmp_path):
+        """Same file, a real edit: the block under `"agents":` stays LF like its own line, the
+        stray CRLF line elsewhere stays CRLF, and the preview lists only the changed lines."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        mixed = IDENTITY_SEED.replace('  "team_mode": true,\n', '  "team_mode": true,\r\n')
+        _write_bytes(cfg_path, mixed.encode("utf-8"))
+        cfg, resolved = load_config(cfg_path)
+        cfg["[opencode]"]["agents"]["sisyphus"]["model"] = "opencode/glm-9"
+
+        diff = diff_text(cfg, resolved)
+        save(cfg, resolved)
+
+        after = _read_bytes(cfg_path)
+        assert after.count(b"\r\n") == 1
+        assert b'"model": "opencode/glm-9"\n' in after
+        changed = [ln for ln in diff.splitlines()
+                   if ln[:1] in "+-" and not ln.startswith(("+++", "---"))]
+        assert len(changed) == 4, changed
+
+    def test_classic_mac_cr_only_file_keeps_its_comments(self, tmp_path):
+        """With reads no longer translating `\\r` to `\\n`, a `//` comment that ended only at
+        `\\n` swallowed a CR-only document — both spans None, clean rewrite, comments gone.
+        Line comments now end at either character, and the file stays CR-only."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, IDENTITY_SEED.replace("\n", "\r").encode("utf-8"))
+
+        _set_sisyphus(cfg_path)
+
+        after = _read_bytes(cfg_path)
+        assert b"\n" not in after, "still CR-only"
+        assert after.count(b"\r") > 5
+        for comment in IDENTITY_COMMENTS:
+            assert comment.encode("utf-8") in after, comment
+        assert b'"model": "opencode/glm-9"' in after
+        # …and it is stable: the block was indented from its own line, so a re-save is a no-op.
+        cfg, resolved = load_config(cfg_path)
+        assert save(cfg, resolved).changed is False
+
+
+class TestLeadingWhitespaceJson5Accepts:
+    """The BOM was one character of a class: json5 also reads NBSP, U+2028/2029, vertical tab,
+    form feed and the U+2000 family as whitespace, and each hid the root `{` from the span
+    scanner exactly as the BOM did (diff review). `str.isspace` covers all of them."""
+
+    BODY = '{\n  "[opencode]": {\n    "agents": {"a": {}},\n    "categories": {}\n  }\n}\n'
+
+    @pytest.mark.parametrize("ws", ["\ufeff", "\u00a0", "\u2028", "\u2029", "\x0b", "\x0c", "\u2000"],
+                             ids=["bom", "nbsp", "u2028", "u2029", "vt", "ff", "u2000"])
+    def test_span_scanner_sees_past_it(self, ws):
+        from omodel.config_io import OPENCODE_BLOCK, _span_for_path
+        assert _span_for_path(ws + self.BODY, [OPENCODE_BLOCK, "agents"]) is not None
+        assert _span_for_path(ws + "\n" + self.BODY, [OPENCODE_BLOCK, "agents"]) is not None
+
+    def test_nbsp_prefixed_config_keeps_its_comments(self, tmp_path):
+        """End to end for one of them, through the real load → save path."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, "\u00a0" + IDENTITY_SEED)
+
+        _set_sisyphus(cfg_path)
+
+        after = _read_bytes(cfg_path).decode("utf-8")
+        assert after.startswith("\u00a0")
+        for comment in IDENTITY_COMMENTS:
+            assert comment in after, comment
+
+
+class TestRestoreLeavesNoEmptyBackupDir:
+
+    def test_bad_name_on_a_never_saved_config(self, tmp_path):
+        """`restore` created `.backup/` before checking the name existed, so a typo against a
+        config that had never been saved left an empty directory behind."""
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, IDENTITY_SEED)
+        with pytest.raises(FileNotFoundError):
+            restore(cfg_path, "nope.jsonc")
+        assert not os.path.exists(str(tmp_path / ".backup"))
+
+
+class TestCrOnlyCommentInsideTheManagedSpan:
+    """The CR fix has to reach BOTH `//` scanners. `_skip_trivia` finds the start of a span and
+    `_skip_value` its end; with only the first fixed (diff review, round two), a `//` comment
+    inside `agents` on a CR-only file ran the end scanner to EOF, and `render` spliced the new
+    value over everything after it — `categories`, the other top-level keys, both closing
+    braces — leaving invalid JSON. That placement is what omo's own commented-out palette looks
+    like, so it is the common case, not an exotic one."""
+
+    SEED = (
+        "// banner\n"
+        "{\n"
+        '  "team_mode": true,\n'
+        '  "[opencode]": {\n'
+        '    "agents": {\n'
+        '      "sisyphus": {\n'
+        '        "model": "opencode/glm-5"\n'
+        '        // "model": "openai/gpt-5.5"\n'
+        "      }\n"
+        "    },\n"
+        '    "categories": {"quick": {"model": "opencode/glm-5"}}\n'
+        "  },\n"
+        '  "claude_code": {"enabled": false}\n'
+        "}\n"
+    )
+
+    @pytest.mark.parametrize("newline", ["\r", "\r\n", "\n"], ids=["cr", "crlf", "lf"])
+    def test_tail_after_the_span_survives(self, tmp_path, newline):
+        import json5
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_bytes(cfg_path, self.SEED.replace("\n", newline).encode("utf-8"))
+
+        _set_sisyphus(cfg_path)
+
+        after = _read_bytes(cfg_path).decode("utf-8")
+        parsed = json5.loads(after)  # still a document, not a truncated one
+        assert parsed["[opencode]"]["agents"]["sisyphus"]["model"] == "opencode/glm-9"
+        assert parsed["[opencode]"]["categories"] == {"quick": {"model": "opencode/glm-5"}}
+        assert parsed["claude_code"] == {"enabled": False}
+        assert parsed["team_mode"] is True
+        assert "// banner" in after
+        # The file keeps its ending kind throughout, and the end scanner stopped at the span.
+        other = {"\r": "\n", "\r\n": None, "\n": "\r"}[newline]
+        if other is not None:
+            assert other not in after.replace("\r\n", "")
+        cfg, resolved = load_config(cfg_path)
+        assert save(cfg, resolved).changed is False
+
+    def test_end_scanner_stops_at_a_cr_terminated_comment(self):
+        from omodel.config_io import _skip_value
+        text = '{ // note\r  "a": 1\r}\rTAIL'
+        end = _skip_value(text, 0)
+        assert text[end:] == "\rTAIL"

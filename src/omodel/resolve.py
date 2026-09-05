@@ -33,18 +33,24 @@ _STAMP_MIN_DIGITS = 6
 # 4-digit version-like token isn't mistaken for a year (no real model version is a 4-digit year).
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 
-# A FLOOR under the data-derived `real_tokens`: size/tier words that make a different model no
-# matter what omo currently recommends. Deriving the whole set from omo's chain ids is otherwise
-# right (no hand-maintained suffix list), but it silently loses a token the week omo drops its
-# last id carrying one — omo 4.19.4 dropped `gpt-5.4-mini-fast`, its only `mini`, and a
-# provider's `gpt-5.4-mini` immediately EXACT-filled a `gpt-5.4` entry (substitute_for=None, no
-# warn: a cheaper model served as the real one). These tokens never become noise. Deliberately
-# only tier words — build tags omo happens to name (`turbo`, `codex`, `jibao`) must stay
-# strippable, and the derived set still covers everything else.
+# A FLOOR under the data-derived `real_tokens`: size/tier and serving-mode words that make a
+# different model no matter what omo currently recommends. Deriving the whole set from omo's
+# chain ids is otherwise right (no hand-maintained suffix list), but it silently loses a token
+# the week omo drops its last id carrying one — omo 4.19.4 dropped `gpt-5.4-mini-fast`, its only
+# `mini`, and a provider's `gpt-5.4-mini` immediately EXACT-filled a `gpt-5.4` entry
+# (substitute_for=None, no warn: a cheaper model served as the real one). These tokens never
+# become noise. Deliberately only tier and mode words — build tags omo happens to name (`turbo`,
+# `codex`, `jibao`) must stay strippable, and the derived set still covers everything else.
 _TIER_TOKENS = frozenset({
     "mini", "nano", "lite", "small", "tiny",     # smaller than the bare id
     "flash", "fast", "air", "instant",           # faster/cheaper serving tier
     "pro", "plus", "max", "ultra", "heavy",      # larger than the bare id
+    # Serving MODE — a `-thinking` build reasons where the bare id does not, `-base` /
+    # `-instruct` / `-chat` are different post-training, `-draft` is a speculative-decoding
+    # helper, `-free` is a rate-limited tier. omo never names these, so without the floor each
+    # one EXACT-filled the bare slot (the same hole as `mini`, one suffix family over); with it
+    # they fill the slot only as a marked `≈` same-line substitute, never as the model omo named.
+    "thinking", "free", "base", "instruct", "chat", "draft",
 })
 
 # omo lumps EVERY non-opus Claude into one detect_family, `claude-non-opus`: its sibling

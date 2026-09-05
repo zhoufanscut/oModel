@@ -941,3 +941,66 @@ class TestVariantWarnOpencodeFirst:
         self._seed("opencode", {"kimi-k3": ["max"]})  # would flag `low`, but none is asked for
         res = Resolver.build(_make_catalog(["opencode/kimi-k3"]), sugg)
         assert self._warn_for(res, "kimi-k3", "opencode", None) == []
+
+
+class TestServingModeTokensAreNeverNoise:
+    """The `_TIER_TOKENS` floor covers serving-MODE words as well as size/tier words.
+
+    Regression (0.5.1 review): a provider's `glm-5.2-thinking` / `-free` / `-base` / `-instruct`
+    / `-chat` / `-draft` build EXACT-filled omo's bare `glm-5.2` entry — substitute_for None, no
+    warn — because none of those words appears in any chain id, so the derived `real_tokens` had
+    nothing to protect and `_is_noise_suffix` stripped them like a `jibao` build tag. The same
+    hole `mini` fell through in 4.19.4, one suffix family over."""
+
+    MODES = ("thinking", "free", "base", "instruct", "chat", "draft")
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_mode_suffix_does_not_exact_fill_the_bare_id(self, sugg, mode):
+        res = Resolver.build(_make_catalog([f"p/glm-5.2-{mode}"]), sugg)
+        assert mode in res.real_tokens
+        assert not res._matches_omo_id(f"glm-5.2-{mode}", "glm-5.2")
+        assert res._resolve_available("glm-5.2") is None
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_mode_build_is_offered_only_as_a_marked_substitute(self, frozen_sugg, mode):
+        """End to end on the frozen chain (it has a glm-5 entry): the build still reaches the
+        pick list — it is the newest glm you have — but as `≈ omo glm-5`, never as glm-5."""
+        res = Resolver.build(_make_catalog([f"p/glm-5-{mode}"]), frozen_sugg)
+        rows = [r for r in res.candidates("agent:probe") if r["model"] == f"glm-5-{mode}"]
+        assert rows, f"glm-5-{mode} should still be offered as a same-line substitute"
+        assert rows[0]["substitute_for"] == "glm-5"
+
+    def test_build_tags_stay_strippable(self, sugg):
+        """The floor is deliberately narrow: a `turbo`/`codex`/`jibao` tag is still provider
+        noise, so such a build keeps exact-filling the bare id (DESIGN §resolve.py)."""
+        res = Resolver.build(_make_catalog(["p/glm-5.2-turbo"]), sugg)
+        assert res._matches_omo_id("glm-5.2-turbo", "glm-5.2")
+        assert res._resolve_available("glm-5.2") == "glm-5.2-turbo"
+
+
+class TestModeBuildWithoutASharedFamilyIsHidden:
+    """The other half of the serving-mode rule (found by the diff review): a mode build is a
+    marked substitute only when it shares the entry's `detect_family`. Two cases fall outside
+    that and are HIDDEN rather than offered — a decision, pinned here so it cannot drift back
+    into an exact fill by accident."""
+
+    def test_family_less_id_has_no_substitute_path(self, sugg):
+        """`big-pickle` is an omo id with no family at all, so `big-pickle-thinking` can't be
+        same-lined to it — and must not exact-fill it either. It appears on no target."""
+        assert sugg.detect_family("big-pickle") is None
+        res = Resolver.build(_make_catalog(["p/big-pickle-thinking"]), sugg)
+        assert res._resolve_available("big-pickle") is None
+        targets = [f"agent:{a}" for a in sugg.agents] + [f"cat:{c}" for c in sugg.categories]
+        offered = {r["model"] for t in targets for r in res.candidates(t)}
+        assert "big-pickle-thinking" not in offered
+
+    def test_thinking_build_of_a_different_family_is_hidden(self, sugg):
+        """omo files `kimi-*-thinking` under its own kimi-thinking family, so a `kimi-k3-thinking`
+        build is a different family from the `kimi-k3` entry: neither an exact fill nor a
+        same-line substitute. Right, since omo configures reasoning per family."""
+        base = sugg.detect_family("kimi-k3")
+        thinking = sugg.detect_family("kimi-k3-thinking")
+        assert base is not None and thinking is not None and thinking.family != base.family
+        res = Resolver.build(_make_catalog(["p/kimi-k3-thinking"]), sugg)
+        assert res._resolve_available("kimi-k3") is None
+        assert res._same_line_match("kimi-k3") is None

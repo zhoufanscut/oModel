@@ -9,9 +9,12 @@ one without updating this file: both surfaces (`app.py`, `cli.py`) and the agent
 1. **Python floor is 3.9.** Put `from __future__ import annotations` at the top of every
    module. No runtime PEP-604 unions (`isinstance(x, A | B)`) and no
    runtime PEP-585 generics; annotations-as-strings make `dict | None` in signatures fine.
-2. **REAL-CONFIG SAFETY.** The live `~/.config/opencode/oh-my-openagent.jsonc`
-   is the user's real file. Never read-then-write it in tests or examples. Every test passes an
-   explicit temp `path`/`--config`. **Nothing may write anywhere
+2. **REAL-CONFIG SAFETY.** The live `~/.omo/omo.jsonc` (and the legacy
+   `~/.config/opencode/oh-my-openagent.jsonc`) is the user's real file. Never read-then-write it
+   in tests or examples. The unified path carries a side effect a temp one does not — the first
+   run there adopts a stranded legacy presets store and DELETES the original — which is why
+   `tests/conftest.py` redirects `$HOME`/`$USERPROFILE` as well as `$XDG_CONFIG_HOME`. Every
+   test passes an explicit temp `path`/`--config`. **Nothing may write anywhere
    under the real config dir** — that covers `.backup/` *and* `.omodel-presets.json`
    (§presets.py), not just the config file itself.
 3. **NEVER RENDER DATA AS A PLAIN `str` (`app.py`).** Textual parses content markup in
@@ -71,7 +74,11 @@ are not. Every payload carries `"schema": 1`; bump only on a breaking change.
   collapse it.
 - **Refusal shape** — `{"schema", "ok": false, "error": <slug>, "message", …context}`. `error`
   slugs are stable: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`, `gpt_only`,
-  `unknown_preset`, `active_preset`, `bad_input`, `write_failed`.
+  `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, `bad_config` (the config
+  could not be read or parsed — exit 1; the one failure that used to print no payload at all).
+- **`degraded_reason`** (beside `degraded`) — `null` when not degraded; else
+  `"opencode is not on PATH"` or the `CatalogUnavailable` message (non-zero exit, zero lines,
+  timeout). Additive — no schema bump.
 - **`degraded`** (on `show`/`candidates`/`check`) — `not catalog.connected`, i.e. availability is
   UNKNOWN. Never omit it: a consumer reading `candidates: []` without it concludes "no models
   exist" rather than "opencode is unreachable". Correspondingly `available` is `null` (not
@@ -144,7 +151,7 @@ commit.
   filename-based); `managed_root(cfg)->dict` (read, never creates) and
   `managed_root_for_write(cfg)->dict` (creates/coerces the block) — the node holding
   `agents`/`categories`; `load_config(path=None)->(cfg, path)`
-  (raises `ConfigParseError(ValueError)` — message carries the path — on malformed JSONC; cli.py
+  (raises `ConfigParseError(ValueError)` — message carries the path — on malformed JSONC, or its subclass `ConfigReadError` when the path cannot be opened or scaffolded at all; cli.py
   catches it for a friendly exit-1 message on the TUI/`--print` paths; scaffolds the UNIFIED
   shape except at an explicit legacy path);
   `serialize(cfg)->str` (canonical clean form — dirtiness + from-scratch fallback; never required

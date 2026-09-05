@@ -1291,3 +1291,182 @@ class TestClosedStdout:
 
         monkeypatch.setattr("sys.stdout", io.StringIO())
         cli._drop_stdout()
+
+
+# ---------------------------------------------------------------------------
+# Failures the 0.5.1 review/test pass found on the agent surface
+# ---------------------------------------------------------------------------
+
+_JSON_VERBS = [
+    ("targets", ["targets"]),
+    ("show", ["show"]),
+    ("check", ["check"]),
+    ("candidates", ["candidates", "agent:sisyphus"]),
+    ("set", ["set", "agent:sisyphus", "opencode/glm-5"]),
+    ("clear", ["clear", "agent:sisyphus"]),
+    ("apply", ["apply"]),
+    ("preset ls", ["preset", "ls"]),
+]
+
+
+class TestBadConfigIsStillJson:
+    """agent-usage.md §4: failures come back as JSON when `--json` is passed. A config that
+    could not be parsed — or opened at all — was the one failure that printed NOTHING on
+    stdout, on exactly the exit code (1) an agent is told to stop and report on: the report it
+    built was a JSONDecodeError."""
+
+    @pytest.mark.parametrize("name,argv", _JSON_VERBS, ids=[n for n, _ in _JSON_VERBS])
+    def test_malformed_config_emits_the_failure_payload(
+        self, tmp_path, capsys, monkeypatch, name, argv
+    ):
+        import io
+        monkeypatch.setattr("sys.stdin", io.StringIO("{}"))  # `apply` never gets this far
+        cfg = tmp_path / "omo.jsonc"
+        _write(cfg, '{ "[opencode]": { "agents": { ')
+
+        rc = _run([*argv, "--config", str(cfg), "--json"])
+
+        captured = capsys.readouterr()
+        assert rc == 1
+        payload = _json.loads(captured.out)
+        assert payload["ok"] is False
+        assert payload["error"] == "bad_config"
+        assert payload["schema"] == 1
+        assert "could not parse config" in payload["message"]
+        # The human line still goes to stderr — someone watching an agent's run gets a sentence.
+        assert "could not parse config" in captured.err
+
+    @pytest.mark.parametrize("name,argv", _JSON_VERBS[:4], ids=[n for n, _ in _JSON_VERBS[:4]])
+    def test_directory_at_the_config_path_is_reported_not_raised(
+        self, tmp_path, capsys, name, argv
+    ):
+        """`--config ~/.omo` — one component short of `~/.omo/omo.jsonc` — was an unhandled
+        IsADirectoryError: a traceback, exit 1 only by Python's default, and empty stdout."""
+        cfg_dir = tmp_path / "dot-omo"
+        cfg_dir.mkdir()
+
+        rc = _run([*argv, "--config", str(cfg_dir), "--json"])
+
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert "Traceback" not in captured.err
+        assert str(cfg_dir) in captured.err, "the user aimed one component short — name the path"
+        assert _json.loads(captured.out)["error"] == "bad_config"
+
+    def test_prose_mode_keeps_stdout_empty(self, tmp_path, capsys):
+        cfg_dir = tmp_path / "dot-omo"
+        cfg_dir.mkdir()
+        assert _run(["show", "--config", str(cfg_dir)]) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "could not read config" in captured.err
+        assert "Traceback" not in captured.err
+
+
+class TestPresetRefsThatIntRefuses:
+
+    def test_plus_minus_ref_is_a_refusal_not_a_traceback(self, tmp_path):
+        """`preset use +-1` passed `lstrip("+-").isdigit()` and then blew up in `int()`."""
+        rc, payload = _run_json(
+            ["preset", "use", "+-1", "--config", _agent_cfg(tmp_path), "--json"])
+        assert rc == 3
+        assert payload["error"] == "unknown_preset"
+
+
+class TestDryRunChangedMatchesTheRealRun:
+
+    def test_a_presets_only_write_previews_as_changed(self, tmp_path):
+        """Under a sync conflict a `set` whose config effect is a no-op still writes: it adopts
+        the foreign config into the active preset. The preview looked at the config diff alone
+        and said `changed: false` — for the one write a careful agent would dry-run first."""
+        cfg = _agent_cfg(tmp_path)
+        assert _run(["set", "cat:quick", "opencode/glm-5", "--config", cfg]) == 0  # seeds presets
+        # An edit from outside omodel: the config now matches no preset.
+        _write(cfg, _read(cfg).replace("opencode/glm-5", "zhipuai/glm-5"))
+
+        rc, preview = _run_json(
+            ["set", "cat:quick", "zhipuai/glm-5", "--config", cfg, "--dry-run", "--json"])
+        assert rc == 0
+        assert preview["sync_conflict"] is True
+        assert preview["diff"] == "", "the config itself would not change"
+        rc, real = _run_json(["set", "cat:quick", "zhipuai/glm-5", "--config", cfg, "--json"])
+        assert rc == 0
+
+        assert real["changed"] is True, "the presets file was written (adoption)"
+        assert preview["changed"] is True, "…so the preview must have said so"
+
+
+class TestApplyReportsWhatItWrote:
+
+    def test_none_is_reported_as_off(self, tmp_path, monkeypatch):
+        """`set --variant none` reports `off` — the spelling actually written (opencode's `none`
+        is omo's `off`). `apply` echoed `none` back for a file that said `off`."""
+        import io
+        cfg = _agent_cfg(tmp_path)
+        monkeypatch.setattr("sys.stdin", io.StringIO(_json.dumps(
+            {"cat:quick": {"model": "opencode/glm-5", "variant": "none"}})))
+        rc, payload = _run_json(["apply", "--config", cfg, "--json"])
+        assert rc == 0
+        assert payload["applied"][0]["variant"] == "off"
+        assert '"off"' in _read(cfg)
+        assert '"none"' not in _read(cfg)
+
+
+class TestCheckFlagCountsRealTargets:
+
+    def test_check_enumerates_the_same_targets_as_the_verb(self, tmp_path, capsys):
+        """`--check` appended `.ultrawork` to all 11 agents (41 targets) while `targets`
+        offers 31 — ten of the extra ones every other verb refuses with `unknown_target`."""
+        from omodel.resolve import Resolver
+
+        cfg = _agent_cfg(tmp_path)
+        rc, payload = _run_json(["targets", "--config", cfg, "--json"])
+        assert rc == 0
+        capsys.readouterr()
+
+        # Membership, not just the count: record every target `--check` actually resolves.
+        seen = []
+        resolve = Resolver.candidates
+
+        def spy(self, target):
+            seen.append(target)
+            return resolve(self, target)
+
+        with patch.object(Resolver, "candidates", spy):
+            assert _run(["--check", "--config", cfg]) == 0
+
+        out = capsys.readouterr().out
+        assert f"{len(payload['targets'])} targets" in out, out
+        assert seen == payload["targets"]
+        assert all(".ultrawork" not in t or t.startswith("agent:sisyphus.") for t in seen)
+
+
+class TestDegradedReason:
+    """`degraded: true` alone reads the same for an ABSENT opencode and a BROKEN one — and only
+    the first is fixed by installing it. `degraded_reason` says which."""
+
+    def test_not_degraded_is_none(self, tmp_path):
+        rc, payload = _run_json(["show", "--config", _agent_cfg(tmp_path), "--json"])
+        assert rc == 0
+        assert payload["degraded"] is False
+        assert payload["degraded_reason"] is None
+
+    def test_absent_opencode(self, tmp_path):
+        rc, out = _run_degraded(["show", "--config", _agent_cfg(tmp_path), "--json"])
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload["degraded"] is True
+        assert payload["degraded_reason"] == "opencode is not on PATH"
+
+    @pytest.mark.parametrize("verb", [["show"], ["candidates", "agent:sisyphus"], ["check"]],
+                             ids=["show", "candidates", "check"])
+    def test_broken_opencode_names_the_failure(self, tmp_path, capsys, verb):
+        """`opencode models` on PATH but printing nothing → CatalogUnavailable → its message,
+        in the payload AND as a stderr note (the prose surface was silent about it)."""
+        cfg = _agent_cfg(tmp_path)
+        _run([*verb, "--config", cfg, "--json"], stdout="")
+        captured = capsys.readouterr()
+        payload = _json.loads(captured.out)
+        assert payload["degraded"] is True
+        assert "zero provider/model lines" in payload["degraded_reason"]
+        assert "could not be read" in captured.err

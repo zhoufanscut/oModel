@@ -59,7 +59,11 @@ omodel set agent:sisyphus opencode/claude-opus-5 --variant max
 
 **Use a candidate's `value` verbatim.** It is already `provider/model`; do not assemble that
 string yourself. Each candidate also carries `variants` — the variants `opencode` reports for
-that exact `(provider, model)`, which is what `--variant` is checked against.
+that exact `(provider, model)`, which is what `--variant` is checked against. An **empty**
+`variants` means opencode has not reported a set for that pair — nothing is cached for it yet,
+or the provider reports none — not that the model has no levels; `--variant` is then accepted
+unchecked. That cache fills when the TUI shows a model's detail, so on a machine where only the
+CLI has run it is usually empty.
 
 ⚠ **Every model id on this page is illustrative, and some are certainly out of date.** omo
 revises its suggested models most weeks, and which providers serve them depends on what this
@@ -97,7 +101,8 @@ Failures also come back as JSON when you pass `--json`:
 ```
 
 `error` is a stable slug: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`,
-`gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`.
+`gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, and `bad_config`
+(the config file could not be read or parsed — an exit 1, so stop and report it).
 
 ## 5. Commands
 
@@ -119,9 +124,9 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
 
 ```json
 // omodel show --json
-{ "schema": 1, "ok": true, "omodel_version": "0.4.0",
+{ "schema": 1, "ok": true, "omodel_version": "0.5.1",
   "config_path": "/home/you/.omo/omo.jsonc", "config_scope": "opencode",
-  "degraded": false, "providers": ["opencode", "zhipuai"],
+  "degraded": false, "degraded_reason": null, "providers": ["opencode", "zhipuai"],
   "active_preset": {"index": 0, "name": "default"},
   "presets": [{"index": 0, "name": "default", "models": 12, "active": true}],
   "sync_conflict": false,
@@ -130,8 +135,8 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
                "variant": "max", "assigned": true, "available": true, "known": true}] }
 
 // omodel candidates agent:sisyphus --json
-{ "schema": 1, "ok": true, "target": "agent:sisyphus", "degraded": false, "gpt_only": false,
-  "sync_conflict": false, "current": "opencode/claude-opus-4-8",
+{ "schema": 1, "ok": true, "target": "agent:sisyphus", "degraded": false, "degraded_reason": null,
+  "gpt_only": false, "sync_conflict": false, "current": "opencode/claude-opus-4-8",
   "candidates": [{"index": 0, "source": "omo", "provider": "opencode", "model": "claude-opus-5",
                   "value": "opencode/claude-opus-5", "variant": "max", "substitute_for": null,
                   "warn": [], "current": false, "settable": true,
@@ -167,7 +172,10 @@ If `opencode` is missing or unreadable, omodel cannot tell what you can run. The
 
 **Do not conclude a model is unusable from an empty candidate list.** Check `degraded` first. If
 it is true and that matters, tell the user `opencode` isn't reachable rather than "reporting" that
-nothing works.
+nothing works. `degraded_reason` (on `show`, `candidates` and `check`) says which it is:
+`"opencode is not on PATH"`, or what `opencode models` did instead of answering — exited
+non-zero, printed nothing, timed out. The first is fixed by installing opencode; the rest by
+`omodel --refresh-models`, or by the user looking at opencode itself.
 
 ## 7. Changing several models: use `apply` or `preset use`
 

@@ -600,7 +600,10 @@ class Session:
         """Resolve a preset reference — a name, or a 1-based index as int or digit string — to a
         0-based index, or None. Name match is exact first, then case-insensitive; a purely
         numeric ref is read as an index only when no preset is literally NAMED that, so a preset
-        called "2" stays addressable."""
+        called "2" stays addressable. Whatever `int()` refuses (`+-1`, a superscript digit) is
+        simply not an index — it must come back None, never escape: the CLI turns None into an
+        `unknown_preset` refusal, and an exception here was a traceback with an empty `--json`
+        stdout."""
         names = [p.name for p in self.store.presets]
         if isinstance(ref, str):
             if ref in names:
@@ -608,11 +611,12 @@ class Session:
             lowered = [n.lower() for n in names]
             if ref.lower() in lowered:
                 return lowered.index(ref.lower())
-        text = str(ref).strip()
-        if text.lstrip("+-").isdigit():
-            idx = int(text) - 1
-            if 0 <= idx < len(self.store.presets):
-                return idx
+        try:
+            idx = int(str(ref).strip()) - 1
+        except ValueError:
+            return None
+        if 0 <= idx < len(self.store.presets):
+            return idx
         return None
 
     def switch_preset(self, index: int) -> presets_mod.Preset:
