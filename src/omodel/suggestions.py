@@ -17,7 +17,8 @@ from importlib.resources import files
 # Models whose detect_family is None contribute NO vendor — do not invent a family for them.
 FAMILY_VENDOR = {
     "claude-opus": "anthropic", "claude-non-opus": "anthropic",
-    "openai-reasoning": "openai", "gpt-5": "openai", "gpt-legacy": "openai",
+    "openai-deep-research": "openai", "openai-reasoning": "openai",
+    "gpt-6-astra": "openai", "gpt-6": "openai", "gpt-5": "openai", "gpt-legacy": "openai",
     "gemini": "google", "grok": "xai",
     "kimi-thinking": "moonshot", "kimi": "moonshot",
     "glm": "zhipu", "minimax": "minimax", "deepseek": "deepseek",

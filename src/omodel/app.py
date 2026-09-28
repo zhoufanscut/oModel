@@ -2338,7 +2338,7 @@ class OModelApp(App):
     def _target_label(target: str) -> str:
         """Short human name for a target id, for undo/redo notifications:
         'agent:sisyphus' → 'sisyphus', 'agent:sisyphus.ultrawork' → 'sisyphus.ultrawork',
-        'cat:deep' → 'deep'. → `session.target_label`."""
+        'cat:deep-low' → 'deep-low'. → `session.target_label`."""
         return session_mod.target_label(target)
 
     def _is_dirty(self) -> bool:

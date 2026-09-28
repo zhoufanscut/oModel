@@ -376,7 +376,7 @@ and is inherently racy). Re-run it if locking is ever added — it is the accept
 C=/tmp/omodel-conc.jsonc
 printf '{"agents":{},"categories":{}}' > $C
 omodel set cat:quick opencode/glm-5 --config $C >/dev/null    # materialize the preset first
-for t in agent:sisyphus agent:oracle agent:librarian cat:deep cat:quick cat:artistry; do
+for t in agent:sisyphus agent:oracle agent:librarian cat:deep-low cat:quick cat:artistry; do
   omodel set "$t" opencode/glm-5 --config $C --json >/dev/null 2>&1 &
 done; wait
 # Count how many of the 6 actually landed:

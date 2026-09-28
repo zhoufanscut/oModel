@@ -59,6 +59,13 @@ GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 # `compaction` is valid on every agent. Hard-coded agent key, like `GPT_ONLY_AGENTS`, not a data field.
 ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 
+# Retired category keys and the key omo reads them as. omo 5.0 split `deep` into `deep-low` (the
+# default lane) and `deep-high` (the escalation lane), and canonicalizes a `deep` key to `deep-low`
+# on load, dropping it when `deep-low` is also set (`omo-config-core/src/schema/
+# legacy-category-names.ts`). We mirror that, so a config or preset written before 5.0 lands on
+# the target omo actually runs instead of vanishing as an unknown one.
+LEGACY_CATEGORY_ALIASES = {"deep": "deep-low"}
+
 
 # ---------------------------------------------------------------------------
 # Target-id helpers and guards (moved out of app.py — it re-imports the ones it calls directly,
@@ -119,6 +126,23 @@ def coerce_dict(parent: dict, key: str) -> dict:
     return value
 
 
+def canonicalize_categories(categories) -> bool:
+    """Rename every `LEGACY_CATEGORY_ALIASES` key in a `categories` map to its current name, IN
+    PLACE, keeping key order. When the new name is already set the legacy entry is dropped, not
+    merged — omo's rule. Returns True if anything changed; a non-dict is left alone."""
+    if not isinstance(categories, dict) or not any(k in categories for k in LEGACY_CATEGORY_ALIASES):
+        return False
+    renamed = {}
+    for name, node in categories.items():
+        canonical = LEGACY_CATEGORY_ALIASES.get(name, name)
+        if canonical != name and canonical in categories:
+            continue
+        renamed[canonical] = node
+    categories.clear()
+    categories.update(renamed)
+    return True
+
+
 def managed_root(cfg) -> dict:
     """The node holding `agents`/`categories` for READS — `config_io.managed_root`, re-exported so
     `app.py` / `cli.py` reach the scope through one place (they already go through this module for
@@ -172,7 +196,7 @@ def gpt_only(target: str) -> bool:
 
 def target_label(target: str) -> str:
     """Short human name for a target id: 'agent:sisyphus' → 'sisyphus',
-    'agent:sisyphus.ultrawork' → 'sisyphus.ultrawork', 'cat:deep' → 'deep'."""
+    'agent:sisyphus.ultrawork' → 'sisyphus.ultrawork', 'cat:deep-low' → 'deep-low'."""
     for prefix in ("agent:", "cat:"):
         if target.startswith(prefix):
             return target[len(prefix):]
@@ -226,6 +250,9 @@ class Session:
     adopted_presets: int | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
+        # A pre-5.0 `deep` is read as `deep-low`, as omo reads it. Before the baseline, so the
+        # rename alone never reads as unsaved (omo migrates the file itself on its next start).
+        canonicalize_categories(self.managed.get("categories"))
         # Dirtiness baseline for the config: the serialization last written to (or loaded from)
         # disk. Dirtiness is COMPUTED against this, never a flag, so undoing back to the saved
         # state reads clean and a structural-but-unserialized change (an empty sub-object) is
@@ -273,7 +300,8 @@ class Session:
             pass  # ditto — a missing archive copy is untidy, not a failure worth a traceback
 
     def _normalize_store_spelling(self) -> None:
-        """Rewrite every preset's reasoning level to the spelling THIS config's scope resolves.
+        """Rewrite every preset's reasoning level to the spelling THIS config's scope resolves,
+        and its retired category keys to their current names (`canonicalize_categories`).
 
         Applies to the whole store, not just an adopted one, so a preset written by an older
         omodel is corrected too. Agent/category nodes take `variant_key_for`; `ultrawork` /
@@ -300,6 +328,7 @@ class Session:
                 if isinstance(agent, dict):
                     for sub in SUBKINDS:
                         fix(agent.get(sub), "variant")
+            canonicalize_categories(preset.categories)
             for category in preset.categories.values():
                 fix(category, top_key)
 

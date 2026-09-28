@@ -20,8 +20,8 @@ line when a new one does.
 - **target** — one editable slot (**"slot" means a target and nothing else** — a *preset* is
   addressed by index, see below). Four id shapes: `agent:<name>`, `agent:<name>.ultrawork`,
   `agent:<name>.compaction`, `cat:<name>` (== the `#targets` option IDs). → CONTRACTS.md "Shared shapes"
-- **agent / category** — a named omo agent (sisyphus, hephaestus…; 11) / task category (deep,
-  quick…; 8). → DESIGN §Problem
+- **agent / category** — a named omo agent (sisyphus, hephaestus…; 11) / task category (deep-low,
+  quick…; 9). → DESIGN §Problem
 - **sub-target** — `ultrawork` (model swapped in on an `ulw` message; **Sisyphus-only** — omo honors
   it on no other agent) or `compaction` (auto-summary model, any agent), nested under an agent.
   *Agents only; categories have none.* → DESIGN §Textual contract, session.py `ULTRAWORK_AGENTS`

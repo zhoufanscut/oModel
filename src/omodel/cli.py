@@ -354,7 +354,7 @@ def _build_parser() -> argparse.ArgumentParser:
                     "`value` verbatim with `omodel set`. "
                     "Example: omodel candidates agent:sisyphus --json",
     )
-    p_cand.add_argument("target", help="Target id, e.g. agent:sisyphus or cat:deep.")
+    p_cand.add_argument("target", help="Target id, e.g. agent:sisyphus or cat:deep-low.")
 
     subs.add_parser(
         "check", parents=[common],
@@ -668,6 +668,18 @@ def _candidate_payload(session, target: str, index: int, row: dict, current: str
 # Guards (shared by set / apply)
 # ---------------------------------------------------------------------------
 
+def _unknown_target_message(target: str) -> str:
+    """The refusal for a target omo does not define — naming the new key when it is a retired
+    category (`cat:deep` → `cat:deep-low`), so an agent working from an old guide can recover."""
+    from omodel import session as session_mod
+
+    msg = f"{target!r} is not a target omo defines — run `omodel targets` for the list."
+    name = target[len("cat:"):] if target.startswith("cat:") else None
+    if name in session_mod.LEGACY_CATEGORY_ALIASES:
+        msg += f" omo 5.0 renamed it to 'cat:{session_mod.LEGACY_CATEGORY_ALIASES[name]}'."
+    return msg
+
+
 def _validate(session, target: str, value: str, variant, force: bool):
     """`None` if the assignment may be written, else `(error, message)`.
 
@@ -683,8 +695,7 @@ def _validate(session, target: str, value: str, variant, force: bool):
     from omodel import session as session_mod
 
     if not session.is_known(target):
-        return ("unknown_target",
-                f"{target!r} is not a target omo defines — run `omodel targets` for the list.")
+        return ("unknown_target", _unknown_target_message(target))
 
     parts = _split_value(value)
     if parts is None:
@@ -860,8 +871,7 @@ def _cmd_candidates(config_override, target: str, as_json: bool) -> int:
 
     if not session.is_known(target):
         return _fail(
-            "unknown_target",
-            f"{target!r} is not a target omo defines — run `omodel targets` for the list.",
+            "unknown_target", _unknown_target_message(target),
             as_json, target=target,
         )
 
@@ -1038,8 +1048,7 @@ def _cmd_clear(config_override, target, dry_run, as_json) -> int:
         return rc
     if not session.is_known(target):
         return _fail(
-            "unknown_target",
-            f"{target!r} is not a target omo defines — run `omodel targets` for the list.",
+            "unknown_target", _unknown_target_message(target),
             as_json, target=target,
         )
     before, _ = session.assignment(target)
