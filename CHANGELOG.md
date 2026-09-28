@@ -13,6 +13,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   missing opencode and a broken one, and only the first is fixed by installing it. Every verb
   now also says so on stderr.
 
+### Changed
+
+- Bundled suggestions now come from omo 5.0.1. omo split the `deep` category into `deep-low`
+  and `deep-high`, so there are 9 categories now, not 8. The fallback chains follow omo's new
+  models (`gpt-6-astra`, `gpt-6-luna-fast`, `claude-fable-5-1`, `claude-opus-5-5`, …), and the
+  `vercel` and `quotio-openai` providers are no longer suggested (`chatgpt-subscription` is new).
+- A `deep` category in your config or in a saved preset now shows up as `deep-low`, the same way
+  omo 5.0 reads it (if `deep-low` is also set, the old `deep` is dropped, as omo does). The new
+  name is written with your next save. `omodel set cat:deep` is refused with a message that
+  points to `cat:deep-low`.
+
 ### Fixed
 
 - A provider's `-thinking`, `-free`, `-base`, `-instruct`, `-chat` or `-draft` build no longer

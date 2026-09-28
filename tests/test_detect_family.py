@@ -62,7 +62,11 @@ class TestDetectFamilyParity:
             ("claude-opus-4-7", "claude-opus", ("max",), ()),
             ("claude-sonnet-4-6", "claude-non-opus", (), ("max",)),
             ("gpt-5.5", "gpt-5", ("xhigh",), ()),
-            ("glm-5", "glm", (), ("max",)),
+            # omo 5.0 gave glm a `max` rung (it had none through 4.19).
+            ("glm-5", "glm", ("max",), ()),
+            # omo 5.0's GPT-6 families; `gpt-6-astra` is a pattern ordered before `gpt-6`.
+            ("gpt-6-astra", "gpt-6-astra", ("max",), ()),
+            ("gpt-6-luna-fast", "gpt-6", ("max",), ()),
             ("deepseek-v4-pro", "deepseek", ("max",), ()),
         ],
     )
@@ -117,7 +121,7 @@ AGENT_NAMES = {
     "multimodal-looker", "oracle", "prometheus", "sisyphus", "sisyphus-junior",
 }
 CATEGORY_NAMES = {
-    "artistry", "deep", "quick", "ultrabrain",
+    "artistry", "deep-high", "deep-low", "quick", "ultrabrain",
     "unspecified-high", "unspecified-low", "visual-engineering", "writing",
 }
 
@@ -168,6 +172,16 @@ ACCEPTED_VARIANT_DRIFT = {
     # a qwen id drifts by construction. Nothing to reconcile until omo populates it.
     ("qwen3.6-flash", "low"),
     ("qwen3.8-max-preview", "max"),
+
+    # omo 5.0.1, reviewed 2026-09-28. The same two shapes as above, on 5.0's renamed ids:
+    # a top tier the heuristic registry stops short of (claude-fable-5-1 still falls in
+    # claude-non-opus, which lists only low/medium/high — as claude-fable-5 did), and the `off`
+    # bottom rung no family lists (now also on the fast explore/librarian heads).
+    ("claude-fable-5-1", "max"),
+    ("claude-fable-5-1", "xhigh"),
+    ("grok-4.7", "xhigh"),
+    ("deepseek-flash", "off"),
+    ("kimi-for-coding-highspeed", "off"),
 }
 
 
@@ -184,8 +198,8 @@ class TestBundledSuggestionsLoad:
             f"-{AGENT_NAMES - set(sugg.agents)}"
         )
 
-    def test_8_categories(self, sugg):
-        assert len(sugg.categories) == 8, f"Expected 8 categories, got {len(sugg.categories)}: {list(sugg.categories)}"
+    def test_9_categories(self, sugg):
+        assert len(sugg.categories) == 9, f"Expected 9 categories, got {len(sugg.categories)}: {list(sugg.categories)}"
         assert set(sugg.categories) == CATEGORY_NAMES, (
             f"category set changed: +{set(sugg.categories) - CATEGORY_NAMES} "
             f"-{CATEGORY_NAMES - set(sugg.categories)}"

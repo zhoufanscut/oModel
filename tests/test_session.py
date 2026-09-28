@@ -95,7 +95,7 @@ class TestGuards:
         ("agent:hephaestus", True),
         ("agent:hephaestus.compaction", True),
         ("agent:sisyphus", False),
-        ("cat:deep", False),
+        ("cat:deep-low", False),
         ("nonsense", False),
     ])
     def test_gpt_only_covers_subtargets(self, target, expected):
@@ -127,7 +127,7 @@ class TestGuards:
     @pytest.mark.parametrize("target,expected", [
         ("agent:sisyphus", ("agent", "sisyphus", None)),
         ("agent:sisyphus.ultrawork", ("agent", "sisyphus", "ultrawork")),
-        ("cat:deep", ("cat", "deep", None)),
+        ("cat:deep-low", ("cat", "deep-low", None)),
         ("agent:sisyphus.bogus", None),   # not a real sub-kind
         ("agent:", None),
         ("cat:", None),
@@ -138,7 +138,7 @@ class TestGuards:
 
     def test_target_label_strips_the_prefix(self):
         assert session_mod.target_label("agent:sisyphus.ultrawork") == "sisyphus.ultrawork"
-        assert session_mod.target_label("cat:deep") == "deep"
+        assert session_mod.target_label("cat:deep-low") == "deep-low"
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +417,51 @@ class TestPresets:
         s.store.presets.append(presets.capture("2", {"agents": {}, "categories": {}}))
         # "2" is a real NAME here, so it must win over the 1-based index reading.
         assert s.preset_index("2") == 1
+
+
+class TestLegacyCategoryAlias:
+    """omo 5.0 split `deep` into `deep-low`/`deep-high` and reads a `deep` key as `deep-low`
+    (dropped when `deep-low` is also set). A pre-5.0 config or preset must land there too."""
+
+    def test_canonicalize_renames_in_place_and_keeps_order(self):
+        cats = {"quick": {"model": "a/b"}, "deep": {"model": "c/d"}, "writing": {}}
+        assert session_mod.canonicalize_categories(cats) is True
+        assert list(cats) == ["quick", "deep-low", "writing"]
+        assert cats["deep-low"] == {"model": "c/d"}
+
+    def test_canonicalize_drops_the_legacy_key_when_the_new_one_is_set(self):
+        cats = {"deep": {"model": "old/x"}, "deep-low": {"model": "new/y"}}
+        assert session_mod.canonicalize_categories(cats) is True
+        assert cats == {"deep-low": {"model": "new/y"}}
+
+    @pytest.mark.parametrize("value", [{}, {"quick": {}}, None, "oops", []])
+    def test_canonicalize_leaves_everything_else_alone(self, value):
+        before = json.dumps(value)
+        assert session_mod.canonicalize_categories(value) is False
+        assert json.dumps(value) == before
+
+    def test_a_loaded_deep_reads_as_deep_low_and_not_dirty(self, tmp_path):
+        s = _session(tmp_path, '{"agents": {}, "categories": {"deep": {"model": "openai/gpt-5.5"}}}')
+        assert s.cfg["categories"] == {"deep-low": {"model": "openai/gpt-5.5"}}
+        assert s.is_dirty() is False
+        assert s.sync_conflict is False
+
+    def test_a_saved_deep_is_written_back_as_deep_low(self, tmp_path):
+        s = _session(tmp_path, '{"agents": {}, "categories": {"deep": {"model": "openai/gpt-5.5"}}}')
+        s.set_model("agent:probe", "openai", "gpt-5.5")
+        s.save()
+        reloaded, _ = config_io.load_config(s.config_path)
+        assert reloaded["categories"] == {"deep-low": {"model": "openai/gpt-5.5"}}
+
+    def test_a_stored_preset_deep_switches_in_as_deep_low(self, tmp_path):
+        s = _session(tmp_path)
+        s.store.presets.append(presets.Preset(
+            name="old", saved_at="2026-08-01T00:00:00Z", agents={},
+            categories={"deep": {"model": "openai/gpt-5.5"}},
+        ))
+        s._normalize_store_spelling()
+        s.switch_preset(1)
+        assert s.cfg["categories"] == {"deep-low": {"model": "openai/gpt-5.5"}}
 
 
 # ---------------------------------------------------------------------------

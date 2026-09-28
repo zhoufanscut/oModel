@@ -618,9 +618,9 @@ class TestTopLevelVariantTier:
 class TestCategoryTargets:
 
     def test_cat_deep_candidates_contract_shape(self, resolver):
-        """cat:deep returns candidates with correct CONTRACTS.md shape."""
-        rows = resolver.candidates("cat:deep")
-        # May be empty if deep has empty chain or no connected models; just check shape if any
+        """cat:deep-low returns candidates with correct CONTRACTS.md shape."""
+        rows = resolver.candidates("cat:deep-low")
+        # May be empty if deep-low has empty chain or no connected models; just check shape if any
         for i, row in enumerate(rows):
             _assert_candidate_shape(row, i)
 

@@ -133,7 +133,7 @@ commit.
   `cache_dir()->str`; `read(key, ttl_seconds=None)->str|None`; `write(key, stdout, args=None)->None`;
   `age_seconds(key)->float|None`; `clear()->None`; `CACHE_VERSION`. Best-effort: missing/corrupt/
   expired → miss; write errors swallowed (a non-writable cache never breaks the caller).
-- `suggestions.py`: `FAMILY_VENDOR` (frozen 15-map); `@dataclass Family`; `@dataclass
+- `suggestions.py`: `FAMILY_VENDOR` (frozen map, key set == bundled families); `@dataclass Family`; `@dataclass
   Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
   Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
   `normalize_model_id(s)->str`; `load(path=None)->Suggestions` (no explicit path/env override →
@@ -300,7 +300,7 @@ commit.
   object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
 ## Bundled data (generated — do not hand-edit; regenerate with `--refresh-omo`)
-- `data/omo-suggestions.json` — 11 agents, 8 categories. Consume via `suggestions.load()`.
+- `data/omo-suggestions.json` — 11 agents, 9 categories. Consume via `suggestions.load()`.
   **The omo version/commit is not pinned here** — a weekly CI job refreshes this file from omo's
   newest stable tag, so any number written down goes stale within days; read `meta.omoVersion` /
   `meta.omoCommit` out of the file itself. Only those TWO counts are pinned (asserted by

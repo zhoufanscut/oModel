@@ -705,7 +705,7 @@ class TestPresetsAdoption:
             name="newer", saved_at="2026-07-01T00:00:00Z",
             agents={"probe": {"model": "openai/gpt-5.5", "reasoning": "low",
                               "ultrawork": {"model": "openai/gpt-5.5", "reasoning": "max"}}},
-            categories={"deep": {"model": "openai/gpt-5.5", "reasoningEffort": "medium"}},
+            categories={"quick": {"model": "openai/gpt-5.5", "reasoningEffort": "medium"}},
         ))
         session._normalize_store_spelling()
         session.switch_preset(1)
@@ -715,7 +715,7 @@ class TestPresetsAdoption:
         assert probe["variant"] == "low"
         assert "reasoning" not in probe
         assert probe["ultrawork"]["variant"] == "max"
-        assert reloaded["categories"]["deep"]["variant"] == "medium"
+        assert reloaded["categories"]["quick"]["variant"] == "medium"
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +810,17 @@ def _run_cli(argv) -> int:
 
 
 class TestCliOnAUnifiedConfig:
+    def test_set_on_a_retired_category_names_its_replacement(self, tmp_path, capsys):
+        """`cat:deep` is gone in omo 5.0; an agent following an old guide is told the new key
+        instead of just `unknown_target`."""
+        path = tmp_path / "omo.jsonc"
+        _write(path, CLI_UNIFIED)
+        assert _run_cli(["--config", str(path), "set", "cat:deep", "openai/gpt-5.5",
+                         "--json"]) == cli.EXIT_REJECTED
+        out = json.loads(capsys.readouterr().out)
+        assert out["error"] == "unknown_target"
+        assert "cat:deep-low" in out["message"]
+
     def test_show_reports_the_scope(self, tmp_path, capsys):
         for text, name, expected in ((UNIFIED, "omo.jsonc", "opencode"),
                                      (LEGACY, "oh-my-openagent.jsonc", "root")):
@@ -828,7 +839,7 @@ class TestCliOnAUnifiedConfig:
             "agent:sisyphus": {"model": "opencode/claude-opus-4-7", "variant": "thinking"},
             "agent:sisyphus.ultrawork": {"model": "opencode/gpt-5.5", "variant": "high"},
             "agent:sisyphus.compaction": {"model": "opencode/gpt-5.5", "variant": "high"},
-            "cat:deep": {"model": "openai/gpt-5.5", "variant": "medium"},
+            "cat:deep-low": {"model": "openai/gpt-5.5", "variant": "medium"},
         })
         with patch("sys.stdin", io.StringIO(payload)):
             assert _run_cli(["--config", str(path), "apply", "--json"]) == 0
@@ -840,7 +851,7 @@ class TestCliOnAUnifiedConfig:
         assert agent["reasoning"] == "thinking" and "variant" not in agent
         assert agent["ultrawork"]["variant"] == "high" and "reasoning" not in agent["ultrawork"]
         assert agent["compaction"]["variant"] == "high"
-        assert reloaded[config_io.OPENCODE_BLOCK]["categories"]["deep"]["reasoning"] == "medium"
+        assert reloaded[config_io.OPENCODE_BLOCK]["categories"]["deep-low"]["reasoning"] == "medium"
         assert "// survive me" in _read(path)
         assert len(os.listdir(tmp_path / ".backup")) == 2  # the pinned original + one snapshot
 

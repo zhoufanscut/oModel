@@ -104,7 +104,7 @@ prefix and a valid variant, and saves a clean config.
   everywhere (kimi) or uncached.
 - **What omo suggests (bundled, build-time):** `omo-suggestions.json`, generated from
   `~/source/oh-my-openagent/packages/model-core/src/` (verified importable & serializable under bun:
-  11 agents, 8 categories — the family and `knownVariants` counts are unpinned churn, see
+  11 agents, 9 categories — the family and `knownVariants` counts are unpinned churn, see
   CONTRACTS §Bundled data). Schema the app **consumes**:
   ```json
   { "meta": {"omoVersion":"","omoCommit":"","generatedAt":""},
@@ -156,6 +156,18 @@ last wins (`omo-config-core/src/loader/resolution.ts`), so a top-level `agents` 
   so a user with a project config can watch an omodel edit save correctly and still not take
   effect. Pre-existing, but newly easy to hit now that `.omo/omo.jsonc` is the name everyone
   types. Not handled; `omodel check` warning about a shadowing project layer is the obvious fix.
+
+### Retired category names
+
+omo 5.0 split the `deep` category into `deep-low` (the default lane) and `deep-high` (the
+escalation lane). omo reads a leftover `deep` key as `deep-low` — dropping it when `deep-low` is
+also set — and its startup migration rewrites the file (`omo-config-core/src/schema/
+legacy-category-names.ts`). omodel mirrors the alias (`session.LEGACY_CATEGORY_ALIASES` /
+`canonicalize_categories`) on the loaded config and on every stored preset, **in memory and
+before the dirtiness baselines**, so a pre-5.0 `deep` shows up as `deep-low` without reading as
+unsaved work, and a preset captured before 5.0 switches in on the target omo runs. The rename
+reaches disk with the next save. The CLI refuses `cat:deep` as `unknown_target`, with a message
+naming `cat:deep-low`.
 
 ### Backups across the move
 
@@ -397,8 +409,8 @@ omo's own first-choice ones for `sisyphus`, so the picture names no particular u
 │ CATEGORIES                   ││                                                  │
 │   visual-engineering      ▂▂ ││                                                  │
 │   ultrabrain                 ││                                                  │
-│   deep                       ││                                                  │
-│   artistry                   ││                                                  │
+│   deep-low                   ││                                                  │
+│   deep-high                  ││                                                  │
 └──────────────────────────────┘│                                                  │
 ┌─ PRESETS ────────────────────┐│                                                  │
 │ ● 1 daily                    ││                                                  │
@@ -608,7 +620,7 @@ In summary:
   `providers` array (omo's per-model preference order) is **kept** for the gateway tie-break in
   `resolve_prefix`.
 - **`FAMILY_VENDOR` — hardcoded dict in `suggestions.py` (NOT from omo; omo has no such table).** The
-  complete 15-family → vendor map used by `vendors_served`. The authoritative table is the
+  complete family → vendor map used by `vendors_served`. The authoritative table is the
   `FAMILY_VENDOR` dict in `src/omodel/suggestions.py` — read it there; not duplicated here (it drifts).
   `vendor(family) = FAMILY_VENDOR.get(family)` → `None` for unknown/None. Models whose `detect_family`
   is `None` (opencode's `big-pickle`, `*-free`, `nemotron-*` — no omo family; note omo 4.13 added a
@@ -621,7 +633,7 @@ In summary:
   complete `FAMILY_VENDOR` map (§suggestions.py). `p` is a **gateway** iff `vendors_served(p) ≥ 2`,
   else **dedicated**; `gateways = {p for p in connected if vendors_served(p) >= 2}` is computed once at
   load. Data-driven, no hardcoded provider list — `opencode`/`openrouter`/`vercel`/`github-copilot`
-  (and any future) self-classify; `openai`'s three families all map to vendor `openai` so it counts as
+  (and any future) self-classify; `openai`'s families all map to vendor `openai` so it counts as
   **one** = dedicated. Verified live: `opencode`→8 vendors→gateway;
   `openai`/`zhipuai`/`moonshotai-cn`/`deepseek`→1→dedicated.
 - **`resolve_prefix(model_id, source, entry=None)` (dedicated-first):** *mine* → its provider; else
@@ -799,7 +811,7 @@ In summary:
   refresh path writes it):
   `{ "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json", "agents": {}, "categories": {} }`
   — valid and minimal; the left pane is populated from the bundled snapshot, so empty maps still show
-  all 11 agents / 8 categories as unset, and only what you set gets written.
+  all 11 agents / 9 categories as unset, and only what you set gets written.
 
 ### `session.py` — the headless core (decision #18)
 - **Purpose:** hold the editable state and perform every mutation, so `app.py` (TUI) and
@@ -1487,7 +1499,7 @@ dependency added here would ship inside the very binary this replaces.
 4. **detect_family parity:** `kimi-k2.5`→`kimi` (no `max`), `k2p5`→`kimi-thinking`, `claude-opus-4-7`
    →`claude-opus` (has `max`), `gpt-5.5`→`gpt-5` (`xhigh`), `glm-5`→`glm` (no `max`),
    `deepseek-v4-pro`→`deepseek` (has `max`).
-5. **Bundled suggestions:** `importlib.resources` loads with no omo checkout; 11 agents, 8 categories.
+5. **Bundled suggestions:** `importlib.resources` loads with no omo checkout; 11 agents, 9 categories.
 6. **Refresh:** checkout + `OMO_SRC` + bun → rewrites data file (meta bumped); no omo/bun → non-fatal.
 7. **Headless UI (Pilot):** select `agent:sisyphus`, set `cand:*` → `deepseek/deepseek-v4-pro`, `s`,
    confirm → re-`json5.load`: model updated, `team_mode`/`experimental`/`claude_code` unchanged by

@@ -30,8 +30,8 @@ verbatim (timestamped backups each save).
 │ CATEGORIES                   ││                                                  │
 │   visual-engineering      ▂▂ ││                                                  │
 │   ultrabrain                 ││                                                  │
-│   deep                       ││                                                  │
-│   artistry                   ││                                                  │
+│   deep-low                   ││                                                  │
+│   deep-high                  ││                                                  │
 └──────────────────────────────┘│                                                  │
 ┌─ PRESETS ────────────────────┐│                                                  │
 │ ● 1 daily                    ││                                                  │
