@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-28
+
+Support for oh-my-openagent 5.0.x. omo 5.0 split the `deep` category into `deep-low` and
+`deep-high`, and the bundled suggestions now follow omo 5.0.1. If you are still on omo 4.19,
+stay on omodel 0.5.1 — a 4.19 omo does not read `deep-low`.
+
 ### Added
 
 - `show`, `candidates` and `check` (`--json`) carry `degraded_reason`: why availability is
