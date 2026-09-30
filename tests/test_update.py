@@ -343,6 +343,51 @@ class TestLatestRelease:
         assert excinfo.value.kind == "network"
 
 
+class TestCABundle:
+    """The release binary's OpenSSL looks for CAs at a path from the build machine; on a user's
+    Mac it isn't there and every call failed CERTIFICATE_VERIFY_FAILED. `_ssl_context` falls
+    back to the system bundle — but only when the default is actually missing."""
+
+    def _setup(self, monkeypatch, tmp_path, default_exists):
+        import ssl
+        import types
+
+        loaded = []
+
+        class _Ctx:
+            def load_verify_locations(self, cafile=None):
+                loaded.append(cafile)
+
+        default = tmp_path / "default.pem"
+        if default_exists:
+            default.write_text("x")
+        bundle = tmp_path / "system.pem"
+        bundle.write_text("x")
+        monkeypatch.setattr(ssl, "create_default_context", lambda: _Ctx())
+        monkeypatch.setattr(ssl, "get_default_verify_paths",
+                            lambda: types.SimpleNamespace(cafile=str(default)))
+        monkeypatch.setattr(update, "_CA_BUNDLES", (str(tmp_path / "nope.pem"), str(bundle)))
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+        return loaded, str(bundle)
+
+    def test_missing_default_falls_back_to_system_bundle(self, monkeypatch, tmp_path):
+        loaded, bundle = self._setup(monkeypatch, tmp_path, default_exists=False)
+        update._ssl_context()
+        assert loaded == [bundle]
+
+    def test_working_default_is_left_alone(self, monkeypatch, tmp_path):
+        loaded, _ = self._setup(monkeypatch, tmp_path, default_exists=True)
+        update._ssl_context()
+        assert loaded == []
+
+    def test_user_env_wins(self, monkeypatch, tmp_path):
+        loaded, _ = self._setup(monkeypatch, tmp_path, default_exists=False)
+        monkeypatch.setenv("SSL_CERT_FILE", "/somewhere/custom.pem")
+        update._ssl_context()
+        assert loaded == []
+
+
 class TestTokenHandling:
     """A `$GITHUB_TOKEN` exists only to dodge the 60/hour unauthenticated API limit. It must
     reach api.github.com and nowhere else — asset downloads are public, and GitHub redirects

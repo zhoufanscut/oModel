@@ -1192,6 +1192,12 @@ dependency added here would ship inside the very binary this replaces.
   the download URL is read straight out of the release JSON — so `_open` refuses any non-https
   scheme rather than let a `file:///…` asset URL be "downloaded", and `_StripAuthOnRedirect`
   refuses to follow a redirect to one (`_open` sees only the first URL).
+- **CAs come from the OS when the binary can't find its own.** The release binary's Python is
+  from `actions/setup-python`, whose OpenSSL looks for CAs at a path baked in on the build
+  machine — missing on a user's Mac, so every call failed `CERTIFICATE_VERIFY_FAILED`.
+  `_ssl_context` keeps full verification but, when OpenSSL's default CA file doesn't exist and
+  `$SSL_CERT_FILE`/`$SSL_CERT_DIR` are unset, loads the first system bundle in `_CA_BUNDLES`
+  (`/etc/ssl/cert.pem`, then the Debian/Fedora/openSUSE paths). Stdlib only — no certifi.
 - **Auth is optional and one-way.** `$GITHUB_TOKEN`/`$GH_TOKEN`, when set, is sent to
   api.github.com only — purely to dodge the 60-req/hour unauthenticated limit on a shared NAT.
   Asset downloads never carry it, and `_StripAuthOnRedirect` drops the header when a redirect

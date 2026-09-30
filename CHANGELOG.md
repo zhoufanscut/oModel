@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `omodel --update` from the standalone binary failed on macOS with `CERTIFICATE_VERIFY_FAILED`
+  (`unable to get local issuer certificate`). The binary couldn't find any CA certificates; it
+  now falls back to the system's own bundle (`/etc/ssl/cert.pem` on macOS).
+
 ## [0.6.1] — 2026-09-30
 
 Bundled suggestions now follow oh-my-openagent 5.1.5.

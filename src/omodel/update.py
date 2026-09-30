@@ -45,6 +45,7 @@ import platform
 import re
 import shlex
 import shutil
+import ssl
 import stat
 import subprocess
 import sys
@@ -311,6 +312,35 @@ def _host(url: str) -> str:
 _READ_ERRORS = (OSError, http.client.HTTPException)
 
 
+# Where the OS keeps its CA bundle, first match wins. The release binary's Python comes from
+# actions/setup-python, and its OpenSSL looks for CAs at a path baked in on the BUILD machine —
+# on a user's Mac that path doesn't exist, so every https call failed with
+# CERTIFICATE_VERIFY_FAILED. Stdlib only, so no certifi: use the system's own bundle instead.
+_CA_BUNDLES = (
+    "/etc/ssl/cert.pem",                    # macOS, Alpine, BSDs
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Arch
+    "/etc/pki/tls/certs/ca-bundle.crt",     # Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",               # openSUSE
+)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """A verifying context that can actually find CAs. Only steps in when OpenSSL's own default
+    CA file is missing and the user hasn't pointed `$SSL_CERT_FILE`/`$SSL_CERT_DIR` somewhere."""
+    ctx = ssl.create_default_context()
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return ctx
+    default = ssl.get_default_verify_paths().cafile
+    if default and os.path.isfile(default):
+        return ctx
+    for bundle in _CA_BUNDLES:
+        if os.path.isfile(bundle):
+            with contextlib.suppress(OSError, ssl.SSLError):
+                ctx.load_verify_locations(cafile=bundle)
+                break
+    return ctx
+
+
 _opener = None
 
 
@@ -320,7 +350,9 @@ def _open(url: str, timeout: float):
     one level lower, to exercise `_open` itself)."""
     global _opener
     if _opener is None:
-        _opener = urllib.request.build_opener(_StripAuthOnRedirect())
+        _opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=_ssl_context()), _StripAuthOnRedirect()
+        )
 
     # https only. `build_opener` keeps urllib's default File/FTP/Data handlers, so a
     # `browser_download_url` of `file:///…` — which we read straight out of the release JSON —
