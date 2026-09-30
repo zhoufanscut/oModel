@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now come from omo 5.1.5. `deep-low` now suggests `gpt-6.1-sol` and
+  `gpt-6.1-sol-fast` first, `quick` adds `glm-5.3-flash` and `mimo-v2.6-flash`, and
+  `unspecified-low` now suggests `claude-sonnet-5-5` first. `gpt-6.1-sol` is known as its own
+  model family, so its variant list (`low` to `max`, no `minimal`) is checked correctly.
+
 ## [0.6.0] — 2026-09-28
 
 Support for oh-my-openagent 5.0.x. omo 5.0 split the `deep` category into `deep-low` and

@@ -67,6 +67,10 @@ class TestDetectFamilyParity:
             # omo 5.0's GPT-6 families; `gpt-6-astra` is a pattern ordered before `gpt-6`.
             ("gpt-6-astra", "gpt-6-astra", ("max",), ()),
             ("gpt-6-luna-fast", "gpt-6", ("max",), ()),
+            # omo 5.1: `gpt-6.1-sol` normalizes to `gpt-6-1-sol`, which the plain `gpt-6` includes
+            # would also catch — its own pattern must win, and it has no `minimal` rung.
+            ("gpt-6.1-sol", "gpt-6.1-sol", ("max",), ("minimal",)),
+            ("gpt-6.1-sol-fast", "gpt-6.1-sol", ("max",), ("minimal",)),
             ("deepseek-v4-pro", "deepseek", ("max",), ()),
         ],
     )
@@ -98,6 +102,7 @@ class TestFamilyOrdering:
         [
             ("openai-reasoning", "gpt-5"),
             ("kimi-thinking", "kimi"),
+            ("gpt-6.1-sol", "gpt-6"),
             ("claude-opus", "claude-non-opus"),
         ],
     )
