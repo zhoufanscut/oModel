@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-09-30
+
+Bundled suggestions now follow oh-my-openagent 5.1.5.
+
 ### Changed
 
 - Bundled suggestions now come from omo 5.1.5. `deep-low` now suggests `gpt-6.1-sol` and
