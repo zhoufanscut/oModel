@@ -10,6 +10,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel --update` from the standalone binary failed on macOS with `CERTIFICATE_VERIFY_FAILED`
   (`unable to get local issuer certificate`). The binary couldn't find any CA certificates; it
   now falls back to the system's own bundle (`/etc/ssl/cert.pem` on macOS).
+- The cursor in the candidate list could vanish when a model's detail line finished loading
+  right after you moved it, and `v` then did nothing, with no message. The cursor now stays
+  where you put it.
 
 ## [0.6.1] — 2026-09-30
 

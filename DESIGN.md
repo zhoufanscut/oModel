@@ -1279,7 +1279,10 @@ dependency added here would ship inside the very binary this replaces.
   `provider/model` identity, not its index — and restored on every re-render, so the cursor returns
   to your last position when you revisit a target **and after `r` refresh** (a refresh re-resolves
   the chain against new availability and reorders rows; identity-keying survives that, an index
-  wouldn't). It's the one per-session cache a refresh deliberately does **not** clear. The `catalog.detail`
+  wouldn't). It's the one per-session cache a refresh deliberately does **not** clear. Its writer
+  (the `OptionHighlighted` handler) runs off a queued event, so a re-render that can land on its own
+  schedule — a finished detail fetch — first copies the cursor the pane shows **now** into it
+  (`_remember_live_cand_highlight`); otherwise a move whose event is still queued is lost. The `catalog.detail`
   line is a ~3s / ~320 MB subprocess, so it is fetched in a background worker (cached per model,
   debounced ~0.2s, and **capped to one fetch at a time** — §cache.py) and appears when ready; the rest
   of the pane renders instantly so highlighting is never blocked.

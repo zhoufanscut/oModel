@@ -2314,6 +2314,48 @@ async def _land_detail_fetch(pilot, target: str, provider: str, bare: str) -> No
     assert calls["n"] == 1, f"the fetch must actually have run, else the test proves nothing: {calls}"
 
 
+def test_pilot_cursor_survives_a_fetch_landing_before_its_highlight_event(pilot_config):
+    """A detail fetch that lands between a cursor move and the handling of its (queued)
+    OptionHighlighted must keep the cursor where it is.
+
+    `_cand_choice` only learns the move when that event is handled, so the landing re-render
+    used to restore the OLD choice (none, on a fresh target), and the late event was dropped as
+    stale: the cursor vanished and `v` bailed silently. That is the darwin-arm64 flake in the
+    v0.6.1 release build (`NoMatches: '#variant-list'`) — a starved runner widens the window.
+    Here the window is forced by holding the move's event back."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            cands = pilot.app.query_one("#candidates", OptionList)
+            pilot.app._cand_choice.pop("agent:sisyphus", None)
+            i = next(
+                j for j in range(cands.option_count)
+                if "openai/gpt-5.5" in str(cands.get_option_at_index(j).prompt)
+            )
+            cands.focus()
+            # Hold the move's OptionHighlighted back: the pane shows the new cursor, the app has
+            # not heard of it — the window a starved runner opens by itself.
+            with cands.prevent(OptionList.OptionHighlighted):
+                cands.highlighted = i
+            await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
+            assert cands.highlighted == i, (
+                f"a landing fetch must not drop an unacknowledged cursor move: {cands.highlighted}"
+            )
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, VariantModal), pilot.app.screen
+
+    asyncio.run(_run())
+
+
 def test_pilot_vkey_pick_on_nonassigned_row_survives_a_landing_fetch(pilot_config):
     """A `v` pick on a row that is NOT the assignment reaches cfg only on Enter, so until then it
     is pending state — and it must survive a rebuild of `_rows`, which is a CACHE.

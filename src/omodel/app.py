@@ -2147,6 +2147,7 @@ class OModelApp(App):
             try:
                 self._render_detail(self._current_target)
                 if not any(isinstance(s, VariantModal) for s in self.screen_stack):
+                    self._remember_live_cand_highlight(self._current_target)
                     self._rows.clear()
                     self._render_candidates(self._current_target)
             except NoMatches:
@@ -2199,6 +2200,27 @@ class OModelApp(App):
             row = rows[i]
             return f"{row['provider']}/{row['model']}"
         return None
+
+    def _remember_live_cand_highlight(self, target: str) -> None:
+        """Record the cursor the pane shows NOW into `_cand_choice`, ahead of a re-render.
+
+        `_cand_choice` is written by `_candidate_highlighted`, but OptionHighlighted is QUEUED:
+        a cursor move whose event has not been handled yet is on screen but not remembered. A
+        re-render in that window (a detail fetch landing — it runs on its own schedule) restored
+        the older choice, or none on a fresh target, and the late event was then dropped as
+        stale — so the cursor vanished and `v` became a silent no-op. Must run BEFORE
+        `_rows` is cleared: the live option id is an index into the rows the pane was built from."""
+        cands = self.query_one("#candidates", OptionList)
+        hi = cands.highlighted
+        if hi is None:
+            return
+        try:
+            oid = cands.get_option_at_index(hi).id
+        except Exception:
+            return
+        ident = self._cand_identity(self._build_rows(target), oid)
+        if ident is not None:
+            self._cand_choice[target] = ident
 
     def _restore_cand_highlight(self, target: str, rows: list) -> None:
         """Re-highlight the candidate `target` last had under the cursor (kept in _cand_choice),
