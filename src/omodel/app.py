@@ -390,7 +390,7 @@ class AddModelModal(ModalScreen):
         self._resolver = resolver
         self._suggestions = suggestions
         # GPT-only target (Hephaestus): a non-GPT model is BLOCKED (enter disabled), since omo
-        # would reject it and reassign the agent to Sisyphus.
+        # refuses to run Hephaestus on it (an error since 5.1.7; older omo switched to Sisyphus).
         self._require_gpt = require_gpt
         self._staged: dict | None = None
         self._phase = "model"
@@ -422,7 +422,7 @@ class AddModelModal(ModalScreen):
         """Shared validator for the typed path AND the fuzzy-list path: apply the GPT-gate, flag
         availability, and assemble the candidate-row dict. Returns (row_or_None, preview, ok).
         `provider`/`model` are already split + stripped."""
-        # GPT-only target: block a non-GPT model (omo would reassign the agent to Sisyphus).
+        # GPT-only target: block a non-GPT model (omo refuses to run Hephaestus on one).
         if self._require_gpt and not _is_gpt_model(model):
             return None, "⚠ Hephaestus is GPT-only — the model name must contain 'gpt'", False
 

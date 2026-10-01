@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now come from omo 5.1.7. The model suggestions are the same as 5.1.5.
+  omo 5.1.7 now stops with an error when Hephaestus is given a non-GPT model, where it used to
+  switch to Sisyphus quietly. omodel already blocked that pick, so nothing changes in use.
+
 ### Fixed
 
 - `omodel --update` from the standalone binary failed on macOS with `CERTIFICATE_VERIFY_FAILED`

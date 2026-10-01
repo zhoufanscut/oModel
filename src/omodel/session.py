@@ -49,7 +49,8 @@ from .suggestions import Suggestions
 SUBKINDS = ("ultrawork", "compaction")
 
 # Agents omo locks to a single model family. Hephaestus is GPT-exclusive: omo's
-# `no-hephaestus-non-gpt` hook reassigns the session to Sisyphus for any non-GPT model. We
+# `no-hephaestus-non-gpt` hook refuses a non-GPT model with an error (omo 5.1.7+; older omo
+# silently reassigned the session to Sisyphus instead). We
 # mirror that — the chain + add-model are both restricted to GPT models for these agents.
 GPT_ONLY_AGENTS = frozenset({"hephaestus"})
 

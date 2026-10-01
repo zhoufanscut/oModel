@@ -728,7 +728,8 @@ In summary:
   one keystroke.
 - **GPT-only agents (Hephaestus):** omo's `no-hephaestus-non-gpt` hook makes Hephaestus
   GPT-exclusive (`isGptModel` = model name after the last `/`, lowercased, contains "gpt"; a non-GPT
-  model reassigns the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
+  model is refused with a `HephaestusRequiresGptError` since omo 5.1.7 — older omo silently
+  reassigned the session to Sisyphus). oModel mirrors this for `agent:hephaestus[.sub]`: the
   `+ add model…` row stays, but the add modal is **gated** — a non-GPT model is **blocked** (enter
   disabled, `⚠ Hephaestus is GPT-only`), so you can pick any GPT model you have but can't footgun a
   non-GPT one; the detail pane shows a `⚑ GPT-only` tip. Encoded as `GPT_ONLY_AGENTS` +
