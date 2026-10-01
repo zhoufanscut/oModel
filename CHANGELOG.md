@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-01
+
+Bundled suggestions now follow oh-my-openagent 5.1.7, plus two fixes.
+
 ### Changed
 
 - Bundled suggestions now come from omo 5.1.7. The model suggestions are the same as 5.1.5.
