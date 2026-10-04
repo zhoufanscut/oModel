@@ -9,6 +9,7 @@ passes an explicit temp `path`; the live ~/.config/opencode/oh-my-openagent.json
 from __future__ import annotations
 
 import contextlib
+import copy
 import difflib
 import glob
 import json
@@ -509,11 +510,25 @@ def render(cfg: dict, base_text: str) -> str:
     values = {"agents": agents_val, "categories": categories_val}
 
     prefix = [OPENCODE_BLOCK] if scope_of(cfg) == "opencode" else []
-    spans = {}
-    for key in ("agents", "categories"):
-        span = _span_for_path(base_text, prefix + [key])
-        if span is not None:
-            spans[key] = span
+    spans = {key: _span_for_path(base_text, prefix + [key]) for key in ("agents", "categories")}
+    edits = []  # (start, end, replacement), applied later-first so offsets stay valid
+    for key, sibling in (("agents", "categories"), ("categories", "agents")):
+        if spans[key] is not None:
+            value_start, value_end = spans[key]
+            edits.append((value_start, value_end, _reindent(
+                json.dumps(values[key], indent=2, ensure_ascii=False),
+                _line_indent(base_text, value_start),
+                _newline_at(base_text, value_start),
+            )))
+        elif values[key] and spans[sibling] is not None:
+            # Present in cfg, absent from the file — but its sibling is there, so it can go in
+            # right after it (`, "categories": {…}`), keeping everything else. A missing key
+            # used to cost the whole file its comments (the clean rewrite below).
+            key_line = spans[sibling][0]
+            indent = _line_indent(base_text, key_line)
+            nl = _newline_at(base_text, key_line)
+            block = _reindent(json.dumps(values[key], indent=2, ensure_ascii=False), indent, nl)
+            edits.append((spans[sibling][1], spans[sibling][1], f',{nl}{indent}"{key}": {block}'))
         elif values[key]:
             # Something to write and nowhere to put it (non-omo / hand-broken file): degrade to a
             # clean rewrite. The cost of that is every comment in the document, which on a unified
@@ -525,17 +540,45 @@ def render(cfg: dict, base_text: str) -> str:
         # file alone rather than reformatting it to add `"categories": {}`.
 
     result = base_text
-    # Splice the later span first so the earlier span's offsets stay valid.
-    for key in sorted(spans, key=lambda k: spans[k][0], reverse=True):
-        value_start, value_end = spans[key]
-        indent = _line_indent(base_text, value_start)
-        rendered = _reindent(
-            json.dumps(values[key], indent=2, ensure_ascii=False),
-            indent,
-            _newline_at(base_text, value_start),
-        )
-        result = result[:value_start] + rendered + result[value_end:]
+    for start, end, text in sorted(edits, key=lambda e: e[0], reverse=True):
+        result = result[:start] + text + result[end:]
+    if not _reads_back_as(result, cfg, values, prefix):
+        # The span scanner knows `"` strings, comments and nesting — not every json5 form. A
+        # `'single-quoted'` string holding a `"` or `}` inside the managed block shifted a span,
+        # and the splice wrote a truncated, unparseable file (reported `ok`, then `bad_config`).
+        # Whatever the cause, a splice that does not read back as exactly the intended document
+        # is never written: the clean rewrite is always correct, only less pretty.
+        return serialize(cfg).replace("\n", newline)
     return result
+
+
+def _reads_back_as(text: str, cfg: dict, values: dict, prefix: list) -> bool:
+    """Does `text` parse (as json5, like `load_config`) to `cfg` with the managed node's
+    `agents`/`categories` replaced by `values`? An absent key reads as `{}` on both sides — the
+    splice leaves a key alone when it is missing from the file and empty in cfg."""
+    import json5
+
+    try:
+        parsed = json5.loads(text.lstrip("\ufeff"))
+    except ValueError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+
+    def _split(doc):
+        doc = copy.deepcopy(doc)
+        node = doc
+        for key in prefix:
+            node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return doc, {}
+        managed = {k: node.pop(k, None) or {} for k in ("agents", "categories")}
+        return doc, managed
+
+    want_rest, _ = _split(cfg)
+    got_rest, got_managed = _split(parsed)
+    want_managed = {k: values[k] or {} for k in ("agents", "categories")}
+    return got_rest == want_rest and got_managed == want_managed
 
 
 def _read_verbatim(path: str) -> str:

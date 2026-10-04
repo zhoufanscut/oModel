@@ -83,6 +83,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the file, pointing you at your disk. It now reports it as a network error.
 - A cached model list with a time in the future (after the clock was set back) was used forever
   instead of for 24 hours. It is now treated as expired.
+- A config with a single-quoted string (`'…'`, which omodel can read but omo can't) holding a `"`
+  or a brace inside `"agents"` could be saved as a broken file. Every save is now checked to read
+  back as intended, and falls back to a clean rewrite if it doesn't.
+- When your config had `"agents"` but no `"categories"` (or the other way round), the first
+  category you set made omodel rewrite the whole file and drop all its comments. The missing
+  block is now added next to the other one, and the comments stay.
 
 ### Changed
 

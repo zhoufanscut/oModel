@@ -762,13 +762,46 @@ class TestRender:
         assert render(cfg, None) == serialize(cfg)
         assert render(cfg, "   \n  ") == serialize(cfg)
 
-    def test_fallback_when_absent_key_has_something_to_write(self):
-        """A key that isn't a direct root member has nowhere to be spliced, so a NON-EMPTY value
-        forces the clean rewrite — that is the only way to express the change."""
-        cfg = {"agents": {}, "categories": {"deep": {"model": "openai/gpt-5.5"}},
-               "team_mode": False}
-        base_no_categories = '{\n  "agents": {},\n  "team_mode": false\n}\n'
-        assert render(cfg, base_no_categories) == serialize(cfg)
+    @pytest.mark.parametrize("missing", ["categories", "agents"])
+    def test_an_absent_key_goes_in_after_its_sibling(self, missing):
+        """A key absent from the file but NON-EMPTY in cfg is inserted right after its sibling.
+        It used to force the clean rewrite, which costs every comment in the document."""
+        import json5
+        present = "agents" if missing == "categories" else "categories"
+        cfg = {present: {}, missing: {"x": {"model": "openai/gpt-5.5"}}, "team_mode": False}
+        base = f'// keep me\n{{\n  "{present}": {{}}, // and me\n  "team_mode": false\n}}\n'
+        out = render(cfg, base)
+        assert "// keep me" in out and "// and me" in out
+        assert json5.loads(out) == cfg
+
+    def test_unified_absent_key_goes_in_after_its_sibling(self):
+        import json5
+        base = ('// omo\n{\n  "[opencode]": {\n    "agents": {"sisyphus": {"model": "a/b"}}\n'
+                '  },\n  "_migrations": []\n}\n')
+        cfg = json5.loads(base)
+        cfg["[opencode]"]["categories"] = {"quick": {"model": "zhipuai/glm-5"}}
+        out = render(cfg, base)
+        assert "// omo" in out
+        assert json5.loads(out) == cfg
+
+    def test_fallback_when_neither_key_has_a_place(self):
+        """With neither key in the file there is no sibling to follow, so a NON-EMPTY value still
+        forces the clean rewrite — the only way left to express the change."""
+        cfg = {"agents": {"x": {"model": "a/b"}}, "categories": {}, "team_mode": False}
+        assert render(cfg, '{\n  "team_mode": false\n}\n') == serialize(cfg)
+
+    def test_a_splice_that_does_not_read_back_is_never_written(self):
+        """json5 accepts 'single-quoted' strings; the scanner only knows double quotes. One
+        holding a `"` inside `agents` shifted the span end, and the save wrote a truncated file
+        (`ok: true`, then `bad_config` on the next read). Now verified: clean rewrite instead."""
+        import json5
+        base = ('{\n  // keep me\n  "[opencode]": {\n    "agents": { "sisyphus": { "model": '
+                '"opencode/gpt-5.5", "prompt_append": \'say 5" not 5in\' } },\n'
+                '    "categories": {}\n  }\n}\n')
+        cfg = json5.loads(base)
+        cfg["[opencode]"]["agents"]["sisyphus"]["model"] = "e/f"
+        out = render(cfg, base)
+        assert json5.loads(out) == cfg
 
     def test_absent_but_empty_key_leaves_the_file_alone(self):
         """...whereas an absent key that is ALSO empty has nothing to express, so the file keeps
