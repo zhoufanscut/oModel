@@ -643,6 +643,43 @@ RICH_CFG = {
 }
 
 
+class TestDuplicateKeys:
+    """json5 (our loader) and omo's jsonc-parser both let the LAST copy of a key win. The scanner
+    returned the first, so a save went into the dead copy: `set` said ok, took a backup, and
+    omo kept running the old model."""
+
+    LEGACY = (
+        '{\n  "agents": {"sisyphus": {"model": "a/dead"}},\n  "categories": {},\n'
+        '  "agents": {"sisyphus": {"model": "b/live"}}\n}\n'
+    )
+    UNIFIED = (
+        '{\n  "[opencode]": {"agents": {"sisyphus": {"model": "a/dead"}}, "categories": {}},\n'
+        '  "[opencode]": {\n    "agents": {"sisyphus": {"model": "b/live"}},\n'
+        '    "categories": {}\n  }\n}\n'
+    )
+
+    @pytest.mark.parametrize("text", [LEGACY, UNIFIED])
+    def test_save_lands_in_the_copy_that_is_read(self, tmp_path, text):
+        import json5
+        cfg_path = str(tmp_path / "omo.jsonc")
+        _write_file(cfg_path, text)
+        cfg, _ = load_config(cfg_path)
+        root = cfg.get("[opencode]", cfg)
+        assert root["agents"]["sisyphus"]["model"] == "b/live"
+
+        root["agents"]["sisyphus"]["model"] = "c/new"
+        assert save(cfg, cfg_path).changed
+        reread = json5.loads(_read_file(cfg_path))
+        assert reread.get("[opencode]", reread)["agents"]["sisyphus"]["model"] == "c/new"
+
+    def test_a_later_unreadable_member_keeps_the_match_already_seen(self):
+        """An unquoted key (json5-only) after `agents` stops the scan; the span found before it
+        still counts, as it did when the first match returned at once."""
+        text = '{"agents": {"x": 1}, unquoted: 2}'
+        span = _value_span(text, "agents")
+        assert span is not None and text[span[0]:span[1]] == '{"x": 1}'
+
+
 class TestRender:
 
     def test_rewrites_agents_and_categories(self):

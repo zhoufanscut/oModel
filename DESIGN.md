@@ -773,8 +773,10 @@ In summary:
   top-level `agents` and `categories` value spans replaced by their clean form (`json.dumps`,
   comment-free, `_clean_agents`-cleaned), re-indented under the key. Everything else splices through
   verbatim — comments, commented-out config, other keys, key order, formatting. A small JSONC-aware
-  scanner (`_top_level_value_span`, honoring strings / `//` / `/* */` / nesting, so a `}` or
-  `"agents"` inside a string never fools it) locates the two spans; the later span is replaced first
+  scanner (`_value_span`, honoring strings / `//` / `/* */` / nesting, so a `}` or
+  `"agents"` inside a string never fools it) locates the two spans — a **duplicated** key resolves
+  to its **last** copy, the one json5 and omo's jsonc-parser both read (the first was a dead copy
+  that a save "succeeded" into); the later span is replaced first
   so offsets stay valid. **Falls back to `serialize(cfg)`** when `base_text` is empty/blank or either
   key is not a direct root member (non-omo / hand-broken file — splice unsafe). `render` is
   **idempotent** (rendering its own output reproduces it byte-for-byte → an unchanged save is a

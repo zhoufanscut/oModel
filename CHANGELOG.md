@@ -26,6 +26,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A save that failed (for example, the config's folder was read-only) still used up a backup
   slot, pushing out your oldest real backup each time; 20 failed tries left none. A failed save
   now leaves the backups as they were.
+- If your config had the same key twice (two `"agents"` blocks, or two `"[opencode]"` blocks),
+  saving changed the first copy, but omo reads the last one. omodel reported success and omo
+  kept the old models. Saves now go into the copy omo reads.
 
 ### Changed
 

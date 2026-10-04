@@ -359,37 +359,44 @@ def _value_span(text: str, key: str, start: int = 0):
     (trivia-skipped, must be `{`). Return (value_start, value_end) of the value, or None if `key`
     is not a direct member (malformed file, or it only appears deeper). Honors strings, comments,
     and nesting. `start=0` walks the root object; passing a parent's value_start walks that
-    parent's members, which is how the `"[opencode]"` block is entered."""
+    parent's members, which is how the `"[opencode]"` block is entered.
+
+    A key that appears more than once resolves to its LAST occurrence — as json5 (our loader) and
+    omo's jsonc-parser both read it. Returning the first one wrote every save into the dead copy:
+    `set` reported success, took a backup, and changed nothing omo would see. Scanning stops at a
+    token it cannot read (json5-only syntax such as an unquoted key) and returns the last match
+    seen before it, which is never worse than the first."""
     n = len(text)
     i = _skip_trivia(text, start)
     if i >= n or text[i] != "{":
         return None
     i += 1  # enter the root object
+    found = None
     while True:
         i = _skip_trivia(text, i)
         if i >= n or text[i] == "}":
-            return None
+            return found
         if text[i] == ",":
             i += 1
             continue
         if text[i] != '"':
-            return None  # unexpected token where a member key was expected
+            return found  # unexpected token where a member key was expected
         key_start = i
         key_end = _read_string(text, i)
         try:
             this_key = json.loads(text[key_start:key_end])
         except ValueError:
-            return None
+            return found
         i = _skip_trivia(text, key_end)
         if i >= n or text[i] != ":":
-            return None
+            return found
         i = _skip_trivia(text, i + 1)
         if i >= n:
-            return None
+            return found
         value_start = i
         value_end = _skip_value(text, i)
         if this_key == key:
-            return (value_start, value_end)
+            found = (value_start, value_end)  # keep going: a later duplicate wins
         i = value_end
 
 
