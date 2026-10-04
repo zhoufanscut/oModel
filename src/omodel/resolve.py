@@ -33,6 +33,10 @@ _STAMP_MIN_DIGITS = 6
 # 4-digit version-like token isn't mistaken for a year (no real model version is a 4-digit year).
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 
+# omo's reasoning-ladder CONTROLS, valid whatever the family: `off` (reasoning explicitly off,
+# omo 4.19.4+) and `auto`. The family registry's `variants` lists only the effort rungs.
+_LADDER_CONTROLS = frozenset({"off", "auto"})
+
 # A FLOOR under the data-derived `real_tokens`: size/tier and serving-mode words that make a
 # different model no matter what omo currently recommends. Deriving the whole set from omo's
 # chain ids is otherwise right (no hand-maintained suffix list), but it silently loses a token
@@ -332,6 +336,11 @@ class Resolver:
         offered = self.catalog.variants_for(provider, model)
         if offered:
             return ["variant"] if v not in offered else []
+        # The heuristic `family.variants` lists effort rungs only — never `off` or `auto`, the
+        # two ladder controls omo itself suggests (librarian, explore and quick pin `off`). Held
+        # against it, omo's own picks were flagged ⚠ on every cold cache.
+        if v in _LADDER_CONTROLS:
+            return []
         fam = self.suggestions.detect_family(model)
         if fam is not None and v not in [x.lower() for x in fam.variants]:
             return ["variant"]

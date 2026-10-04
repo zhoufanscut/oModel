@@ -798,6 +798,26 @@ class TestNoiseTolerantMatch:
         assert glm and glm[0]["substitute_for"] == "glm-5"
 
 
+class TestLadderControlsAreNotFlagged:
+    """omo pins `off` on librarian/explore/quick, but the heuristic family registry lists only
+    effort rungs, so on a cold `--verbose` cache those rows of omo's own were flagged ⚠."""
+
+    @pytest.mark.parametrize("variant", ["off", "auto", "OFF"])
+    def test_no_warn_on_a_cold_cache(self, sugg, variant):
+        res = Resolver.build(_make_catalog(["deepseek/deepseek-v4-flash"]), sugg)
+        assert res._variant_warn(variant, "deepseek", "deepseek-v4-flash") == []
+
+    def test_a_rung_the_family_lacks_still_warns(self, sugg):
+        res = Resolver.build(_make_catalog(["deepseek/deepseek-v4-flash"]), sugg)
+        assert res._variant_warn("xhigh", "deepseek", "deepseek-v4-flash") == ["variant"]
+
+    def test_omo_s_own_off_rows_carry_no_warn(self, sugg):
+        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
+        off_rows = [r for t in ("agent:librarian", "agent:explore", "cat:quick")
+                    for r in res.candidates(t) if r["variant"] == "off"]
+        assert all(r["warn"] == [] for r in off_rows), off_rows
+
+
 class TestEachProviderKeepsItsOwnSpelling:
     """candidates() picked ONE concrete id and then asked who serves that exact string, so a
     provider spelling the same model differently vanished from the pick list — and a dated

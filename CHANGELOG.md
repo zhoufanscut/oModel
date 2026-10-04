@@ -59,6 +59,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `claude-haiku-4-5`, or a dated build like `claude-haiku-4-5-20251001`) was missing from the
   model list. Every provider now shows, each with its own spelling, and the model's own provider
   still comes first.
+- omo's own suggestions with reasoning `off` (librarian, explore, quick) were marked `⚠` as an
+  unsupported variant until opencode's model details had been fetched once. They no longer are.
 
 ### Changed
 
