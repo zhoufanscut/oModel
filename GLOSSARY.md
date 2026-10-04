@@ -53,7 +53,7 @@ line when a new one does.
   omo's heuristic). → suggestions.py `detect_family`
 - **gateway vs dedicated** — *gateway* = serves **≥2 vendors** (aggregator, e.g. `opencode`);
   *dedicated* = single-vendor (e.g. `openai`). Dedicated sorts **first** in the pick list.
-  → resolve.py `vendors_served` / `_ordered_providers`
+  → resolve.py `vendors_served` / `_fills_by_provider`
 
 ## Flags & rules
 

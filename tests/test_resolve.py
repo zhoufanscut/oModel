@@ -659,6 +659,13 @@ GATEWAY_MODELS = [GATEWAY + "/" + m for m in [
 ]]
 
 
+def _fill(res, omo_id):
+    """The one available id filling `omo_id` in a single-provider catalog, or None."""
+    fills = res._fills_by_provider(omo_id)
+    assert len(fills) <= 1, fills
+    return fills[0][1] if fills else None
+
+
 class TestNoiseTolerantMatch:
     """An available id may carry provider noise the bare omo id lacks: a date stamp
     (claude-haiku-4-5-20251001), a hyphenated date (gpt-5.5-2026-04-24) or a sub-version tag
@@ -705,7 +712,7 @@ class TestNoiseTolerantMatch:
         """The resolved model is the AVAILABLE id (what saves to config), not the bare omo id."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
         assert res._matches_omo_id("claude-haiku-4-5-20251001", "claude-haiku-4-5")
-        assert res._resolve_available("claude-haiku-4-5") == "claude-haiku-4-5-20251001"
+        assert _fill(res, "claude-haiku-4-5") == "claude-haiku-4-5-20251001"
 
     def test_hyphenated_date_stamp_is_exact(self, sugg, frozen_sugg):
         """YYYY-MM-DD splits into 4-/2-/2-digit tokens; the year opens the date so the whole tail
@@ -731,7 +738,7 @@ class TestNoiseTolerantMatch:
     def test_case_insensitive_exact_returns_available_spelling(self, sugg):
         """chain minimax-m3 is served by available 'MiniMax-M3' → that exact casing is returned."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
-        assert res._resolve_available("minimax-m3") == "MiniMax-M3"
+        assert _fill(res, "minimax-m3") == "MiniMax-M3"
 
     def test_dot_dash_spelling_matches(self, sugg):
         res = Resolver.build(_make_catalog([]), sugg)
@@ -745,14 +752,14 @@ class TestNoiseTolerantMatch:
         assert not res._matches_omo_id("gpt-5.4-mini-fast", "gpt-5.4-mini")
         assert not res._matches_omo_id("glm-5-flash", "glm-5")
         assert not res._matches_omo_id("glm-5v-turbo", "glm-5")
-        assert res._resolve_available("gpt-5.4-mini") is None
-        assert res._resolve_available("glm-5") is None
+        assert _fill(res, "gpt-5.4-mini") is None
+        assert _fill(res, "glm-5") is None
 
     def test_exact_spelling_wins_over_noise_variants(self, sugg):
         """glm-5 entry: the exact glm-5 beats glm-5-turbo (turbo=noise) and glm-5.1/5.2 (a
         version is not noise), so the clean id is chosen."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
-        assert res._resolve_available("glm-5") == "glm-5"
+        assert _fill(res, "glm-5") == "glm-5"
 
     def test_protected_set_contains_real_modifiers_not_noise(self, sugg):
         """real_tokens is derived from omo's own chain ids, over the `_TIER_TOKENS` floor: real
@@ -776,7 +783,7 @@ class TestNoiseTolerantMatch:
                        for e in frozen_sugg.agents["probe"]["fallbackChain"])
         assert "mini" in res.real_tokens
         assert not res._matches_omo_id("gpt-5.4-mini", "gpt-5.4")
-        assert res._resolve_available("gpt-5.4") is None
+        assert _fill(res, "gpt-5.4") is None
 
     def test_version_bump_is_not_a_stamp(self, sugg, frozen_sugg):
         """A short trailing digit is a version, not a date stamp: glm-5.1 != glm-5, so it stays
@@ -789,6 +796,33 @@ class TestNoiseTolerantMatch:
         frozen = Resolver.build(_make_catalog(["p/glm-5.1"]), frozen_sugg)
         glm = [r for r in frozen.candidates("agent:probe") if r["model"] == "glm-5.1"]
         assert glm and glm[0]["substitute_for"] == "glm-5"
+
+
+class TestEachProviderKeepsItsOwnSpelling:
+    """candidates() picked ONE concrete id and then asked who serves that exact string, so a
+    provider spelling the same model differently vanished from the pick list — and a dated
+    build on the dedicated provider put the gateway first."""
+
+    def _rows(self, sugg, lines):
+        res = Resolver.build(_make_catalog(lines), sugg)
+        req = {"fallbackChain": [{"providers": ["anthropic"], "model": "claude-haiku-4-5"}]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            return [f"{r['provider']}/{r['model']}" for r in res.candidates("cat:quick")]
+
+    def test_dot_and_dash_spellings_both_show(self, sugg):
+        rows = self._rows(sugg, [
+            "opencode/claude-haiku-4-5", "opencode/gpt-5.5",  # opencode: a gateway
+            "github-copilot/claude-haiku-4.5", "github-copilot/gpt-5.5",
+        ])
+        assert "github-copilot/claude-haiku-4.5" in rows, rows
+        assert "opencode/claude-haiku-4-5" in rows, rows
+
+    def test_a_dated_dedicated_build_still_comes_first(self, sugg):
+        rows = self._rows(sugg, [
+            "anthropic/claude-haiku-4-5-20251001",
+            "opencode/claude-haiku-4-5", "opencode/gpt-5.5",
+        ])
+        assert rows == ["anthropic/claude-haiku-4-5-20251001", "opencode/claude-haiku-4-5"], rows
 
 
 class TestClaudeLineGuard:
@@ -835,7 +869,7 @@ class TestClaudeLineGuard:
     def test_fable_date_stamp_is_exact_match(self, sugg):
         """A provider may date-stamp the new models too; that still resolves as an exact match."""
         res = Resolver.build(_make_catalog(["acme/claude-fable-5-20260301"]), sugg)
-        assert res._resolve_available("claude-fable-5") == "claude-fable-5-20260301"
+        assert _fill(res, "claude-fable-5") == "claude-fable-5-20260301"
 
     def test_opus_unaffected_by_guard(self, sugg):
         """claude-opus is its own family (not claude-non-opus) → no line guard, normal newest."""
@@ -959,7 +993,7 @@ class TestServingModeTokensAreNeverNoise:
         res = Resolver.build(_make_catalog([f"p/glm-5.2-{mode}"]), sugg)
         assert mode in res.real_tokens
         assert not res._matches_omo_id(f"glm-5.2-{mode}", "glm-5.2")
-        assert res._resolve_available("glm-5.2") is None
+        assert _fill(res, "glm-5.2") is None
 
     @pytest.mark.parametrize("mode", MODES)
     def test_mode_build_is_offered_only_as_a_marked_substitute(self, frozen_sugg, mode):
@@ -975,7 +1009,7 @@ class TestServingModeTokensAreNeverNoise:
         noise, so such a build keeps exact-filling the bare id (DESIGN §resolve.py)."""
         res = Resolver.build(_make_catalog(["p/glm-5.2-turbo"]), sugg)
         assert res._matches_omo_id("glm-5.2-turbo", "glm-5.2")
-        assert res._resolve_available("glm-5.2") == "glm-5.2-turbo"
+        assert _fill(res, "glm-5.2") == "glm-5.2-turbo"
 
 
 class TestModeBuildWithoutASharedFamilyIsHidden:
@@ -989,7 +1023,7 @@ class TestModeBuildWithoutASharedFamilyIsHidden:
         same-lined to it — and must not exact-fill it either. It appears on no target."""
         assert sugg.detect_family("big-pickle") is None
         res = Resolver.build(_make_catalog(["p/big-pickle-thinking"]), sugg)
-        assert res._resolve_available("big-pickle") is None
+        assert _fill(res, "big-pickle") is None
         targets = [f"agent:{a}" for a in sugg.agents] + [f"cat:{c}" for c in sugg.categories]
         offered = {r["model"] for t in targets for r in res.candidates(t)}
         assert "big-pickle-thinking" not in offered
@@ -1002,5 +1036,5 @@ class TestModeBuildWithoutASharedFamilyIsHidden:
         thinking = sugg.detect_family("kimi-k3-thinking")
         assert base is not None and thinking is not None and thinking.family != base.family
         res = Resolver.build(_make_catalog(["p/kimi-k3-thinking"]), sugg)
-        assert res._resolve_available("kimi-k3") is None
+        assert _fill(res, "kimi-k3") is None
         assert res._same_line_match("kimi-k3") is None

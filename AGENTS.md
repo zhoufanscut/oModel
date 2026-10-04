@@ -96,7 +96,7 @@ data/omo-suggestions.json ──────────────► suggesti
   omo's `fallbackChain` keeping only models you can run — **exact** match, else newest **same-line
   substitute** of the same family (`glm-5`→`glm-5.1`), else **hidden**. No connected-model dump; the
   list is chain-only plus a `+ add model…` row. Each resolved model is **expanded to one row per
-  serving provider, dedicated-first** (`_ordered_providers`): a provider is a *gateway* if it serves ≥2
+  serving provider, dedicated-first** (`_fills_by_provider`): a provider is a *gateway* if it serves ≥2
   vendors (`vendors_served`), and a single-vendor *dedicated* provider sorts before a gateway — so
   `gpt-5.5` shows as `openai/gpt-5.5` then `opencode/gpt-5.5` and you pick either. Data-driven — no
   hardcoded provider list. (`resolve_prefix()` keeps the single dedicated-first pick for the add-model

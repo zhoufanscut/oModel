@@ -57,7 +57,7 @@ prefix and a valid variant, and saves a clean config.
 | 5 | Availability flagging | **Invalid variant: warn but allow** (saves with ⚠). **Unavailable fallbackChain entries: hidden** from the pick list (decision #3) — a model you can't run isn't offered; a user-typed `+ add model…` that's unavailable still ⚠-warns and saves. |
 | 6 | Agent coverage | **omo-specific only** (11 with requirements). |
 | 7 | Categories | **omo's known set only** (8 with requirements). |
-| 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. The pick list shows **every** serving provider, **dedicated before gateway** (first-seen within each tier — `_ordered_providers`), so you choose the prefix by picking the row. (`resolve_prefix` still auto-prefixes a bare id typed in the add-model modal: `dedicated[0]`, else a gateway via `providers` order then first-seen.) |
+| 8 | Prefix rule | **Dedicated-first.** A provider is a *gateway* if its `opencode models` set spans ≥2 vendors; single-vendor providers are *dedicated*. The pick list shows **every** serving provider, **dedicated before gateway** (first-seen within each tier — `_fills_by_provider`), so you choose the prefix by picking the row. (`resolve_prefix` still auto-prefixes a bare id typed in the add-model modal: `dedicated[0]`, else a gateway via `providers` order then first-seen.) |
 | 9 | Suggestion data | **Bundled in the wheel** (`importlib.resources`); user-override dir supported. |
 | 10 | Availability source | **Live `opencode models` CLI** — not omo's cache, **not `auth list`** (see §Data sources). |
 | 11 | Refresh | `omodel --refresh-omo` regenerates the suggestion JSON via **bun** + an omo checkout. |
@@ -654,14 +654,18 @@ In summary:
   (`anthropic`, `github-copilot`, `vercel`, `zai-coding-plan`, …) that rarely intersect the user's
   `connected` set, so the `cands[0]` first-seen fallback is the common path; **both branches range over
   `providers_for` (availability IDs), never raw omo IDs**. `candidates()` no longer calls this — it
-  lists *every* serving provider (`_ordered_providers`); `resolve_prefix` now only auto-prefixes a bare
+  lists *every* serving provider (`_fills_by_provider`); `resolve_prefix` now only auto-prefixes a bare
   id typed in the add-model modal. Verified: `gpt-5.5`→`openai/…`,
   `claude-opus-4-7`→`opencode/…` (only gateway has it), `kimi-k2.5`→`moonshotai-cn/…`,
   `glm-5`→`zhipuai/…`. (`kimi-k2.5/2.6` and `glm-5/5.1` exist under both opencode and a dedicated
   provider — dedicated heads the list; add a second gateway like `openrouter` and it appears as just
   another row after the dedicated one.)
-- **`_ordered_providers(model_id)` → list:** every connected provider serving the model, **dedicated
-  (single-vendor) before aggregator/gateway**, first-seen within each tier (`[]` if none).
+- **`_fills_by_provider(omo_id)` → `[(provider, available_id)]`:** every connected provider serving
+  the model exactly-or-by-noise, **each with its own spelling** of the id, **dedicated
+  (single-vendor) before aggregator/gateway**, first-seen within each tier (`[]` if none). Per
+  provider an exact spelling (modulo `.`/`-`) beats a noise build, else its newest build. Picking ONE
+  id and then asking who serves that exact string dropped every provider spelling it differently
+  (`claude-haiku-4.5` on github-copilot) and, with a dated dedicated build, put the gateway first.
   `candidates()` emits one row per provider in this order — `glm-5` → `zhipuai/glm-5` then
   `opencode/glm-5`; `gpt-5.5` → `openai/gpt-5.5` then `opencode/gpt-5.5` — so the prefix is chosen by
   picking the row (no `p`-cycling).
@@ -694,7 +698,7 @@ In summary:
   that would file the `p<digit>` suffix under the kimi-*thinking* family and pull in a kimi-k2-thinking
   model. The alias acts only here in `candidates()`; `detect_family`/`normalize_model_id` stay a
   faithful port. Each resolved model **expands to one row per serving provider** (dedicated-first,
-  `_ordered_providers`); rows are then **deduped by resolved `provider/model`** (higher-priority
+  `_fills_by_provider`); rows are then **deduped by resolved `provider/model`** (higher-priority
   entry/provider wins). **Variant precedence:** entry `variant` → requirement top-level
   `variant` → **none** (the family registry only *validates* variants — designates no default — so an
   unspecified variant stays unset; set one via `v`). (Top-level requirement `variant` is presently

@@ -55,6 +55,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel show`, `check`, `candidates`, `--print` and any `--dry-run` created a starter config file
   (and its folders) when the config didn't exist yet, so a mistyped `--config` path quietly became
   a new empty config. They now create nothing; the file is written on the first real save.
+- A provider that spells a model differently from the others (`claude-haiku-4.5` instead of
+  `claude-haiku-4-5`, or a dated build like `claude-haiku-4-5-20251001`) was missing from the
+  model list. Every provider now shows, each with its own spelling, and the model's own provider
+  still comes first.
 
 ### Changed
 

@@ -166,27 +166,29 @@ class Resolver:
             return self._is_noise_suffix(a[len(c) + 1:])
         return False
 
-    def _resolve_available(self, omo_id: str) -> str | None:
-        """The concrete connected model id that fills `omo_id` exactly-or-by-noise, else None.
-        Prefers an exactly-spelled match; otherwise the newest noise-suffixed build (e.g.
-        claude-haiku-4-5 → claude-haiku-4-5-20251001). Returns the AVAILABLE id (the value that
-        saves to config), never the bare omo id — the provider doesn't serve the bare id."""
+    def _fills_by_provider(self, omo_id: str) -> list:
+        """`[(provider, available_id)]` for every connected provider that serves `omo_id`
+        exactly-or-by-noise, dedicated-first — each with ITS OWN spelling of the model.
+
+        Providers spell one model differently (`claude-haiku-4-5` on a gateway,
+        `claude-haiku-4.5` on github-copilot, `claude-haiku-4-5-20251001` on anthropic). Picking
+        one id and then asking who serves THAT exact string (what candidates() did) dropped every provider with another spelling — and with a dated
+        dedicated build, put the gateway first. Per provider: an exactly-spelled match (modulo
+        `.`/`-`) beats a noise-suffixed build; else its newest build (claude-haiku-4-5 →
+        claude-haiku-4-5-20251001). The ids are AVAILABLE ids (what saves to config), never the
+        bare omo id — a provider doesn't serve the bare id."""
         c = normalize_model_id(omo_id)
-        matches: list = []
-        seen: set = set()
+        found = []
         for prov in self.catalog.connected:
-            for m in self.catalog.available.get(prov, []):
-                if m in seen:
-                    continue
-                if self._matches_omo_id(m, omo_id):
-                    seen.add(m)
-                    matches.append(m)
-        if not matches:
-            return None
-        for m in matches:
-            if normalize_model_id(m) == c:
-                return m  # an exact spelling beats any noise-suffixed build
-        return max(matches, key=self._version_key)  # newest build (date acts as the tiebreak)
+            matches = [m for m in self.catalog.available.get(prov, [])
+                       if self._matches_omo_id(m, omo_id)]
+            if not matches:
+                continue
+            exact = [m for m in matches if normalize_model_id(m) == c]
+            found.append((prov, exact[0] if exact else max(matches, key=self._version_key)))
+        dedicated = [pair for pair in found if pair[0] not in self.gateways]
+        gateways = [pair for pair in found if pair[0] in self.gateways]
+        return dedicated + gateways
 
     def resolve_prefix(self, model_id: str, source: str, entry: dict | None = None) -> str | None:
         """Dedicated-first → resolved provider id (str) or None if unavailable.
@@ -197,7 +199,7 @@ class Resolver:
               else (no connected provider serves it) → None.
         Both branches range over providers_for (availability IDs), NEVER raw omo IDs.
         candidates() no longer calls this (it shows EVERY serving provider via
-        _ordered_providers); kept for the add-model modal's bare-id auto-prefix."""
+        _fills_by_provider); kept for the add-model modal's bare-id auto-prefix."""
         if source == "mine":
             cands = self.catalog.providers_for(model_id)
             if cands:
@@ -221,17 +223,6 @@ class Resolver:
                     return ep
         return cands[0]
 
-    def _ordered_providers(self, model_id: str) -> list:
-        """Connected providers serving `model_id`, dedicated-first: every single-vendor
-        (dedicated) provider — first-seen — before every aggregator/gateway
-        (vendors_served >= 2), also first-seen. [] when no connected provider serves it.
-        candidates() emits ONE ROW per provider in this order, so you pick the prefix by
-        choosing the row (e.g. openai/gpt-5.5 before opencode/gpt-5.5)."""
-        cands = self.catalog.providers_for(model_id)
-        dedicated = [p for p in cands if p not in self.gateways]
-        gateways = [p for p in cands if p in self.gateways]
-        return dedicated + gateways
-
     def candidates(self, target: str) -> list:
         """One pick list of candidate-row dicts — a single filtered pass over `target`'s
         fallbackChain (CONTRACTS.md / DESIGN §candidates). For each entry, in chain order:
@@ -245,9 +236,9 @@ class Resolver:
           3. else SKIP — neither exact nor same-line connected (truly unavailable: hidden).
         For the resolved model, ONE ROW PER serving provider is emitted, ordered
         dedicated-first (every single-vendor provider before any aggregator/gateway,
-        first-seen within each tier — see _ordered_providers). So a model served by both a
-        dedicated provider and an aggregator shows TWO rows (e.g. openai/gpt-5.5 then
-        opencode/gpt-5.5) and you pick whichever you want.
+        first-seen within each tier — see _fills_by_provider), each with THAT provider's own
+        spelling of the id. So a model served by both a dedicated provider and an aggregator
+        shows TWO rows (e.g. openai/gpt-5.5 then opencode/gpt-5.5) and you pick whichever.
         Rows are deduped by resolved 'provider/model' (higher-priority entry/provider wins).
         Every row is source 'omo'; warn ⊆ {'variant'}. Does NOT append `+ add model…`.
         `target` is a §Data-contracts id: 'agent:<n>' | 'agent:<n>.ultrawork' |
@@ -265,9 +256,9 @@ class Resolver:
         exact_chain_models: set = set()
         for e in fallback_chain:
             if e.get("model"):
-                filled = self._resolve_available(self._canonical_omo_id(e["model"]))
-                if filled is not None:
-                    exact_chain_models.add(filled)
+                exact_chain_models.update(
+                    m for _, m in self._fills_by_provider(self._canonical_omo_id(e["model"]))
+                )
 
         rows: list = []
         seen_keys: set = set()  # resolved 'provider/model' — dedup within the chain
@@ -287,9 +278,8 @@ class Resolver:
                 variant = None
 
             # 1. Exact (incl. date/sub-tag match) → 2. same-line substitute → 3. skip.
-            filled = self._resolve_available(model_id)
-            if filled is not None:
-                resolved_model = filled
+            fills = self._fills_by_provider(model_id)
+            if fills:
                 substitute_for = None
             else:
                 resolved_model = self._same_line_match(model_id)
@@ -301,25 +291,26 @@ class Resolver:
                 if resolved_model is None or resolved_model in exact_chain_models:
                     continue
                 substitute_for = model_id
+                fills = self._fills_by_provider(resolved_model)
 
             # One row per serving provider, dedicated (single-vendor) before aggregator
             # (gateway). You pick the prefix by choosing the row — no `p` cycling.
             # warn (variant only; unavailable entries are skipped, never shown) is computed
             # per-(provider, model) by _variant_warn: opencode --verbose is the truth source,
             # the heuristic family.variants only a fallback.
-            for provider in self._ordered_providers(resolved_model):
-                key = f"{provider}/{resolved_model}"
+            for provider, model in fills:
+                key = f"{provider}/{model}"
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 rows.append({
                     "source": "omo",
-                    "model": resolved_model,
+                    "model": model,
                     "provider": provider,
                     "variant": variant,
                     "entry": entry,
                     "substitute_for": substitute_for,
-                    "warn": self._variant_warn(variant, provider, resolved_model),
+                    "warn": self._variant_warn(variant, provider, model),
                 })
 
         return rows
