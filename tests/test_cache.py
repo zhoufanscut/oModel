@@ -48,6 +48,29 @@ class TestReadMiss:
             json.dump(blob, f)
         assert cache.read("old") is None
 
+    def _stamp(self, key, offset):
+        path = cache._path_for(key)
+        with open(path, encoding="utf-8") as f:
+            blob = json.load(f)
+        blob["fetched_at"] = time.time() + offset
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(blob, f)
+
+    def test_a_stamp_from_the_future_is_a_miss(self):
+        """Clock stepped back / cache copied from another machine: its age stayed negative, so
+        a year-ahead entry was served for a year under the 24h TTL."""
+        cache.write("future", "stdout-data")
+        self._stamp("future", 365 * 86400)
+        assert cache.read("future") is None
+        assert cache.read("future", ttl_seconds=float("inf")) == "stdout-data", (
+            "an any-age read has no use for the age"
+        )
+
+    def test_a_small_skew_is_tolerated(self):
+        cache.write("skew", "stdout-data")
+        self._stamp("skew", 60)
+        assert cache.read("skew") == "stdout-data"
+
 
 # ---------------------------------------------------------------------------
 # read() — hit case

@@ -54,6 +54,11 @@ def _path_for(key: str) -> str:
     return os.path.join(cache_dir(), f"{safe}.json")
 
 
+# How far ahead of now a `fetched_at` may be before `read` stops trusting it — enough for a
+# small NTP correction, far short of a misset clock.
+_FUTURE_TOLERANCE = 300
+
+
 def read(key: str, ttl_seconds: float | None = None) -> str | None:
     """Cached stdout for `key` if present and younger than the TTL, else None.
     A missing, corrupt, wrong-version, or expired entry is a miss (returns None)."""
@@ -70,7 +75,14 @@ def read(key: str, ttl_seconds: float | None = None) -> str | None:
     stdout = blob.get("stdout")
     if not isinstance(fetched_at, (int, float)) or not isinstance(stdout, str):
         return None
-    if (time.time() - fetched_at) > ttl_seconds:
+    age = time.time() - fetched_at
+    if age > ttl_seconds:
+        return None
+    # A stamp from the FUTURE (the clock stepped back, or a cache copied from another machine)
+    # never expired: its age stays negative for as long as the skew lasts, so a year-ahead entry
+    # was served for a year under a 24h TTL. Its real age is unknowable, so a TTL-bound read
+    # treats it as expired; an any-age read (ttl = inf, `variants_for`) has no use for the age.
+    if age < -_FUTURE_TOLERANCE and ttl_seconds != float("inf"):
         return None
     return stdout
 

@@ -81,6 +81,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   named a file path, a URL) was read as a provider. Both are fixed.
 - `omodel --update` reported a connection that dropped during the download as "could not write"
   the file, pointing you at your disk. It now reports it as a network error.
+- A cached model list with a time in the future (after the clock was set back) was used forever
+  instead of for 24 hours. It is now treated as expired.
 
 ### Changed
 
