@@ -359,7 +359,10 @@ see §cache.py.
 `_save`). Validate-before-mutate is what makes `apply` all-or-nothing, and is safe because
 `_validate` reads only suggestions + catalog, never cfg — so no entry's validity can depend on
 another entry's effect. Nothing to change → write **nothing** (no file rewrite, no backup slot
-burned), mirroring the TUI's "Nothing to save." There is no staging across processes — a staged state would be the orphan fourth state
+burned), mirroring the TUI's "Nothing to save." "Nothing to change" is judged on the models
+(`Session.config_is_dirty`, the canonical form), not the bytes: `render` re-renders the managed
+spans, so on a hand-formatted file the byte diff is never empty, and a `set` to the current value
+used to rewrite the file and delete the comments inside `agents`. There is no staging across processes — a staged state would be the orphan fourth state
 decision #17 forbids. `apply` validates **all-or-nothing** so a half-applied config never lands,
 and exists because each save snapshots a backup and the ring keeps only 20: eleven individual
 `set` calls would evict eleven of the user's own snapshots.

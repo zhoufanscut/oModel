@@ -645,12 +645,30 @@ class TestSet:
         loaded, _p = config_io.load_config(cfg)
         assert loaded["agents"]["sisyphus"]["compaction"] == {"model": "zhipuai/glm-5"}
 
+    def test_setting_the_current_value_writes_nothing(self, tmp_path):
+        """Agents re-run `set` to check their work. On a hand-formatted file the byte diff is
+        never empty (`render` re-renders the managed spans), so the no-op gate let it through:
+        `changed: true`, a backup, and the comments inside `agents` gone."""
+        cfg = str(tmp_path / "oh-my-openagent.jsonc")
+        text = (
+            '{\n  "agents": {\n    // my notes on sisyphus\n'
+            '    "sisyphus": {"model": "opencode/glm-5"}\n  },\n  "categories": {}\n}\n'
+        )
+        _write(cfg, text)
+        for argv in (["--dry-run"], []):
+            rc, payload = _run_json(
+                ["set", "agent:sisyphus", "opencode/glm-5", "--config", cfg, "--json", *argv])
+            assert rc == 0 and payload["changed"] is False, payload
+            assert payload["diff"] == ""
+        assert _read(cfg) == text
+        assert not os.path.exists(os.path.join(os.path.dirname(cfg), ".backup"))
+
     def test_repeated_sets_each_snapshot_a_backup(self, tmp_path):
         """The premise `apply` exists for: the ring keeps 20, so N sets cost N of the user's
         own snapshots. If this ever stopped being true, `apply`'s reason to exist would go
         with it."""
-        cfg = _agent_cfg(tmp_path)
-        for model in ("zhipuai/glm-5", "opencode/glm-5", "zhipuai/glm-5"):
+        cfg = _agent_cfg(tmp_path)  # cat:quick starts on zhipuai/glm-5: three real changes
+        for model in ("opencode/glm-5", "zhipuai/glm-5", "opencode/glm-5"):
             assert _run(["set", "cat:quick", model, "--config", cfg]) == 0
         snapshots = os.listdir(os.path.join(os.path.dirname(cfg), ".backup"))
         assert len([s for s in snapshots if s[0].isdigit()]) == 3
@@ -760,24 +778,19 @@ class TestApply:
         assert payload["error"] == "bad_input"
 
     def test_an_empty_batch_writes_no_snapshot(self, tmp_path, monkeypatch):
-        """`{}` is a legal (if pointless) batch. It must not spend a slot in the 20-deep ring.
-
-        The FIRST save on a hand-written file legitimately rewrites it — the agents/categories
-        spans are re-rendered clean — so canonicalize first; only then is "nothing changed" a
-        statement about the batch rather than about the file's formatting."""
+        """`{}` is a legal (if pointless) batch. It must not spend a slot in the 20-deep ring —
+        not even on a hand-written file, whose agents/categories spans a write WOULD re-render
+        clean. "Nothing changed" is about the models, not the file's formatting."""
         cfg = _agent_cfg(tmp_path)
-        self._stdin(monkeypatch, "{}")
-        assert _run(["apply", "--config", cfg]) == 0          # canonicalizes; 1 snapshot
         before = _read(cfg)
         backups = os.path.join(os.path.dirname(cfg), ".backup")
-        first = sorted(os.listdir(backups))
-
-        self._stdin(monkeypatch, "{}")
-        rc, payload = _run_json(["apply", "--config", cfg, "--json"])
-        assert rc == 0
-        assert payload["applied"] == [] and payload["changed"] is False
-        assert _read(cfg) == before
-        assert sorted(os.listdir(backups)) == first
+        for _ in range(2):
+            self._stdin(monkeypatch, "{}")
+            rc, payload = _run_json(["apply", "--config", cfg, "--json"])
+            assert rc == 0
+            assert payload["applied"] == [] and payload["changed"] is False
+            assert _read(cfg) == before
+            assert not os.path.exists(backups)
 
     def test_dry_run_writes_neither_file(self, tmp_path, monkeypatch):
         cfg = _agent_cfg(tmp_path)
@@ -949,15 +962,12 @@ class TestReviewRegressions:
         assert snaps() == n, "a no-op set must not burn a backup slot"
 
     def test_an_empty_apply_writes_nothing(self, tmp_path, monkeypatch):
-        """Once the file is in omodel's clean form, an empty batch must be a true no-op.
-
-        NB the FIRST write to a hand-written config legitimately reformats the agents/categories
-        spans (decision #13), so `changed: True` there is honest — the file really did change.
-        The no-op contract applies from then on, which is the state an agent doing repeated work
-        is actually in."""
+        """Once the file is in omodel's clean form, an empty batch must be a true no-op. (On a
+        hand-written file too — `test_an_empty_batch_writes_no_snapshot` — and a no-op `set`:
+        `test_setting_the_current_value_writes_nothing`.)"""
         import io
         cfg = _agent_cfg(tmp_path)
-        _run(["set", "agent:sisyphus", "opencode/glm-5", "--config", cfg])  # normalize
+        _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--config", cfg])  # normalize
         before = _read(cfg)
         snaps = len([s for s in os.listdir(
             os.path.join(os.path.dirname(cfg), ".backup")) if s[0].isdigit()])
@@ -1161,7 +1171,7 @@ class TestConflictIsNeverSilent:
 
     def _conflicted(self, tmp_path):
         cfg = _agent_cfg(tmp_path)
-        _run(["set", "agent:sisyphus", "opencode/glm-5", "--config", cfg])
+        _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--config", cfg])  # writes the presets
         _write(cfg, '{"agents": {"sisyphus": {"model": "handedited/zzz"}}, "categories": {}}')
         return cfg
 

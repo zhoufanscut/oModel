@@ -249,7 +249,7 @@ commit.
   `.clear(target)->bool`; `.delete_subtarget(name, kind)`; `.projected_store()->Store`;
   `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.add_preset(name)->int`;
   `.is_dirty()`/
-  `.store_is_dirty()`; `.diff()->str`; `.save_config()->SaveResult`; `.write_store(store=None)
+  `.config_is_dirty()`/`.store_is_dirty()`; `.diff()->str`; `.save_config()->SaveResult`; `.write_store(store=None)
   ->Store` (RAISES); `.save()->SaveResult` (both files, config first — `app.py` calls the two
   halves instead, since its save is interactive). **MUST NOT import textual or app.**
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint). Constants `SCHEMA = 1`,

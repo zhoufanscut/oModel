@@ -705,14 +705,17 @@ class Session:
     def store_is_dirty(self) -> bool:
         return presets_mod.store_fingerprint(self.projected_store()) != self.saved_store_fp
 
+    def config_is_dirty(self) -> bool:
+        """True iff the config's content differs from what was last written or loaded. Compared
+        on the canonical form, so a span that `render` would only reformat reads clean."""
+        return config_io.serialize(self.cfg) != self.saved_text
+
     def is_dirty(self) -> bool:
         """True iff a save would change anything on disk — the config (`serialize(cfg)` vs the
         text last written/loaded) OR the presets file. Both, because a save writes both and
         quitting discards both. NB: an empty ultrawork/compaction sub-object serializes away, so
         adding one is undoable but does NOT count as dirty — there's nothing to save."""
-        if config_io.serialize(self.cfg) != self.saved_text:
-            return True
-        return self.store_is_dirty()
+        return self.config_is_dirty() or self.store_is_dirty()
 
     def diff(self) -> str:
         """Unified diff of what a save would write vs what's on disk."""

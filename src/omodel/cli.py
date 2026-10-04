@@ -756,8 +756,13 @@ def _publish(session, dry_run: bool):
     presets-file change. The preview used to look at the diff alone, so under a sync conflict a
     `set` whose config effect was a no-op previewed as `changed: false` and then ran as
     `changed: true` — writing the presets file and adopting the foreign config, which is the
-    one write a careful agent would dry-run first."""
-    diff = session.diff()
+    one write a careful agent would dry-run first.
+
+    "Nothing to change" is decided on the MODELS (`config_is_dirty`), not the bytes: `render`
+    also reformats the managed spans and drops the comments inside them, so on a hand-formatted
+    file the byte diff is never empty, and a `set` to the value already there rewrote the file,
+    took a backup and deleted those comments."""
+    diff = session.diff() if session.config_is_dirty() else ""
     store_dirty = session.store_is_dirty()
     if dry_run:
         return {"changed": bool(diff.strip()) or store_dirty, "dry_run": True,

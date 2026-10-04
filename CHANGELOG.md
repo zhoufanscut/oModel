@@ -32,6 +32,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel preset use <name>` did nothing when `<name>` was already the active preset, even when
   something outside omodel had changed the config. That is the documented way to throw such a
   change away, and with a single preset it was the only one. It now restores the preset.
+- `omodel set` with the value already set (or an empty `omodel apply`) still rewrote the config
+  when it had comments or its own formatting inside `"agents"` or `"categories"`: it took a
+  backup and deleted those comments. It now leaves the file alone.
 
 ### Changed
 
