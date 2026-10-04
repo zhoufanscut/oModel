@@ -35,6 +35,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel set` with the value already set (or an empty `omodel apply`) still rewrote the config
   when it had comments or its own formatting inside `"agents"` or `"categories"`: it took a
   backup and deleted those comments. It now leaves the file alone.
+- When fetching a model's details from opencode kept failing, the app retried about five times a
+  second on its own, starting a new `opencode` each time. It now tries again only when you move
+  to another agent and back, or press `r`.
 
 ### Changed
 

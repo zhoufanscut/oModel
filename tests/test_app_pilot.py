@@ -3563,6 +3563,40 @@ def test_pilot_detail_fetch_failure_not_cached_forever(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_a_failing_detail_fetch_does_not_retry_in_a_loop(pilot_config):
+    """The worker's closing re-render rescheduled a failed key at once: with catalog.detail
+    raising every time, that was about five opencode spawns a second with no input at all. A
+    failure now waits for the next visit — moving to another target and back retries it."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        calls = {"n": 0}
+
+        def _broken_detail(model_id, use_cache=True, provider=None):
+            calls["n"] += 1
+            raise OSError(12, "Cannot allocate memory")
+
+        app.catalog.detail = _broken_detail
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            for _ in range(15):  # ~1.5s: several debounce periods
+                await asyncio.sleep(0.1)
+                await pilot.pause()
+            assert calls["n"] == 1, f"a failed fetch must wait for the next visit: {calls}"
+            detail = str(pilot.app.query_one("#detail", Static).content)
+            assert "…" not in detail, "nothing is pending, so no placeholder"
+
+            await _select_target(pilot, "agent:oracle")
+            await _select_target(pilot, "agent:sisyphus")
+            for _ in range(5):
+                await asyncio.sleep(0.1)
+                await pilot.pause()
+            assert calls["n"] == 2, f"coming back must retry once: {calls}"
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # Pilot test: add-modal accept recomputes warn against the LIVE catalog
 # ---------------------------------------------------------------------------

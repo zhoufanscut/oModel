@@ -1466,6 +1466,11 @@ class OModelApp(App):
         self._detail_cache: dict = {}
         self._detail_fetching = False
         self._detail_timer = None
+        # Keys whose fetch RAISED (a transient failure, so not cached as known-empty). Not
+        # retried until you move to another target or press `r`: the worker's own re-render
+        # used to reschedule it at once, about five opencode spawns a second while it kept
+        # failing — exactly what the one-at-a-time gate exists to prevent.
+        self._detail_failed: set = set()
         # Bumped by a refresh (r) so an in-flight detail fetch can tell its result is stale.
         self._detail_generation = 0
         # Single-flight guard for `r` (action_refresh): @work(exclusive=True) on _refresh_catalog
@@ -2035,7 +2040,10 @@ class OModelApp(App):
             info = self._detail_info(target, prov, bare)
             if info:
                 lines.append(_esc(self._detail_line(info)))
-            elif self._detail_key(prov, bare) in self._detail_cache:
+            elif (
+                self._detail_key(prov, bare) in self._detail_cache
+                or self._detail_key(prov, bare) in self._detail_failed
+            ):
                 lines.append("")  # fetch done, no detail available — keep the slot blank
             else:
                 lines.append("[dim]…[/dim]")  # fetch pending — keep the slot, fill on arrival
@@ -2062,6 +2070,8 @@ class OModelApp(App):
         key = self._detail_key(provider, bare)
         if key in self._detail_cache:
             return self._detail_cache[key]
+        if key in self._detail_failed:
+            return None  # failed this visit — the retry waits for the next one (see __init__)
         # No connected provider serves it → detail() would no-op; cache None, skip the worker.
         if not self.catalog.providers_for(bare):
             self._detail_cache[key] = None
@@ -2104,14 +2114,19 @@ class OModelApp(App):
         # the pre-refresh catalog — drop it instead of repopulating the cleared cache. The
         # re-render below still runs, so the current target schedules a fresh fetch. A
         # TRANSIENT failure (the `except` above — catalog.detail raised) is likewise never
-        # cached, so the next highlight retries rather than blanking this model's detail line
-        # for the rest of the session; a genuine `None` RETURN (no record for this model / no
+        # cached as known-empty: it goes into `_detail_failed`, so moving to another target (or
+        # `r`) retries it rather than blanking this model's detail line for the rest of the
+        # session — and the re-render below does NOT retry it at once, which looped about five
+        # spawns a second while it kept failing; a genuine `None` RETURN (no record for this model / no
         # providers) still caches as "known-empty", same as before. Remaining limitation: a
         # timeout swallowed INSIDE catalog.detail's own try/except still returns None and is
         # indistinguishable from "known-empty" here — only an exception that escapes catalog.detail
         # is treated as transient.
-        if not failed and self._detail_generation == generation:
-            self._detail_cache[key] = info
+        if self._detail_generation == generation:
+            if failed:
+                self._detail_failed.add(key)
+            else:
+                self._detail_cache[key] = info
         # Re-render whatever is current NOW: shows the line if this was it, and (via
         # _detail_info → _schedule_detail_fetch) kicks off the next fetch if still uncached.
         #
@@ -2158,7 +2173,8 @@ class OModelApp(App):
     def _detail_line(info: dict) -> str:
         parts = []
         ctx = info.get("context")
-        if ctx:
+        if ctx and isinstance(ctx, (int, float)) and not isinstance(ctx, bool):
+            ctx = int(ctx)
             parts.append(f"ctx {ctx // 1000}k" if ctx >= 1000 else f"ctx {ctx}")
         cost = info.get("cost") or {}
         if isinstance(cost, dict) and ("input" in cost or "output" in cost):
@@ -2244,6 +2260,8 @@ class OModelApp(App):
                 return
 
     def _refresh_right(self, target: str) -> None:
+        if target != self._current_target:
+            self._detail_failed.clear()  # moving on is what retries a failed detail fetch
         self._current_target = target
         self._render_detail(target)
         self._render_candidates(target)
@@ -3052,6 +3070,7 @@ class OModelApp(App):
             # catalog, and dropping it would let an undo move the models without moving the `●`.
             self._history.clear_aux(keep=("active",))
             self._detail_cache.clear()
+            self._detail_failed.clear()
             self._detail_generation += 1
             self._render_providers()
             if self._current_target is not None:
