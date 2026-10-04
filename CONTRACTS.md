@@ -84,7 +84,8 @@ are not. Every payload carries `"schema": 1`; bump only on a breaking change.
   `false`) when unknown.
 - **A candidate row** is the internal candidate-row dict MINUS `entry` PLUS `index`, `value`
   (`f"{provider}/{model}"`, pre-assembled so a consumer never builds it), `current` (bool),
-  `settable` (bool) and `variants` (from `catalog.variants_for` — `[]` means "no information",
+  `settable` (bool), `blocked_by` (the refusal slug `set` would give, `null` when settable) and
+  `variants` (from `catalog.variants_for` — `[]` means "no information",
   not "no variants"). `entry` (the raw omo `fallbackChain` dict) is **deliberately withheld**:
   publishing it would freeze omo's internal schema into omodel's public output. `settable: false`
   marks a row `set` would refuse — the list surfaces the target's CURRENT assignment even when it

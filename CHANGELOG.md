@@ -69,6 +69,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so (`config_written: true`), like `omodel set`, and reports the backup it took.
 - A mistyped command (an unknown subcommand or flag, a missing argument) printed nothing on
   stdout even with `--json`. It now prints a `bad_input` JSON reply too, still with exit code 2.
+- `omodel candidates` labelled every model you couldn't pick as "GPT-only agent", even when the
+  real reason was that no connected provider serves it. It now gives the real reason, and the
+  JSON rows carry it as `blocked_by`.
 
 ### Changed
 

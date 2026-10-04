@@ -662,6 +662,10 @@ def _all_targets(session) -> list:
     return known + [t for t in _configured_targets(session) if t not in seen]
 
 
+# Prose for `candidates`' unsettable rows; any other slug is shown as itself.
+_BLOCKED_LABELS = {"gpt_only": "GPT-only agent", "unavailable": "no connected provider"}
+
+
 def _candidate_payload(session, target: str, index: int, row: dict, current: str) -> dict:
     """One candidate-row dict rendered for JSON.
 
@@ -682,7 +686,7 @@ def _candidate_payload(session, target: str, index: int, row: dict, current: str
     # drift again, and a future guard is picked up for free. `variant=None` because a bare
     # `set <target> <value>` passes no variant — the row's `variant` is a suggestion the caller
     # opts into, and `warn` already flags it when opencode disagrees.
-    settable = _validate(session, target, value, None, force=False) is None
+    problem = _validate(session, target, value, None, force=False)
     return {
         "index": index,
         "source": row["source"],
@@ -693,7 +697,10 @@ def _candidate_payload(session, target: str, index: int, row: dict, current: str
         "substitute_for": row.get("substitute_for"),
         "warn": list(row.get("warn") or []),
         "current": value == current,
-        "settable": settable,
+        "settable": problem is None,
+        # WHY not — the slug `set` would refuse with. The prose list used to say "GPT-only
+        # agent" for every unsettable row, an unavailable one on oracle included.
+        "blocked_by": problem[0] if problem else None,
         "variants": session.variants_for(row["provider"], row["model"]),
     }
 
@@ -937,7 +944,9 @@ def _cmd_candidates(config_override, target: str, as_json: bool) -> int:
         variant = f" ({c['variant']})" if c["variant"] else ""
         sub = f"  (~ omo {c['substitute_for']})" if c["substitute_for"] else ""
         warn = ("  ! " + " ".join(c["warn"])) if c["warn"] else ""
-        blocked = "" if c["settable"] else "  [not settable: GPT-only agent]"
+        blocked = "" if c["settable"] else (
+            f"  [not settable: {_BLOCKED_LABELS.get(c['blocked_by'], c['blocked_by'])}]"
+        )
         lines.append(f"{marker} {c['index']:2d}. {c['value']}{variant}{sub}{warn}{blocked}")
     if not cands:
         lines.append("(no candidates)")

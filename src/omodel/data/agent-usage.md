@@ -140,7 +140,7 @@ Payload shapes (all stamped `"schema": 1` — refuse a major you don't recognise
   "gpt_only": false, "sync_conflict": false, "current": "opencode/claude-opus-4-8",
   "candidates": [{"index": 0, "source": "omo", "provider": "opencode", "model": "claude-opus-5",
                   "value": "opencode/claude-opus-5", "variant": "max", "substitute_for": null,
-                  "warn": [], "current": false, "settable": true,
+                  "warn": [], "current": false, "settable": true, "blocked_by": null,
                   "variants": ["low", "medium", "high", "max"]}] }
 
 // omodel set … --json

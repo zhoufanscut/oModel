@@ -1253,7 +1253,27 @@ class TestSettableMatchesTheRealGuard:
         row = next(c for c in payload["candidates"] if c["value"] == "ghost/nope")
         assert row["warn"] == ["unavailable"]
         assert row["settable"] is False, "a row set would refuse must not advertise settable"
+        assert row["blocked_by"] == "unavailable"
         assert row["current"] is True
+
+    def test_the_prose_list_gives_the_real_reason(self, tmp_path, capsys):
+        """Every unsettable row used to read "GPT-only agent" — here, on sisyphus, for a model
+        whose provider is simply not connected."""
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, '{"agents": {"sisyphus": {"model": "ghost/nope"}}, "categories": {}}')
+        _run(["candidates", "agent:sisyphus", "--config", str(path)])
+        line = next(ln for ln in capsys.readouterr().out.splitlines() if "ghost/nope" in ln)
+        assert "[not settable: no connected provider]" in line
+        assert "GPT" not in line
+
+    def test_a_gpt_only_block_is_named_so(self, tmp_path):
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, '{"agents": {"hephaestus": {"model": "zhipuai/glm-5"}}, "categories": {}}')
+        _, payload = _run_json(
+            ["candidates", "agent:hephaestus", "--config", str(path), "--json"])
+        row = next(c for c in payload["candidates"] if c["value"] == "zhipuai/glm-5")
+        assert row["blocked_by"] == "gpt_only"
+        assert all(c["blocked_by"] is None for c in payload["candidates"] if c["settable"])
 
     @pytest.mark.parametrize("body,target", [
         ('{"agents": {"sisyphus": {"model": "ghost/nope"}}, "categories": {}}',
