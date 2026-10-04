@@ -3257,6 +3257,26 @@ def test_to_thread_daemon_is_quiet_when_the_loop_is_already_gone(boom):
 # Pilot test: double-`r` is single-flight (no concurrent refresh calls)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("model", ["5", '["opencode/gpt-5.5"]'])
+def test_pilot_a_non_string_model_does_not_crash_the_app(tmp_path, model):
+    """A hand-edited `"model": 5` (or a list) crashed the app when its agent was highlighted:
+    `"/" in model` on an int, or an unhashable list as a row key."""
+    cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{"agents": {"sisyphus": {"model": ' + model + '}}, "categories": {}}')
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await pilot.pause()
+            assert pilot.app.is_running
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+
+    asyncio.run(_run())
+
+
 def test_pilot_refresh_failure_of_any_kind_keeps_the_app_running(pilot_config, monkeypatch):
     """`r` caught only CatalogUnavailable; anything else failed the worker, and a failed worker
     exits the app with every staged edit. It must notify and keep the catalog it had."""

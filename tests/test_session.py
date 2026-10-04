@@ -255,6 +255,14 @@ class TestTargets:
 
 class TestRows:
 
+    @pytest.mark.parametrize("model", [5, ["opencode/gpt-5.5"], {"x": 1}, None])
+    def test_a_non_string_model_reads_as_unset(self, tmp_path, model):
+        """omo's schema rejects these; every caller treats the model as a string."""
+        text = json.dumps({"agents": {"probe": {"model": model}}, "categories": {}})
+        s = _session(tmp_path, text)
+        assert s.assignment("agent:probe") == ("", None)
+        s.rows("agent:probe")  # must not raise
+
     def test_rows_are_the_chain_filtered_to_what_you_have(self, tmp_path):
         rows = _session(tmp_path).rows("agent:probe")
         values = [f"{r['provider']}/{r['model']}" for r in rows]

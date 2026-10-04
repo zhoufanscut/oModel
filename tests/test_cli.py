@@ -1255,6 +1255,32 @@ class TestMalformedMapIsReported:
         assert rc == 0
 
 
+class TestMalformedModelIsReported:
+    """A non-string `model` reads as unset everywhere (it crashed `"/" in model`), and `check`
+    reports it rather than calling the file healthy."""
+
+    @pytest.mark.parametrize("value", ["5", '["opencode/gpt-5.5"]', '{"x": 1}'])
+    def test_json_verbs_answer_and_check_reports_it(self, tmp_path, value):
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, '{"agents": {"sisyphus": {"model": ' + value + '}}, "categories": {}}')
+        for argv in (["show"], ["candidates", "agent:sisyphus"]):
+            rc, payload = _run_json([*argv, "--config", str(path), "--json"])
+            assert rc == 0, (argv, payload)
+        rc, payload = _run_json(["check", "--config", str(path), "--json"])
+        assert rc == 3
+        problem = next(p for p in payload["problems"] if p["problem"] == "malformed_model")
+        assert problem["target"] == "agent:sisyphus"
+
+    def test_set_replaces_it(self, tmp_path):
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, '{"agents": {"sisyphus": {"model": 5}}, "categories": {}}')
+        rc, payload = _run_json(["set", "agent:sisyphus", "zhipuai/glm-5",
+                                 "--config", str(path), "--json"])
+        assert rc == 0 and payload["from"] is None, payload
+        rc, payload = _run_json(["check", "--config", str(path), "--json"])
+        assert not any(p["problem"] == "malformed_model" for p in payload["problems"])
+
+
 class TestClosedStdout:
     """`omodel show --json | head` — the reader stops early and ~1 KB of the 9 KB payload never
     lands. Python's stdio buffer is 8 KB, so the failure does NOT surface in `print`; it waits

@@ -942,6 +942,19 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
                 "message": f"{row['name']!r} is not an agent/category omo defines",
             })
             continue
+        # `assignment` reads a non-string model as unset so nothing downstream crashes on it —
+        # which would let check call the file healthy while omo rejects it.
+        node = session.node_for(target)
+        raw_model = node.get("model") if isinstance(node, dict) else None
+        if raw_model is not None and not isinstance(raw_model, str):
+            problems.append({
+                "target": target, "problem": "malformed_model",
+                "message": (
+                    f"model is {type(raw_model).__name__}, not a \"provider/model\" string — "
+                    "omo rejects it; set the target again to replace it"
+                ),
+            })
+            continue
         if not row["assigned"]:
             continue
         if row["available"] is False:

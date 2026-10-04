@@ -20,6 +20,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   made omodel crash: `omodel --check` exited 1 with a traceback, the `--json` commands printed
   nothing, and pressing `r` closed the app. omodel now treats it like an `opencode` that can't
   read models: it shows the "couldn't read models" banner and keeps working.
+- A `"model"` that isn't text in a hand-edited config (`"model": 5`, or a list) crashed the app
+  when you moved onto that agent, and made `omodel show`, `check` and `candidates` fail with no
+  output. It now reads as unset, and `omodel check` reports it as `malformed_model`.
 
 ### Changed
 

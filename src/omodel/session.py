@@ -486,11 +486,16 @@ class Session:
         """`(model_str, variant)` currently assigned for `target`; `('', None)` if unset.
         model_str is the full 'provider/model' as stored. The reasoning level is read in omo's
         precedence (`read_variant`), so a config written before the reasoning rename still
-        reports what omo will actually resolve."""
+        reports what omo will actually resolve.
+
+        A non-string model (a hand-edited `5` or list, which omo's schema rejects) reads as
+        unset: every caller treats model_str as a string, and handing it on crashed the TUI and
+        every `--json` verb. `omodel check` reports it as `malformed_model`."""
         node = self.node_for(target)
         if not isinstance(node, dict):
             return "", None
-        return node.get("model", "") or "", read_variant(node)
+        model = node.get("model")
+        return (model if isinstance(model, str) else ""), read_variant(node)
 
     # ----- the pick list --------------------------------------------------------------
 
