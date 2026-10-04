@@ -1503,6 +1503,34 @@ class TestPresetRefsThatIntRefuses:
         assert payload["error"] == "unknown_preset"
 
 
+class TestPresetUseReportsWhatLanded:
+    """`preset use` wrote the two files by hand: a presets write failing AFTER the config landed
+    came back as a bare `write_failed`, the one case an agent must know the config DID change."""
+
+    def test_a_failed_presets_write_says_the_config_landed(self, tmp_path, monkeypatch):
+        from omodel import presets as _presets
+        cfg = _agent_cfg(tmp_path)
+        _run(["preset", "new", "second", "--config", cfg])
+        _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--config", cfg])  # second diverges
+
+        def _boom(*_a, **_k):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(_presets, "write", _boom)
+        rc, payload = _run_json(["preset", "use", "default", "--config", cfg, "--json"])
+        assert rc == 1
+        assert payload["error"] == "write_failed"
+        assert payload["config_written"] is True
+        assert "opencode/glm-5" in _read(cfg), "the config did switch"
+
+    def test_changed_and_backup_come_from_the_write(self, tmp_path):
+        cfg = _agent_cfg(tmp_path)
+        _run(["preset", "new", "second", "--config", cfg])
+        _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--config", cfg])
+        rc, payload = _run_json(["preset", "use", "default", "--config", cfg, "--json"])
+        assert rc == 0 and payload["changed"] is True and payload["backup"], payload
+
+
 class TestSyncConflictIsOnEveryPayload:
     """CONTRACTS: `sync_conflict` is on EVERY payload. It was added verb by verb, and the
     `preset` payloads and every refusal went without it — so an agent refused under a conflict

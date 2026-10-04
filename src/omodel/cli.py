@@ -1255,13 +1255,16 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
                   as_json, lines=[f"already using '{session.store.presets[index].name}'"])
             return EXIT_OK
         preset = session.switch_preset(index)
+        # Through `_publish`, like `set`: a presets write that fails AFTER the config landed is
+        # reported as such (`_fail_write`), not as a bare `write_failed` that leaves the agent
+        # guessing, and `changed` is what was actually written — two presets holding the same
+        # models switch with no config write at all.
         try:
-            session.save_config()
-            session.write_store()
+            published = _publish(session, dry_run=False)
         except Exception as exc:
-            return _fail("write_failed", f"could not write: {exc}", as_json, code=EXIT_ERROR)
+            return _fail_write(exc, as_json)
         _emit({"ok": True, "action": "use", "name": preset.name, "index": index,
-               "changed": True},
+               "changed": published["changed"], "backup": published["backup"]},
               as_json, lines=[f"now using '{preset.name}'"])
         return EXIT_OK
 

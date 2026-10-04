@@ -64,6 +64,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The `omodel preset` replies and every error reply were missing `sync_conflict`, which is meant
   to be on every reply, so an agent refused while the config had changed outside omodel never
   found out. They now carry it.
+- If `omodel preset use` switched the config but then failed to save the presets file, it only
+  said "could not write", so an agent couldn't tell the config had already changed. It now says
+  so (`config_written: true`), like `omodel set`, and reports the backup it took.
 
 ### Changed
 
