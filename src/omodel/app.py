@@ -1794,6 +1794,10 @@ class OModelApp(App):
                 # esc — decide later. Adopting is already true in memory (the active preset's
                 # content IS cfg), so this leaves everything exactly as it is.
                 return
+            # Either answer settles the conflict: from here the live cfg belongs to the active
+            # preset again, so a switch or an add banks into it as usual. Left set, they skip
+            # the banking (Session.switch_preset) and silently drop what the user just chose.
+            self.session.sync_conflict = False
             if adopt:
                 self.notify(
                     f"'{preset.name}' will take your config's models — press s to save.",
@@ -1872,11 +1876,8 @@ class OModelApp(App):
             if text is None:
                 return
             came_from = self._store.active
-            self._store = self._projected_store()  # bank in-flight edits into the old preset
-            at = len(self._store.presets)
-            name = presets_mod.sanitize_name(text, at)
-            self._store.presets.append(presets_mod.capture(name, self.session.managed))
-            self._store.active = at
+            at = self.session.add_preset(text)  # banks in-flight edits into the old preset
+            name = self._store.presets[at].name
             # Adding changes `active` without changing cfg, so it pushes no history entry — the
             # entries recorded on the preset you were sitting on have to follow you here, or the
             # next `u` would quietly move the `●` back (and fold the restored models into the
@@ -2888,6 +2889,9 @@ class OModelApp(App):
         except Exception as exc:
             self.notify(f"Presets could not be written: {exc}", severity="error")
             return False
+        # Every caller writes the projected store, whose active preset IS the live cfg — so a
+        # save under an unanswered sync prompt (esc) adopted the config, and the conflict is over.
+        self.session.sync_conflict = False
         self._populate_presets()
         return True
 

@@ -4836,6 +4836,101 @@ def test_pilot_escape_on_the_sync_prompt_changes_nothing(pilot_config):
     asyncio.run(_run())
 
 
+def _conflicting_presets(cfg_path):
+    """Two presets, neither matching the pilot config (sisyphus = opencode/claude-opus-4-7), so
+    the launch opens the sync prompt with preset A active."""
+    a = presets_mod.capture("A", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    b = presets_mod.capture("B", {"agents": {"sisyphus": {"model": "moonshotai-cn/kimi-k2.5"}}})
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[a, b], active=0))
+
+
+def test_pilot_adopting_on_the_sync_prompt_survives_a_switch(pilot_config):
+    """`y` adopts the config into the active preset. The answer was never recorded, so the next
+    switch still skipped banking (the conflict rule) and preset A went back to its old models."""
+    cfg_path, _ = pilot_config
+    _conflicting_presets(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert isinstance(pilot.app.screen, ConfirmModal)
+            await pilot.press("y")
+            await pilot.pause()
+            await _switch_preset(pilot, 1)
+            a = pilot.app._projected_store().presets[0]
+            assert a.agents["sisyphus"]["model"] == "opencode/claude-opus-4-7", a.agents
+
+    asyncio.run(_run())
+
+
+def test_pilot_restoring_on_the_sync_prompt_then_editing_survives_a_switch(pilot_config):
+    """`n` restores preset A; an edit made after that belongs to A and must be banked into it
+    on the next switch, not dropped as if it were the foreign config."""
+    cfg_path, _ = pilot_config
+    _conflicting_presets(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await pilot.press("n")
+            await pilot.pause()
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _switch_preset(pilot, 1)
+            a = pilot.app._projected_store().presets[0]
+            assert a.agents["sisyphus"]["model"] == "openai/gpt-5.5", a.agents
+
+    asyncio.run(_run())
+
+
+def test_pilot_add_under_an_unanswered_sync_prompt_keeps_the_old_preset(pilot_config):
+    """After `esc`, `a` puts the foreign config into the NEW preset — as `omodel preset new`
+    does — and leaves preset A as stored. It used to bank the foreign config into A as well,
+    overwriting it with no undo."""
+    cfg_path, _ = pilot_config
+    _conflicting_presets(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await pilot.press("escape")
+            await pilot.pause()
+            await _new_preset(pilot, "foreign")
+            store = pilot.app._projected_store()
+            assert store.presets[0].agents["sisyphus"]["model"] == "zhipuai/glm-5"
+            assert store.presets[2].agents["sisyphus"]["model"] == "opencode/claude-opus-4-7"
+            assert store.active == 2
+            assert pilot.app.session.sync_conflict is False
+
+    asyncio.run(_run())
+
+
+def test_pilot_save_under_an_unanswered_sync_prompt_settles_it(pilot_config):
+    """`s` after `esc` adopts the config (it writes the active preset as the live cfg), so a
+    later switch must bank into A again rather than treat the config as foreign."""
+    cfg_path, _ = pilot_config
+    _conflicting_presets(cfg_path)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            if isinstance(pilot.app.screen, ConfirmModal):  # the config diff, if render differs
+                await pilot.press("y")
+                await pilot.pause()
+            assert pilot.app.session.sync_conflict is False
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _switch_preset(pilot, 1)
+            a = pilot.app._projected_store().presets[0]
+            assert a.agents["sisyphus"]["model"] == "openai/gpt-5.5", a.agents
+
+    asyncio.run(_run())
+
+
 def test_pilot_refresh_actually_re_resolves_the_chain(pilot_config, monkeypatch):
     """`r` must rebuild the PICK LIST against the refreshed catalog, not just the header.
 

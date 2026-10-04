@@ -246,7 +246,8 @@ commit.
   `.variants_for(p, m, stale_ok=True)->list`;
   `.set_model(target, provider, model, variant=None)`/`.set_row(target, row)`;
   `.clear(target)->bool`; `.delete_subtarget(name, kind)`; `.projected_store()->Store`;
-  `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.is_dirty()`/
+  `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.add_preset(name)->int`;
+  `.is_dirty()`/
   `.store_is_dirty()`; `.diff()->str`; `.save_config()->SaveResult`; `.write_store(store=None)
   ->Store` (RAISES); `.save()->SaveResult` (both files, config first — `app.py` calls the two
   halves instead, since its save is interactive). **MUST NOT import textual or app.**

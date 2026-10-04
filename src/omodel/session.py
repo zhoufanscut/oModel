@@ -677,6 +677,24 @@ class Session:
         root["categories"] = categories
         return preset
 
+    def add_preset(self, name: str) -> int:
+        """Append a preset holding the live models, make it active, and return its index.
+
+        The edits made on the preset you leave are banked into it first, as `switch_preset`
+        does — and, for the same reason, NOT under `sync_conflict`: the live cfg is then the
+        foreign config rather than that preset's edits, and the new preset is exactly where it
+        belongs. Either way this settles the conflict, since cfg now equals the active preset."""
+        if self.sync_conflict:
+            self.store = copy.deepcopy(self.store)  # leave the old preset as it was stored
+            self.sync_conflict = False
+        else:
+            self.store = self.projected_store()  # bank the in-flight edits into the old preset
+        at = len(self.store.presets)
+        name = presets_mod.sanitize_name(name, at)
+        self.store.presets.append(presets_mod.capture(name, self.managed))
+        self.store.active = at
+        return at
+
     # ----- dirtiness ------------------------------------------------------------------
 
     def store_is_dirty(self) -> bool:

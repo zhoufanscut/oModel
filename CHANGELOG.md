@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- When omodel starts and your config matches no preset, it asks whether to keep the config or
+  go back to the preset. Your answer was lost on the next preset switch: after "keep", the
+  preset went back to its old models, and after "go back", any edit you made next was dropped.
+  Both answers now stick, and so does saving after `esc`.
+- Under that same prompt, `a` (add preset) also overwrote the preset you were on with the
+  changed config. It now puts the config into the new preset only, like `omodel preset new`.
+
 ### Changed
 
 - Installing with pipx, uv or pip now needs Python 3.11 or newer (it was 3.9). Python 3.9 is no

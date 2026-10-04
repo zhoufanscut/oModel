@@ -1160,9 +1160,8 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
                      code=EXIT_USAGE)
 
     if action == "new":
-        clean = presets_mod.sanitize_name(name, len(session.store.presets))
-        session.store.presets.append(presets_mod.capture(clean, session.managed))
-        session.store.active = len(session.store.presets) - 1
+        at = session.add_preset(name)  # replaces session.store — index it only afterwards
+        clean = session.store.presets[at].name
         try:
             session.write_store()
         except Exception as exc:

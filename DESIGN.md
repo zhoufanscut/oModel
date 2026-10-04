@@ -1092,7 +1092,13 @@ In summary:
     ordinary edit with a diff you can read). Neither writes anything; both end at `s`. `esc` is a real
     third answer here (`ConfirmModal(escape_cancels=True)`, with a matching `hints=` line): it
     decides later, changing nothing — the default dismissal would have meant *restore*, silently
-    rewriting the config the user had just edited outside oModel.
+    rewriting the config the user had just edited outside oModel. **Adopt and restore both settle
+    the conflict** (`session.sync_conflict = False`), and so does any save (it writes the active
+    preset as the live cfg). While it is unsettled, a switch or an `a` does not bank the live cfg
+    into the preset you leave (`Session.switch_preset` / `add_preset`) — it is the foreign
+    config, not that preset's edits; `a` puts it into the new preset instead, like
+    `omodel preset new`. Left set after an answer, that skip silently dropped the adopted config
+    (or the edits made after a restore) on the next switch.
   - **Stale models degrade, they don't break:** a preset naming a model you no longer have switches
     in fine; `_build_rows` surfaces it as the off-chain current-assignment row with `⚠ unavailable`
     (warn-but-allow, decision #5) when the catalog is readable, suppressed in degraded mode.

@@ -172,6 +172,24 @@ class TestConstruction:
         s = _session(tmp_path)
         assert s.sync_conflict is True
 
+    def test_add_preset_under_sync_conflict_keeps_the_preset_you_leave(self, tmp_path):
+        """The foreign config goes into the NEW preset only — the one you leave keeps its stored
+        models (the switch_preset rule) — and the conflict is settled."""
+        cfg_path = tmp_path / "oh-my-openagent.jsonc"
+        _write(cfg_path, VALID_CONFIG)
+        other = presets.capture("other", {"agents": {"probe": {"model": "x/y"}}, "categories": {}})
+        presets.write(str(cfg_path), presets.Store(presets=[other], active=0))
+        s = _session(tmp_path)
+        assert s.sync_conflict is True
+
+        assert s.add_preset("foreign") == 1
+        assert s.sync_conflict is False
+        store = s.projected_store()
+        assert store.active == 1
+        assert store.presets[0].agents == {"probe": {"model": "x/y"}}
+        assert presets.fingerprint(store.presets[1].agents, store.presets[1].categories) == \
+            presets.fingerprint(s.managed.get("agents"), s.managed.get("categories"))
+
     def test_no_sync_conflict_when_config_matches_a_preset(self, tmp_path):
         cfg_path = tmp_path / "oh-my-openagent.jsonc"
         _write(cfg_path, VALID_CONFIG)
