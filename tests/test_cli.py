@@ -1503,6 +1503,44 @@ class TestPresetRefsThatIntRefuses:
         assert payload["error"] == "unknown_preset"
 
 
+class TestSyncConflictIsOnEveryPayload:
+    """CONTRACTS: `sync_conflict` is on EVERY payload. It was added verb by verb, and the
+    `preset` payloads and every refusal went without it — so an agent refused under a conflict
+    never learned of the conflict."""
+
+    def _conflicted(self, tmp_path):
+        cfg = _agent_cfg(tmp_path)
+        _run(["set", "agent:sisyphus", "zhipuai/glm-5", "--config", cfg])  # writes the presets
+        _write(cfg, '{"agents": {"sisyphus": {"model": "handedited/zzz"}}, "categories": {}}')
+        return cfg
+
+    @pytest.mark.parametrize("argv", [
+        ["preset", "ls"],
+        ["preset", "new", "keep-it"],
+        ["preset", "use", "default"],
+        ["preset", "use", "ghost"],               # unknown_preset
+        ["set", "cat:nope", "zhipuai/glm-5"],     # unknown_target
+        ["candidates", "cat:nope"],
+        ["set", "agent:sisyphus", "nope"],        # bad_value
+    ])
+    def test_reported_as_found(self, tmp_path, argv):
+        cfg = self._conflicted(tmp_path)
+        _, payload = _run_json([*argv, "--config", cfg, "--json"])
+        assert payload.get("sync_conflict") is True, payload
+
+    def test_clean_config_says_false(self, tmp_path):
+        _, payload = _run_json(["preset", "ls", "--config", _agent_cfg(tmp_path), "--json"])
+        assert payload["sync_conflict"] is False
+
+    def test_no_session_no_field(self, tmp_path):
+        """A config that cannot be read has no presets to compare — the field would be a guess."""
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, "{ not json")
+        rc, payload = _run_json(["show", "--config", str(path), "--json"])
+        assert rc == 1 and payload["error"] == "bad_config"
+        assert "sync_conflict" not in payload
+
+
 class TestOpeningAMissingConfigCreatesNothing:
     """Every CLI verb built its Session with a scaffolding load, so `show`, `check` and any
     `--dry-run` against a missing config left a starter file (and its directories) behind —

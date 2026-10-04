@@ -57,6 +57,8 @@ def main(argv: list | None = None) -> int:
 
     Flushing HERE turns that into a catchable BrokenPipeError, and the reader stopping early is
     not a failure: omodel did its work, so this is EXIT_OK and silent."""
+    global _found_conflict
+    _found_conflict = None  # per invocation: main() is importable and called repeatedly
     try:
         code = _main(argv)
         sys.stdout.flush()
@@ -462,13 +464,24 @@ def _default_color_system() -> None:
     os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "256")
 
 
+# The sync conflict as the running command FOUND it — set by `_open_session`, None before a
+# session exists (`bad_config`, usage errors) and outside the agent verbs.
+_found_conflict: bool | None = None
+
+
 def _emit(payload: dict, as_json: bool, lines=()) -> None:
     """Print `payload` as JSON, or `lines` as prose. Every JSON verb goes through here so the
-    schema stamp can't be forgotten on one of them."""
+    schema stamp can't be forgotten on one of them — nor `sync_conflict`, which CONTRACTS puts on
+    EVERY payload once a session is open. It was left to each verb, and the `preset` payloads and
+    every refusal (`_fail`) went without it. The stamp is the state the command found, the same
+    answer `set` gives: `preset use`/`new` settle a conflict in memory, and reporting the settled
+    value would hide that they did."""
     if as_json:
         import json
         payload = dict(payload)
         payload.setdefault("schema", SCHEMA)
+        if _found_conflict is not None:
+            payload.setdefault("sync_conflict", _found_conflict)
         # `ok` on EVERY payload, success or refusal. It is the field an agent branches on first,
         # and the read verbs used to omit it — so `payload["ok"]` KeyError'd on exactly the calls
         # that had succeeded. `check` sets its own (it reports ok=False for a problem config).
@@ -530,6 +543,8 @@ def _open_session(config_override, as_json: bool = False):
         if as_json:
             return None, _fail("bad_config", str(exc), True, code=EXIT_ERROR)
         return None, EXIT_ERROR
+    global _found_conflict
+    _found_conflict = session.sync_conflict
     if session.adopted_presets:
         print(
             f"[note] Adopted {session.adopted_presets} preset(s) from the previous config "

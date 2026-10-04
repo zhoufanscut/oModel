@@ -61,6 +61,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still comes first.
 - omo's own suggestions with reasoning `off` (librarian, explore, quick) were marked `⚠` as an
   unsupported variant until opencode's model details had been fetched once. They no longer are.
+- The `omodel preset` replies and every error reply were missing `sync_conflict`, which is meant
+  to be on every reply, so an agent refused while the config had changed outside omodel never
+  found out. They now carry it.
 
 ### Changed
 

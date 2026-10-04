@@ -94,7 +94,9 @@ are not. Every payload carries `"schema": 1`; bump only on a breaking change.
   `_validate` itself** (with `variant=None` — a bare `set` passes no variant), never by
   re-deriving the conditions: a hand-rolled version covered `gpt_only` and missed `unavailable`,
   so the synthesized off-chain row advertised `settable: true` and then exited 3.
-- **`sync_conflict`** is on EVERY payload (reads and writes). True = the config matches no preset
+- **`sync_conflict`** is on EVERY payload once a session is open — reads, writes AND refusals; not
+  on `bad_config` or usage errors, which have no presets to compare. `_emit` stamps it, as the
+  command FOUND it (`preset use`/`new` settle a conflict and still report `true`). True = the config matches no preset
   because something outside omodel wrote it, and **the next write adopts it into the active
   preset**, including targets the command never named. The TUI escalates the same decision via
   `_ask_sync`; the CLI cannot prompt, so it must report. The prose surfaces say it too — a
