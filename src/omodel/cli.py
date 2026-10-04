@@ -1116,6 +1116,7 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
                      'expected an object mapping target -> {"model": ..., "variant": ...}',
                      as_json, code=EXIT_USAGE)
 
+    from omodel import session as session_mod
     from omodel.catalog import normalize_variant
 
     planned = []
@@ -1125,8 +1126,27 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
         if not isinstance(spec, dict):
             return _fail("bad_input", f"{target!r}: expected an object or a model string",
                          as_json, code=EXIT_USAGE, target=target)
+        # Shape errors are all `bad_input`, exit 2 (the guide's "bad stdin JSON"). An unknown
+        # key used to be dropped in silence: `{"model": …, "reasoning": "high"}` — the config's
+        # own spelling — answered ok and wrote no level at all.
+        unknown = sorted(str(k) for k in spec if k not in ("model", "variant"))
+        if unknown:
+            hint = (' — the reasoning level goes under "variant", whatever the config calls it'
+                    if any(k in session_mod.REASONING_KEYS for k in unknown) else "")
+            return _fail("bad_input",
+                         f"{target!r}: unknown key(s) {', '.join(map(repr, unknown))}; an entry "
+                         f'takes "model" and "variant"{hint}',
+                         as_json, code=EXIT_USAGE, target=target)
+        if "model" not in spec:
+            return _fail("bad_input", f'{target!r}: an entry needs a "model"',
+                         as_json, code=EXIT_USAGE, target=target)
         value = spec.get("model")
         variant = spec.get("variant")
+        if variant is not None and not isinstance(variant, str):
+            return _fail("bad_input",
+                         f"{target!r}: variant must be a string or null, got "
+                         f"{type(variant).__name__}",
+                         as_json, code=EXIT_USAGE, target=target)
         variant = variant.strip() if isinstance(variant, str) else variant
         # The same conversion `set` applies (opencode's `none` → omo's `off`), for the same two
         # reasons: the guard measures in omo's vocabulary, and `applied` below must report what

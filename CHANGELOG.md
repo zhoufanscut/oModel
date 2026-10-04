@@ -45,6 +45,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel check` passed a model written without its provider (`"gpt-5.5"` instead of
   `"openai/gpt-5.5"`), which `omodel set` refuses. When opencode was available it blamed the
   providers instead ("no connected provider serves"). It now reports `bad_value`.
+- `omodel apply` ignored keys it didn't know, so `{"model": …, "reasoning": "high"}` (the config's
+  own spelling) answered `ok` and set no reasoning level. It now refuses the entry and says the
+  level goes under `"variant"`. A wrongly typed `variant` now exits 2 like every other bad input
+  (it was 3).
 
 ### Changed
 

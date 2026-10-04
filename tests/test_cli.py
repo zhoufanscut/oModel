@@ -935,9 +935,28 @@ class TestReviewRegressions:
         monkeypatch.setattr("sys.stdin", io.StringIO(_json.dumps(
             {"cat:quick": {"model": "zhipuai/glm-5", "variant": {"x": 1}}})))
         rc, payload = _run_json(["apply", "--config", cfg, "--json"])
-        assert rc == 3
+        assert rc == 2, "bad_input is a usage error (exit 2) wherever it comes from"
         assert payload["error"] == "bad_input"
         assert "variant" not in _read(cfg)
+
+    @pytest.mark.parametrize("spec,needle", [
+        ({"model": "zhipuai/glm-5", "reasoning": "high"}, 'goes under "variant"'),
+        ({"model": "zhipuai/glm-5", "reasoningEffort": "high"}, 'goes under "variant"'),
+        ({"model": "zhipuai/glm-5", "modle": "x"}, "'modle'"),
+        ({"variant": "high"}, 'needs a "model"'),
+    ])
+    def test_apply_refuses_a_misshapen_entry(self, tmp_path, monkeypatch, spec, needle):
+        """An unknown key was ignored: `"reasoning": "high"` (the config's own spelling) came
+        back `ok` with no level written. Every shape error is bad_input, exit 2."""
+        import io
+        cfg = _agent_cfg(tmp_path)
+        before = _read(cfg)
+        monkeypatch.setattr("sys.stdin", io.StringIO(_json.dumps({"cat:quick": spec})))
+        rc, payload = _run_json(["apply", "--config", cfg, "--json"])
+        assert rc == 2
+        assert payload["error"] == "bad_input"
+        assert needle in payload["message"]
+        assert _read(cfg) == before
 
     # ----- no-op writes -----
 

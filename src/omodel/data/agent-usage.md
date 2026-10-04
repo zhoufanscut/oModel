@@ -187,9 +187,11 @@ echo '{"agent:sisyphus": {"model": "opencode/claude-opus-5", "variant": "max"},
        "cat:quick": "openai/gpt-5.4-mini-fast"}' | omodel apply --json
 ```
 
-A value may be an object (`{"model": …, "variant": …}`) or a bare model string. Validation is
-all-or-nothing: if any entry is bad, nothing is written and you get exit 3 — so a half-applied
-config never lands.
+A value may be an object (`{"model": …, "variant": …}`) or a bare model string. Those are the
+only two keys: the reasoning level goes under `variant` even when the config spells it
+`reasoning`, and any other key is refused (`bad_input`, exit 2) rather than ignored. Validation is
+all-or-nothing: if any entry is bad, nothing is written and you get exit 3 (or 2 for a misshapen
+entry) — so a half-applied config never lands.
 
 `omodel preset use <name>` switches a whole named set of assignments in one save, and is the
 cheapest bulk change available.
