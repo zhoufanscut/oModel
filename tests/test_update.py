@@ -506,22 +506,22 @@ class TestApplyUpdate:
         assert target.read_bytes() == before
         assert sorted(p.name for p in target.parent.iterdir()) == ["omodel"]
 
-    def test_release_without_a_checksum_installs_but_says_so(self, tmp_path, monkeypatch,
-                                                            binary_install):
-        """`install.sh` warns and continues when a release publishes no `.sha256`; so does this.
-        The verdict is reported (`verified: false`) rather than implied."""
+    def test_release_without_a_checksum_is_refused(self, tmp_path, monkeypatch, binary_install):
+        """Fail-closed. Only `releases/latest` is installed and every release since v0.2.0 has a
+        `.sha256`, so a missing one is a broken or tampered release — it used to warn and install
+        anyway, which made the check optional for exactly the release an attacker would ship."""
         install, target = binary_install
+        before = target.read_bytes()
         tarball = _make_tarball(tmp_path / TARBALL)
         net = _Net({DOWNLOAD: tarball.read_bytes()})
         monkeypatch.setattr(update, "_open", net.open)
         release = update.Release("v9.9.9", "9.9.9", "u", "", {TARBALL: DOWNLOAD})
-        steps = []
 
-        result = update.apply_update(release, install, on_step=steps.append)
+        with pytest.raises(update.UpdateError) as excinfo:
+            update.apply_update(release, install)
 
-        assert result.verified is False
-        assert any("warning" in s for s in steps)
-        assert "echo '9.9.9'" in target.read_text()
+        assert excinfo.value.kind == "no_checksum"
+        assert target.read_bytes() == before
 
     def test_a_binary_that_will_not_run_is_not_installed(self, tmp_path, monkeypatch,
                                                          binary_install):
@@ -657,9 +657,10 @@ class TestApplyUpdate:
             info.type = link_type
             info.linkname = "/etc/passwd"
             tar.addfile(info)
-        net = _Net({DOWNLOAD: path.read_bytes()})
+        net = _Net({DOWNLOAD: path.read_bytes(), SUMS: f"{_sha256(path)}  {TARBALL}\n"})
         monkeypatch.setattr(update, "_open", net.open)
-        release = update.Release("v9.9.9", "9.9.9", "u", "", {TARBALL: DOWNLOAD})
+        release = update.Release("v9.9.9", "9.9.9", "u", "", {
+            TARBALL: DOWNLOAD, f"{TARBALL}.sha256": SUMS})
 
         with pytest.raises(update.UpdateError) as excinfo:
             update.apply_update(release, install)
@@ -667,20 +668,20 @@ class TestApplyUpdate:
         assert excinfo.value.kind == "bad_asset", label
         assert target.read_bytes() == before
 
-    def test_an_empty_checksum_file_does_not_verify(self, tmp_path, monkeypatch, binary_install):
+    def test_an_empty_checksum_file_is_refused(self, tmp_path, monkeypatch, binary_install):
         install, target = binary_install
+        before = target.read_bytes()
         tarball = _make_tarball(tmp_path / TARBALL)
         net = _Net({DOWNLOAD: tarball.read_bytes(), SUMS: "\n"})
         monkeypatch.setattr(update, "_open", net.open)
         release = update.Release("v9.9.9", "9.9.9", "u", "", {
             TARBALL: DOWNLOAD, f"{TARBALL}.sha256": SUMS})
-        steps = []
 
-        result = update.apply_update(release, install, on_step=steps.append)
+        with pytest.raises(update.UpdateError) as excinfo:
+            update.apply_update(release, install)
 
-        assert result.verified is False          # reported, never implied
-        assert any("warning" in s for s in steps)
-        assert "echo '9.9.9'" in target.read_text()
+        assert excinfo.value.kind == "no_checksum"
+        assert target.read_bytes() == before
 
     def test_preflight_refuses_before_any_download(self, monkeypatch, binary_install):
         """What `cli` calls ahead of the confirm prompt, so nobody is asked to approve a swap

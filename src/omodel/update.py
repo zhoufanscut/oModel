@@ -471,9 +471,9 @@ def _close(response) -> None:
 
 @dataclass(frozen=True)
 class UpdateResult:
-    """What `apply_update` did. `verified` is False only when the release published no
-    `.sha256` asset (older releases) — `install.sh` warns and continues there too, and the
-    smoke test still has to pass either way."""
+    """What `apply_update` did. `verified` is always True now — a release without a usable
+    checksum is refused (`no_checksum`) — and stays in the `--json` payload so the field an
+    agent may already read keeps its meaning."""
 
     path: str
     version: str
@@ -645,20 +645,24 @@ def _sync_dir(path: str) -> None:
 def _verify_checksum(release, tarball: str, archive: str, timeout: float, step) -> bool:
     """Check the tarball against the release's published `.sha256`.
 
-    Same rule as `install.sh`: a mismatch is fatal, a MISSING checksum asset warns and
-    continues (releases before the checksum step existed have none). Returning the verdict
-    rather than swallowing it lets `--json` report `verified: false` instead of implying a
-    verification that never happened."""
+    Same rule as `install.sh`, and fail-CLOSED: a mismatch, a missing checksum asset and an
+    empty one all stop the update before anything is installed. `--update` only ever goes to
+    `releases/latest`, and every release since v0.2.0 publishes a checksum, so its absence is
+    never "an old release" — it is a broken or tampered one. Warning and installing anyway (what
+    this did) made the check optional for exactly the release an attacker would publish."""
     sums_url = release.assets.get(f"{tarball}.sha256")
     if not sums_url:
-        step("warning: this release publishes no checksum — skipping verification")
-        return False
+        raise UpdateError(
+            "no_checksum",
+            f"release {release.tag} publishes no {tarball}.sha256 — nothing was installed",
+        )
 
     step("Verifying checksum ...")
     expected = _get_text(sums_url, timeout).split()
     if not expected:
-        step("warning: checksum file is empty — skipping verification")
-        return False
+        raise UpdateError(
+            "no_checksum", f"{tarball}.sha256 in {release.tag} is empty — nothing was installed"
+        )
 
     digest = hashlib.sha256()
     with open(archive, "rb") as handle:

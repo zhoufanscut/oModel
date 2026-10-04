@@ -97,6 +97,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A presets file omodel couldn't use was only kept as `.corrupt` when it wasn't valid JSON; one
   with the right version but the wrong shape was overwritten without a copy, and a second broken
   file replaced the first one's copy. Both are now kept (`.corrupt`, `.corrupt.1`, …).
+- `install.sh` and `omodel --update` installed a release anyway when its checksum file was
+  missing, empty, or (for `install.sh`) failed to download for any reason. They now stop with
+  nothing installed. Every release since 0.2.0 has a checksum. For `install.sh`,
+  `OMODEL_SKIP_VERIFY=1` skips the check on purpose.
+- `install.sh` now runs the downloaded binary before installing it, so on a system whose glibc is
+  too old it stops and points you to pipx instead of installing a binary that can't start. It also
+  installs in one atomic step, and a partly downloaded copy of the script runs nothing.
 
 ### Changed
 

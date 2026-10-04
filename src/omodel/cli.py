@@ -1440,9 +1440,6 @@ def _cmd_update(force: bool, assume_yes: bool, as_json: bool) -> int:
     payload.update({"changed": True, "previous": current, "installed": result.version,
                     "path": result.path, "verified": result.verified})
     lines = [f"Updated omodel {current} → {result.version}", f"  {result.path}"]
-    if not result.verified:
-        lines.append("  (this release published no checksum — the new binary was still run "
-                     "before being installed)")
     _emit(payload, as_json, lines=lines)
     return EXIT_OK
 

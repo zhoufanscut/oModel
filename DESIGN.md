@@ -1206,9 +1206,11 @@ dependency added here would ship inside the very binary this replaces.
      naive check measures time since `mkdtemp` and would sweep a live download that had been
      running for an hour — and `DOWNLOAD_TIMEOUT` is per socket operation, not per transfer, so
      a big asset on a bad link legitimately runs that long;
-  2. checksum against the release's published `.sha256`, same rule as `install.sh` — mismatch is
-     fatal, a *missing* checksum asset warns and continues (older releases have none) and reports
-     `verified: false` rather than implying a check that never ran;
+  2. checksum against the release's published `.sha256`, same rule as `install.sh`, fail-closed —
+     a mismatch, a *missing* checksum asset and an *empty* one all stop it (`checksum_mismatch` /
+     `no_checksum`). Only `releases/latest` is ever installed and every release since v0.2.0 has a
+     checksum, so a missing one means a broken or tampered release, not an old one (it used to warn
+     and install anyway); `verified` stays in the payload, always true;
   3. extract **only** the `omodel` member, to a path we choose — never `extractall`, so a `..`
      member has nowhere to write (no tarfile `filter=` needed).
      LICENSE/NOTICE ride in the tarball and are simply not written;
@@ -1518,8 +1520,8 @@ dependency added here would ship inside the very binary this replaces.
 - **Staying current — `omodel --update`:** the standalone binary updates itself from the same
   Release assets `install.sh` reads (tarball + `.sha256`, `releases/latest`), which is why the
   installer's asset naming is a contract and not an implementation detail: the two must agree on
-  `omodel-<os>-<arch>.tar.gz` forever, and a release that stops publishing the checksum silently
-  downgrades both to unverified. Every other install kind gets a tag-pinned command instead. →
+  `omodel-<os>-<arch>.tar.gz` forever, and a release that stops publishing the checksum can't be
+  installed by either (both refuse rather than install unverified). Every other install kind gets a tag-pinned command instead. →
   §update.py
 - **Secondary — pip/pipx/uvx straight from GitHub (no PyPI):**
   `pipx install git+https://github.com/<you>/oModel` ·
