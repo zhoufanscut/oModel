@@ -92,6 +92,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel --restore` copied the backup straight over your config, so a full disk part-way could
   leave it cut short, and the backups could grow past 20. It now writes the way a save does, in
   one step, and keeps 20. Saves also flush the file to disk before replacing the old one.
+- If `.omodel-presets.json` was a symlink (a dotfile manager), saving replaced it with a plain
+  file, so the managed copy stopped updating. It now writes through the link.
+- A presets file omodel couldn't use was only kept as `.corrupt` when it wasn't valid JSON; one
+  with the right version but the wrong shape was overwritten without a copy, and a second broken
+  file replaced the first one's copy. Both are now kept (`.corrupt`, `.corrupt.1`, …).
 
 ### Changed
 

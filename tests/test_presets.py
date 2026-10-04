@@ -516,6 +516,33 @@ class TestCorruptFileIsPreserved:
             assert "THIS IS BROKEN" in f.read()
         assert [p.name for p in presets.load(path).presets] == ["fresh"]
 
+    @pytest.mark.parametrize("body", [
+        '{"version": 2, "active": 0, "presets": {}}',     # right version, wrong shape
+        '{"version": 2, "active": 0, "presets": [1, 2]}',  # a list of junk
+    ])
+    def test_a_file_load_cannot_use_is_moved_aside_too(self, tmp_path, body):
+        """The right `version` was taken as "readable", but these load as an EMPTY store, and
+        the next write overwrote them without a copy."""
+        path = _cfg_path(tmp_path)
+        sidecar = presets.presets_path(path)
+        with open(sidecar, "w", encoding="utf-8") as f:
+            f.write(body)
+        presets.write(path, _store_of("fresh"))
+        with open(sidecar + ".corrupt", encoding="utf-8") as f:
+            assert f.read() == body
+
+    def test_a_second_corrupt_file_does_not_replace_the_first_copy(self, tmp_path):
+        path = _cfg_path(tmp_path)
+        sidecar = presets.presets_path(path)
+        for n in (1, 2):
+            with open(sidecar, "w", encoding="utf-8") as f:
+                f.write(f"broken {n}")
+            presets.write(path, _store_of("fresh"))
+        with open(sidecar + ".corrupt", encoding="utf-8") as f:
+            assert f.read() == "broken 1"
+        with open(sidecar + ".corrupt.1", encoding="utf-8") as f:
+            assert f.read() == "broken 2"
+
     def test_a_readable_file_is_not_moved_aside(self, tmp_path):
         path = _cfg_path(tmp_path)
         presets.write(path, _store_of("first"))
@@ -530,3 +557,37 @@ class TestCorruptFileIsPreserved:
             presets.write(path, _store_of("a"))
         assert os.path.isdir(presets.presets_path(path))
         assert not os.path.exists(presets.presets_path(path) + ".corrupt")
+
+
+class TestWriteKeepsTheFile:
+
+    def test_a_symlinked_presets_file_stays_a_symlink(self, tmp_path):
+        """`os.replace` on the link itself turned a dotfile-managed presets file into a regular
+        one, and the managed copy stopped updating."""
+        path = _cfg_path(tmp_path)
+        real = tmp_path / "dotfiles" / "omodel-presets.json"
+        real.parent.mkdir()
+        os.symlink(real, presets.presets_path(path))
+        presets.write(path, _store_of("first"))   # through a dangling link: creates the target
+        presets.write(path, _store_of("linked"))
+        assert os.path.islink(presets.presets_path(path))
+        assert "linked" in real.read_text(encoding="utf-8")
+
+    def test_an_unreadable_symlinked_file_is_copied_aside_and_the_link_kept(self, tmp_path):
+        path = _cfg_path(tmp_path)
+        real = tmp_path / "dotfiles" / "omodel-presets.json"
+        real.parent.mkdir()
+        real.write_text("broken", encoding="utf-8")
+        os.symlink(real, presets.presets_path(path))
+        presets.write(path, _store_of("fresh"))
+        assert os.path.islink(presets.presets_path(path))
+        with open(presets.presets_path(path) + ".corrupt", encoding="utf-8") as f:
+            assert f.read() == "broken"
+        assert "fresh" in real.read_text(encoding="utf-8")
+
+    def test_the_write_is_fsynced_before_the_rename(self, tmp_path, monkeypatch):
+        synced = []
+        real_fsync = os.fsync
+        monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real_fsync(fd))[1])
+        presets.write(_cfg_path(tmp_path), _store_of("a"))
+        assert synced, "a crash after the rename must not be able to leave an empty file"

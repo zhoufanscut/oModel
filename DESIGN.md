@@ -972,9 +972,12 @@ In summary:
   That splits the repo's two conventions deliberately: `cache.py` swallows write errors because a
   lost cache write costs only speed, while a silently-dropped preset write would be a lie about
   durable state. **Best-effort reading has a sharp edge, so `write` guards it:** an existing file
-  that doesn't parse is moved to `<path>.corrupt` before the overwrite — otherwise a transiently
-  unreadable sidecar reads as empty, gets seeded, and the first save destroys presets the app
-  never saw.
+  that `load` cannot use (doesn't parse, or the right version with a wrong shape) is moved to
+  `<path>.corrupt` (then `.corrupt.1`, `.corrupt.2`, … — never over an earlier copy; COPIED
+  instead when the file is a symlink, so the link stays) before the overwrite — otherwise a
+  transiently unreadable sidecar reads as empty, gets seeded, and the first save destroys presets
+  the app never saw. The write itself goes to the file the path RESOLVES to (a dotfile manager's
+  symlink stays a symlink), fsynced before the atomic rename.
 - **API (pure data + file IO, no Textual — a leaf like `history.py`, no omodel imports):**
   `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass Store(presets, active)` with
   `.current()` / `.is_empty()`; `load(config_path) -> Store`; `write(config_path, store) -> Store`

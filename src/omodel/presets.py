@@ -43,6 +43,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -228,16 +229,33 @@ def _preserve_unreadable(path: str) -> None:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        readable = isinstance(data, dict) and data.get("version") in (
-            FILE_VERSION,
-            *_LEGACY_VERSIONS,
+        # "Readable" means `load()` understood it — not merely that the version matched. A file
+        # with the right version and `"presets": {}` (or a list of junk) loads as an EMPTY store,
+        # and was overwritten without a copy.
+        raw = data.get("presets") if isinstance(data, dict) else None
+        readable = (
+            isinstance(data, dict)
+            and data.get("version") in (FILE_VERSION, *_LEGACY_VERSIONS)
+            and isinstance(raw, list)
+            and (not raw or any(_entry(r) is not None for r in raw))
         )
     except Exception:
         readable = False  # unparseable / unreadable → worth keeping a copy of
     if readable:
         return
+    # Never over an earlier `.corrupt`: a second bad file used to replace the first one's copy.
+    dest = path + ".corrupt"
+    n = 1
+    while os.path.exists(dest):
+        dest = f"{path}.corrupt.{n}"
+        n += 1
     try:
-        os.replace(path, path + ".corrupt")
+        if os.path.islink(path):
+            # COPY the content and keep the link: moving it would carry the LINK off to
+            # `.corrupt`, and the write would then land as a detached regular file.
+            shutil.copyfile(path, dest)
+        else:
+            os.replace(path, dest)
     except OSError:
         pass  # can't preserve it (a directory, no permission) — let the write proceed and report
 
@@ -287,11 +305,21 @@ def write(config_path: str, store: Store) -> Store:
     alongside the config write. That is what keeps config-equals-active-preset true at rest."""
     path = presets_path(config_path)
     _preserve_unreadable(path)
-    tmp = f"{path}.tmp-{os.getpid()}"
+    # Onto the file `path` RESOLVES to, like the config's save: replacing the path itself turned
+    # a symlinked presets file (a dotfile manager) into a regular one, and the managed copy
+    # stopped updating. The temp sits beside the real file — os.replace is atomic only within
+    # one filesystem — and is fsynced first, so a crash can't leave an empty presets file.
+    target = os.path.realpath(path)
+    tmp = f"{target}.tmp-{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(_payload(store))
-        os.replace(tmp, path)
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except OSError:
+                pass  # best-effort: some mounts refuse fsync, and that must not fail a save
+        os.replace(tmp, target)
     except Exception:
         try:
             os.remove(tmp)

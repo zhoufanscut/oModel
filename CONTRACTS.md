@@ -205,9 +205,9 @@ commit.
   store, never raises; `active` normalized into range; MIGRATES the original fixed-3 shape —
   `null` holes dropped, `active` following the preset it named);
   `write(config_path, store)->Store` (**the ONLY disk write in this module** — atomic, RAISES on
-  failure so app.py notifies, returns the store as read back; an existing file that does not parse
-  is moved to `<path>.corrupt` first, since `load` degrades it to an empty store the app would
-  otherwise clobber); `adopt(src_config_path, dst_config_path)->int|None` (one-time hand-over of
+  failure so app.py notifies, returns the store as read back; an existing file `load` cannot use
+  is moved to `<path>.corrupt` (or `.corrupt.N`) first, since `load` degrades it to an empty store
+  the app would otherwise clobber; writes through a symlink); `adopt(src_config_path, dst_config_path)->int|None` (one-time hand-over of
   a pre-4.19.3 store to the unified location — writes, reads back, compares names, and only THEN
   deletes the original; any failure leaves it in place. `Session` calls it for the DEFAULT
   unified path only). Pure helpers: `capture(name, managed)` /
