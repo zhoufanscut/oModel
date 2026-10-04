@@ -40,6 +40,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to another agent and back, or press `r`.
 - A model whose opencode details had an unexpected shape (for example the context size as text)
   could close the app when you moved onto it. Those details are now shown as unknown.
+- Pressing `s` closed the app, losing your unsaved changes, if the config file had become
+  unreadable since launch. It now says the save failed and keeps your changes.
 
 ### Changed
 

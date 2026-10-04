@@ -2936,8 +2936,16 @@ class OModelApp(App):
         `s` publishes BOTH files, because the invariant is that the config on disk equals the
         active preset: letting one land without the other is exactly the orphan state the design
         exists to prevent. A presets-only change (fork, delete, rename, or adopting an
-        out-of-band config edit) has no config diff to confirm, so it writes straight out."""
-        diff = config_io.diff_text(self.cfg, self.config_path)
+        out-of-band config edit) has no config diff to confirm, so it writes straight out.
+
+        Reading the file for the diff is I/O like the write, and fails like it (the config made
+        unreadable mid-session): surface it the same way, since an exception here would close
+        the app and take every staged edit with it."""
+        try:
+            diff = config_io.diff_text(self.cfg, self.config_path)
+        except Exception as exc:
+            self.notify(f"Save failed: {exc}", severity="error")
+            return
         store = self._projected_store()
         store_dirty = presets_mod.store_fingerprint(store) != self._saved_store_fp
         if not diff.strip():
@@ -2949,7 +2957,11 @@ class OModelApp(App):
             # re-baseline `q` would warn about unsaved work forever while `s` insisted there was
             # none, with no way out from inside the app. `config_io.save` returns before it takes
             # a backup or touches the ring when the render matches disk, so this writes nothing.
-            self.session.save_config()
+            try:
+                self.session.save_config()
+            except Exception as exc:
+                self.notify(f"Save failed: {exc}", severity="error")
+                return
             if not store_dirty:
                 self.notify("Nothing to save.")
                 return

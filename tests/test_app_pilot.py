@@ -3277,6 +3277,34 @@ def test_pilot_a_non_string_model_does_not_crash_the_app(tmp_path, model):
     asyncio.run(_run())
 
 
+def test_pilot_save_with_an_unreadable_config_reports_instead_of_crashing(pilot_config):
+    """`s` read the file for its diff outside any try: a config made unreadable mid-session
+    (chmod 000, a vanished mount) raised out of the action and closed the app, dropping every
+    staged edit."""
+    cfg_path, _ = pilot_config
+    notifications = []
+
+    async def _run():
+        app = _build_app(cfg_path)
+        app.notify = lambda message, **kwargs: notifications.append(message)
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "zhipuai/glm-5")
+            os.chmod(cfg_path, 0)
+            try:
+                await pilot.press("s")
+                await pilot.pause()
+            finally:
+                os.chmod(cfg_path, 0o644)
+            assert pilot.app.is_running
+            assert pilot.app.cfg["agents"]["sisyphus"]["model"] == "zhipuai/glm-5"
+
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        pytest.skip("root ignores file modes")
+    asyncio.run(_run())
+    assert any(m.startswith("Save failed") for m in notifications), notifications
+
+
 def test_pilot_refresh_failure_of_any_kind_keeps_the_app_running(pilot_config, monkeypatch):
     """`r` caught only CatalogUnavailable; anything else failed the worker, and a failed worker
     exits the app with every staged edit. It must notify and keep the catalog it had."""
