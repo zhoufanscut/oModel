@@ -77,7 +77,8 @@ prefix and a valid variant, and saves a clean config.
   list(prefixes)` (first-seen order, never a set). Verified prefixes: `opencode deepseek
   moonshotai-cn openai zhipuai` (79 models today — count varies; tests must **not** hard-assert it).
   **Error rule (one definition, used by `catalog.load` too):** `opencode` not on `PATH` → banner +
-  suggestions/add-model only; else exit code ≠ 0 **or** zero `provider/model` lines parsed → raise
+  suggestions/add-model only; else unrunnable (on `PATH` but `ENOEXEC`/`EACCES`/undecodable output —
+  a wrong-architecture or truncated binary), exit code ≠ 0 **or** zero `provider/model` lines parsed → raise
   `CatalogUnavailable` → banner "couldn't read models", offer retry (`r`), degrade. (There is no other
   "partial" state.) `opencode models --refresh` is exposed as `omodel --refresh-models`, which also
   rebuilds the local cache (§cache.py).

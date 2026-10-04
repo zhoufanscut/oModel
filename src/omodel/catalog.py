@@ -103,8 +103,8 @@ class Catalog:
                     timeout=_VERBOSE_TIMEOUT,
                     check=False,   # returncode inspected below; a non-zero exit is a handled state
                 )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                return None
+            except (OSError, UnicodeDecodeError, subprocess.TimeoutExpired):
+                return None  # missing, unrunnable (ENOEXEC, EACCES…), or undecodable output
             if result.returncode != 0:
                 return None
             stdout = result.stdout
@@ -297,7 +297,7 @@ def load(opencode_bin: str = "opencode", use_cache: bool = True) -> Catalog:
     """`opencode models` → Catalog. Split each line on the FIRST `/`.
     Error rule (DESIGN §Data sources — the single definition):
       * `opencode` not on PATH        → return Catalog(available={}, connected=[])
-      * exit != 0 OR zero lines parsed → raise CatalogUnavailable
+      * unrunnable (ENOEXEC, EACCES…), exit != 0 OR zero lines parsed → raise CatalogUnavailable
 
     With `use_cache` (default), a fresh `~/.cache/omodel/models.json` (≤24h) is served
     instead of shelling out — a warm launch is instant. opencode presence is still checked
@@ -328,6 +328,11 @@ def load(opencode_bin: str = "opencode", use_cache: bool = True) -> Catalog:
         raise CatalogUnavailable(
             f"`{opencode_bin} models` timed out after {_MODELS_TIMEOUT}s"
         ) from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        # On PATH but unrunnable — a wrong-architecture or truncated binary (ENOEXEC), no
+        # permission — or output that isn't text. Unhandled, this escaped Session.build as a
+        # traceback: `--check` exited 1 and every `--json` verb printed nothing.
+        raise CatalogUnavailable(f"`{opencode_bin} models` could not run: {exc}") from exc
 
     if result.returncode != 0:
         raise CatalogUnavailable(
@@ -354,7 +359,7 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
     network re-fetch). app.py runs it in a worker so it never blocks the UI thread.
 
     Same error contract as load(): not on PATH → empty Catalog (+ cache cleared);
-    exit != 0 / zero lines → CatalogUnavailable."""
+    unrunnable / exit != 0 / zero lines → CatalogUnavailable."""
     if shutil.which(opencode_bin) is None:
         cache.clear()
         return Catalog(available={}, connected=[])
@@ -373,6 +378,10 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
     except subprocess.TimeoutExpired as exc:
         raise CatalogUnavailable(
             f"`{opencode_bin} models --refresh` timed out after {_REFRESH_TIMEOUT}s"
+        ) from exc
+    except (OSError, UnicodeDecodeError) as exc:  # unrunnable binary — see load()
+        raise CatalogUnavailable(
+            f"`{opencode_bin} models --refresh` could not run: {exc}"
         ) from exc
 
     if result.returncode != 0:

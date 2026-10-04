@@ -16,6 +16,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Undo could leave an undone edit in another preset. After editing preset B and switching back,
   undoing all of it left the edit in B: it came back the next time you opened B, the app said
   there were unsaved changes, and `s` would have saved it. Undo now takes it out of B too.
+- A broken `opencode` (one that is on your PATH but can't run, for example built for another CPU)
+  made omodel crash: `omodel --check` exited 1 with a traceback, the `--json` commands printed
+  nothing, and pressing `r` closed the app. omodel now treats it like an `opencode` that can't
+  read models: it shows the "couldn't read models" banner and keeps working.
 
 ### Changed
 

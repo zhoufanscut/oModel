@@ -116,6 +116,16 @@ class TestCheck:
         assert rc == 0
         assert "[check] OK (full mode)" in captured.out
 
+    def test_check_with_an_unrunnable_opencode_still_exits_0(self, capsys):
+        """A wrong-architecture binary on PATH makes subprocess.run raise OSError(ENOEXEC). It
+        escaped as a traceback with exit 1, breaking `--check`'s always-exit-0 contract."""
+        with (
+            patch("subprocess.run", side_effect=OSError(8, "Exec format error")),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            rc = cli.main(["--check"])
+        assert rc == 0
+
     def test_check_degraded_mode(self, capsys):
         # opencode absent → catalog.load() returns before ever calling subprocess.run.
         with _NO_SHELL, patch("shutil.which", return_value=None):
@@ -428,6 +438,18 @@ class TestCandidates:
 
 
 class TestCheckCommand:
+
+    def test_json_verbs_survive_an_unrunnable_opencode(self, tmp_path, capsys):
+        """Same failure through a JSON verb: it used to print nothing at all on stdout."""
+        cfg = _agent_cfg(tmp_path)
+        with (
+            patch("subprocess.run", side_effect=OSError(8, "Exec format error")),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            rc = cli.main(["show", "--config", cfg, "--json"])
+        payload = _json.loads(capsys.readouterr().out)
+        assert rc == 0
+        assert payload["degraded"] is True
 
     def test_clean_config_exits_0(self, tmp_path):
         rc, payload = _run_json(["check", "--config", _agent_cfg(tmp_path), "--json"])

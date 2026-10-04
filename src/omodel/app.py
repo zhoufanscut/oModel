@@ -3025,6 +3025,12 @@ class OModelApp(App):
                 self._render_providers()
                 self.notify("Refresh failed — couldn't read models.", severity="error")
                 return
+            except Exception as exc:
+                # Anything else would fail the worker, and a failed worker exits the app —
+                # taking every staged edit with it. Keep the catalog we had.
+                self._render_providers()
+                self.notify(f"Refresh failed: {exc}", severity="error")
+                return
             self.catalog = new_catalog
             self.catalog_error = None
             try:

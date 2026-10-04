@@ -3257,6 +3257,37 @@ def test_to_thread_daemon_is_quiet_when_the_loop_is_already_gone(boom):
 # Pilot test: double-`r` is single-flight (no concurrent refresh calls)
 # ---------------------------------------------------------------------------
 
+def test_pilot_refresh_failure_of_any_kind_keeps_the_app_running(pilot_config, monkeypatch):
+    """`r` caught only CatalogUnavailable; anything else failed the worker, and a failed worker
+    exits the app with every staged edit. It must notify and keep the catalog it had."""
+    cfg_path, _ = pilot_config
+    from omodel import app as app_mod
+
+    notifications = []
+
+    def _broken_refresh(*_a, **_k):
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(app_mod.catalog_mod, "refresh", _broken_refresh)
+
+    async def _run():
+        app = _build_app(cfg_path)
+        app.notify = lambda message, **kwargs: notifications.append(message)
+        async with app.run_test() as pilot:
+            before = pilot.app.catalog
+            await pilot.press("r")
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            assert pilot.app.is_running
+            assert pilot.app.catalog is before
+            assert not pilot.app._refresh_inflight
+            assert "Refreshing" not in str(pilot.app.query_one("#providers", Static).content)
+
+    asyncio.run(_run())
+    assert any("Refresh failed" in m for m in notifications), notifications
+
+
 def test_pilot_refresh_double_r_is_single_flight(pilot_config, monkeypatch):
     """Pressing `r` twice while a refresh is already in flight must NOT spawn a second
     `opencode models --refresh` call: @work(exclusive=True) only cancels the first refresh's

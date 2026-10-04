@@ -133,6 +133,21 @@ class TestCatalogErrorRules:
         ):
             load()
 
+    @pytest.mark.parametrize("exc", [
+        OSError(8, "Exec format error"),  # wrong-architecture / truncated binary
+        PermissionError(13, "Permission denied"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    ])
+    def test_unrunnable_opencode_raises_catalog_unavailable(self, exc):
+        """On PATH but unrunnable → CatalogUnavailable, never the raw OSError: that escaped
+        Session.build as a traceback (`--check` exit 1, empty `--json` stdout)."""
+        with (
+            patch("subprocess.run", side_effect=exc),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable, match="could not run"),
+        ):
+            load()
+
     def test_zero_parsed_lines_raises_catalog_unavailable(self):
         """Zero provider/model lines (even if exit 0) → CatalogUnavailable. There is no
         partial-success state: either a Catalog with data, an empty Catalog, or this."""
@@ -216,6 +231,14 @@ class TestCatalogRefresh:
             patch("subprocess.run", return_value=_mock_run("", returncode=1)),
             patch("shutil.which", return_value="/usr/bin/opencode"),
             pytest.raises(CatalogUnavailable),
+        ):
+            refresh()
+
+    def test_unrunnable_opencode_raises_catalog_unavailable(self):
+        with (
+            patch("subprocess.run", side_effect=OSError(8, "Exec format error")),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable, match="could not run"),
         ):
             refresh()
 
@@ -343,6 +366,13 @@ class TestVerboseParsing:
         assert "$3/$15" in line
         assert "$$" not in line
         assert "image" in line
+
+    def test_detail_returns_none_when_opencode_cannot_run(self):
+        """An unrunnable binary is "no detail", like a missing one — never an exception, which
+        would fail the app's detail worker."""
+        cat = self._make_catalog_with_opencode(["claude-opus-4-7"])
+        with patch("subprocess.run", side_effect=OSError(8, "Exec format error")):
+            assert cat.detail("claude-opus-4-7") is None
 
     def test_detail_returns_none_for_unknown_model(self):
         """Model not in any connected provider → detail() returns None."""
