@@ -1,5 +1,5 @@
 # pyproject.toml — owned by the CLI+packaging specialist (final version).
-# Textual pin: installed textual==8.2.7, requires-python ">=3.9,<4.0".
+# Textual pin: installed textual==8.2.8, requires-python ">=3.9,<4.0".
 # Our floor is 3.11 — textual's constraint is satisfied.
 [build-system]
 requires = ["hatchling"]
@@ -28,8 +28,8 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-  # Pin at lock time: textual 8.2.7 requires-python ">=3.9,<4.0" — covers our 3.11 floor.
-  "textual==8.2.7",
+  # Pin at lock time: textual 8.2.8 requires-python ">=3.9,<4.0" — covers our 3.11 floor.
+  "textual==8.2.8",
   # Imported directly (rich.cells.cell_len, app._fit_cells) — a textual transitive today, but
   # textual is migrating onto its own Content, so declare what we actually import.
   "rich",

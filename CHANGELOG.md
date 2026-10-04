@@ -111,6 +111,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   longer supported upstream and 3.10 stops this month. The prebuilt binaries are not affected.
   If your pipx uses an older Python, reinstall with
   `pipx install --force --python python3.12 git+https://github.com/zhoufanscut/oModel`.
+- Updated Textual to 8.2.8. It fixes a crash when clicking the screen's padding. In the
+  add-model and preset-name text fields, `alt+backspace` now deletes the word before the cursor
+  and `super+backspace` deletes back to the start of the line.
 
 ## [0.6.2] — 2026-10-01
 
