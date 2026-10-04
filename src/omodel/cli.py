@@ -91,6 +91,7 @@ def _drop_stdout() -> None:
 def _main(argv: list | None = None) -> int:
     """Parse argv and dispatch. The real body; `main` wraps it (see there)."""
     parser = _build_parser()
+    _Parser.json_errors = "--json" in (sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
 
     # --version: no imports beyond __init__
@@ -231,8 +232,23 @@ targets / show / candidates / check / set / clear / apply / preset.
 """
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse's usage errors go to stderr only, so under `--json` an agent got exit 2 and zero
+    bytes on stdout — the guide promises failures come back as JSON, and parsing that empty
+    output is a JSONDecodeError, not a usage error. With `--json` anywhere on the command line
+    the error is ALSO emitted as the standard `bad_input` payload; stderr and the exit code are
+    unchanged. Subparsers inherit the class (`add_subparsers` uses `type(self)`)."""
+
+    json_errors = False  # set per invocation by `_main`
+
+    def error(self, message):
+        if _Parser.json_errors:
+            _emit({"ok": False, "error": "bad_input", "message": message}, True)
+        super().error(message)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="omodel",
         description="TUI to quickly set OMO (oh-my-openagent) models — and a JSON CLI for agents.",
         epilog=_EPILOG,
@@ -313,7 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # the attribute is set only when the flag is actually given, and both orders work —
     # `omodel --config X show` and `omodel show --config X`. Agents write the second. The same
     # now applies to `--json`, which the main parser also owns (for `--update`).
-    common = argparse.ArgumentParser(add_help=False)
+    common = _Parser(add_help=False)
     common.add_argument(
         "--config", metavar="PATH", default=argparse.SUPPRESS,
         help="Use a specific config file instead of the default.",

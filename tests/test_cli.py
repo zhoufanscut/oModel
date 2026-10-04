@@ -1503,6 +1503,30 @@ class TestPresetRefsThatIntRefuses:
         assert payload["error"] == "unknown_preset"
 
 
+class TestUsageErrorsUnderJson:
+    """argparse wrote its errors to stderr only: `--json` callers got exit 2 and an empty stdout,
+    which they then failed to parse."""
+
+    @pytest.mark.parametrize("argv", [
+        ["preset", "bogus", "--json"],
+        ["set", "--json"],                       # missing positionals
+        ["candidates", "agent:x", "--nope", "--json"],
+    ])
+    def test_emit_the_bad_input_payload(self, capsys, argv):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(argv)
+        assert exc.value.code == 2
+        out = capsys.readouterr()
+        payload = _json.loads(out.out)
+        assert payload["ok"] is False and payload["error"] == "bad_input"
+        assert payload["message"] and "usage:" in out.err
+
+    def test_without_json_stdout_stays_empty(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["preset", "bogus"])
+        assert capsys.readouterr().out == ""
+
+
 class TestPresetUseReportsWhatLanded:
     """`preset use` wrote the two files by hand: a presets write failing AFTER the config landed
     came back as a bare `write_failed`, the one case an agent must know the config DID change."""

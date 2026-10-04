@@ -67,6 +67,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - If `omodel preset use` switched the config but then failed to save the presets file, it only
   said "could not write", so an agent couldn't tell the config had already changed. It now says
   so (`config_written: true`), like `omodel set`, and reports the backup it took.
+- A mistyped command (an unknown subcommand or flag, a missing argument) printed nothing on
+  stdout even with `--json`. It now prints a `bad_input` JSON reply too, still with exit code 2.
 
 ### Changed
 

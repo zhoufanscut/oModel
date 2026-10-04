@@ -102,7 +102,8 @@ Failures also come back as JSON when you pass `--json`:
 
 `error` is a stable slug: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`,
 `gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, and `bad_config`
-(the config file could not be read or parsed — an exit 1, so stop and report it).
+(the config file could not be read or parsed — an exit 1, so stop and report it). A mistyped
+command line (unknown verb or flag, missing argument) is `bad_input` with exit 2.
 
 ## 5. Commands
 
