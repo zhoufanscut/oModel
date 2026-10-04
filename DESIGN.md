@@ -828,7 +828,10 @@ In summary:
   pre-oModel palette). `omodel --restore` (and a TUI key) lists the **pinned `original.jsonc` + the
   newest 10** timestamped (each with timestamp + size / short diff); items 11–20 are an unlisted
   on-disk buffer. Restoring first snapshots the *current* file (so restore is itself undoable), then
-  copies the chosen backup to the config path.
+  writes the chosen backup the way `save` writes — temp beside the real file, fsync, the old mode,
+  one atomic rename — and prunes the ring back to 20 (`shutil.copy2` straight over the config could
+  truncate it on a full disk). Every config write fsyncs the file before the rename and the
+  directory after it (best-effort), so a crash can't leave a zero-length config.
 - ⚠ **First save drops the palette *inside* agents/categories:** the live config is comment-dense
   (3–6 commented alternatives per agent), and those live inside the `agents`/`categories` objects,
   which `render` rewrites clean — so the first save deletes that palette (decision #13). Comments /

@@ -488,6 +488,45 @@ class TestRestore:
             restored = _read_file(cfg_path)
             assert restored == ORIGINAL_JSONC, "Restored content must match original verbatim"
 
+    def test_restore_is_atomic(self, tmp_path, monkeypatch):
+        """`shutil.copy2` wrote straight over the live config: a failure part-way (a full disk)
+        left it truncated, on the very path a user takes to recover."""
+        cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+        _write_file(cfg_path, ORIGINAL_JSONC)
+        save(MINIMAL_CONFIG, cfg_path)
+        live = _read_file(cfg_path)
+
+        def _refuse(*_a, **_k):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(os, "replace", _refuse)
+        with pytest.raises(OSError):
+            restore(cfg_path, "original.jsonc")
+        assert _read_file(cfg_path) == live
+        assert not [f for f in os.listdir(tmp_path) if ".tmp-" in f]
+
+    def test_restore_keeps_the_ring_at_twenty_and_the_file_s_mode(self, tmp_path):
+        cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+        _write_file(cfg_path, ORIGINAL_JSONC)
+        save(MINIMAL_CONFIG, cfg_path)
+        backup_dir = tmp_path / ".backup"
+        for i in range(25):
+            (backup_dir / f"20260101-0000{i:02d}.000.jsonc").write_text("x", encoding="utf-8")
+        os.chmod(cfg_path, 0o640)
+        restore(cfg_path, "original.jsonc")
+        assert len(glob.glob(str(backup_dir / "[0-9]*.jsonc"))) == 20
+        assert (os.stat(cfg_path).st_mode & 0o777) == 0o640
+        assert _read_file(cfg_path) == ORIGINAL_JSONC
+
+    def test_save_fsyncs_before_the_rename(self, tmp_path, monkeypatch):
+        synced = []
+        real_fsync = os.fsync
+        monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real_fsync(fd))[1])
+        cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+        _write_file(cfg_path, ORIGINAL_JSONC)
+        save(MINIMAL_CONFIG, cfg_path)
+        assert synced
+
     def test_restore_snapshots_current_first(self):
         """restore() snapshots the CURRENT file before overwriting (restore is undoable)."""
         with tempfile.TemporaryDirectory() as tmpdir:

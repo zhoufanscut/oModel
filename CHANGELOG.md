@@ -89,6 +89,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When your config had `"agents"` but no `"categories"` (or the other way round), the first
   category you set made omodel rewrite the whole file and drop all its comments. The missing
   block is now added next to the other one, and the comments stay.
+- `omodel --restore` copied the backup straight over your config, so a full disk part-way could
+  leave it cut short, and the backups could grow past 20. It now writes the way a save does, in
+  one step, and keeps 20. Saves also flush the file to disk before replacing the old one.
 
 ### Changed
 

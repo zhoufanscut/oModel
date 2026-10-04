@@ -622,6 +622,36 @@ class SaveResult:
     original_created: bool = False  # True iff .backup/original.jsonc was created this save
 
 
+def _fsync(handle) -> None:
+    """Flush and fsync an open file before it is renamed into place. Without it a crash or power
+    loss right after the rename can leave a zero-length config on some filesystems (ext4
+    `data=writeback`, XFS) — the rename landed, its data did not. Best-effort, as in update.py:
+    some FUSE and network mounts refuse fsync, and that must not fail a save."""
+    with contextlib.suppress(OSError):
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _sync_dir(path: str) -> None:
+    """fsync a directory so a rename into it survives a crash. Best-effort (see `_fsync`)."""
+    with contextlib.suppress(OSError, AttributeError):
+        fd = os.open(path or ".", os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _prune_ring(backup_dir: str) -> None:
+    """Keep the newest 20 timestamped snapshots (glob '[0-9]*.jsonc' excludes original.jsonc,
+    which is never pruned and never counts). Lexicographic = chronological thanks to the
+    YYYYMMDD-… names. Best-effort."""
+    timestamped = sorted(glob.glob(os.path.join(backup_dir, "[0-9]*.jsonc")))
+    for old_snap in timestamped[:-20]:
+        with contextlib.suppress(OSError):
+            os.remove(old_snap)
+
+
 def save(cfg: dict, path: str) -> SaveResult:
     """No diff → SaveResult(changed=False) ("nothing to save"). Else EXACT order: stage
     render(cfg, on-disk) in a temp file beside the target, then
@@ -677,6 +707,7 @@ def save(cfg: dict, path: str) -> SaveResult:
     try:
         with open(tmp_path, "w", encoding="utf-8", newline="") as tmp:
             tmp.write(new_text)
+            _fsync(tmp)
         if mode is not None:
             os.chmod(tmp_path, mode)
 
@@ -707,18 +738,10 @@ def save(cfg: dict, path: str) -> SaveResult:
             with contextlib.suppress(OSError):
                 os.remove(snapshot_path)
         raise
+    _sync_dir(os.path.dirname(target))
 
     # (3) Prune ONLY timestamped snapshots (glob '[0-9]*.jsonc' excludes original.jsonc)
-    #     Keep the newest 20.
-    timestamped = sorted(
-        glob.glob(os.path.join(backup_dir, "[0-9]*.jsonc"))
-    )  # lexicographic = chronological thanks to YYYYMMDD-… format
-    if len(timestamped) > 20:
-        for old_snap in timestamped[:-20]:
-            try:
-                os.remove(old_snap)
-            except OSError:
-                pass  # best-effort prune
+    _prune_ring(backup_dir)
 
     return SaveResult(changed=True, backup=snapshot_path, original_created=original_created)
 
@@ -846,5 +869,27 @@ def restore(path: str, backup_name: str) -> None:
         with open(snapshot_path, "w", encoding="utf-8") as f:
             f.write("")
 
-    # Copy the chosen backup verbatim to the live config path (checked to exist above).
-    shutil.copy2(src, path)
+    # Put the chosen backup in place the way `save` writes: temp file beside the file `path`
+    # resolves to, fsync, the old permission bits, then one atomic rename. `shutil.copy2` wrote
+    # straight over the live config — a full disk part-way left it truncated, on the very path a
+    # user takes to recover — and also stamped the backup's old mtime onto it.
+    with open(src, "rb") as f:
+        data = f.read()
+    target = os.path.realpath(path)
+    mode = None
+    with contextlib.suppress(OSError):
+        mode = stat.S_IMODE(os.stat(target).st_mode)
+    tmp_path = f"{target}.tmp-{os.getpid()}"
+    try:
+        with open(tmp_path, "wb") as tmp:
+            tmp.write(data)
+            _fsync(tmp)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
+    _sync_dir(os.path.dirname(target))
+    _prune_ring(backup_dir)  # the snapshot above counts too; the ring stays at 20
