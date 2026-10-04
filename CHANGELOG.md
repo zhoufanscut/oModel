@@ -23,6 +23,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A `"model"` that isn't text in a hand-edited config (`"model": 5`, or a list) crashed the app
   when you moved onto that agent, and made `omodel show`, `check` and `candidates` fail with no
   output. It now reads as unset, and `omodel check` reports it as `malformed_model`.
+- A save that failed (for example, the config's folder was read-only) still used up a backup
+  slot, pushing out your oldest real backup each time; 20 failed tries left none. A failed save
+  now leaves the backups as they were.
 
 ### Changed
 

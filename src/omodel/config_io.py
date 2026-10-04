@@ -556,11 +556,14 @@ class SaveResult:
 
 
 def save(cfg: dict, path: str) -> SaveResult:
-    """No diff → SaveResult(changed=False) ("nothing to save"). Else EXACT order:
+    """No diff → SaveResult(changed=False) ("nothing to save"). Else EXACT order: stage
+    render(cfg, on-disk) in a temp file beside the target, then
       (1) if <dir>/.backup/original.jsonc absent, copy current on-disk config there (verbatim);
       (2) write verbatim timestamped snapshot .backup/YYYYMMDD-HHMMSS[.mmm].jsonc (UTC);
-      (3) prune ONLY glob('[0-9]*.jsonc') (EXCLUDES original.jsonc) to the newest 20;
-    then atomic temp+rename of render(cfg, on-disk). <dir> = dir of `path`. The write is
+    then the atomic rename, and only then
+      (3) prune ONLY glob('[0-9]*.jsonc') (EXCLUDES original.jsonc) to the newest 20.
+    A failure before the rename removes the temp file and this save's snapshot, so a failed save
+    never costs the backup ring a slot. <dir> = dir of `path`. The write is
     text-preserving: only agents/categories are rewritten; comments / commented-out config
     outside them survive (render() splices in place; missing file → serialize(cfg)).
 
@@ -584,37 +587,7 @@ def save(cfg: dict, path: str) -> SaveResult:
 
     original_path = os.path.join(backup_dir, "original.jsonc")
     original_created = False
-
-    # (1) If original.jsonc absent AND there is an existing on-disk config, pin it verbatim
-    if not os.path.exists(original_path) and old_text is not None:
-        shutil.copy2(path, original_path)
-        original_created = True
-
-    # (2) Write verbatim timestamped snapshot in UTC; .mmm avoids same-second collisions
-    now_utc = datetime.now(UTC)
-    # Format: YYYYMMDD-HHMMSS.mmm — milliseconds keep lexicographic sort stable
-    ts = now_utc.strftime("%Y%m%d-%H%M%S") + f".{now_utc.microsecond // 1000:03d}"
-    snapshot_name = f"{ts}.jsonc"
-    snapshot_path = os.path.join(backup_dir, snapshot_name)
-    if old_text is not None:
-        # Verbatim byte copy of the current on-disk file
-        shutil.copy2(path, snapshot_path)
-    else:
-        # Config didn't exist yet — snapshot an empty string so the slot exists
-        with open(snapshot_path, "w", encoding="utf-8") as f:
-            f.write("")
-
-    # (3) Prune ONLY timestamped snapshots (glob '[0-9]*.jsonc' excludes original.jsonc)
-    #     Keep the newest 20.
-    timestamped = sorted(
-        glob.glob(os.path.join(backup_dir, "[0-9]*.jsonc"))
-    )  # lexicographic = chronological thanks to YYYYMMDD-… format
-    if len(timestamped) > 20:
-        for old_snap in timestamped[:-20]:
-            try:
-                os.remove(old_snap)
-            except OSError:
-                pass  # best-effort prune
+    snapshot_path = None
 
     # Atomic temp-write + os.replace, onto the file `path` RESOLVES to. Replacing the path itself
     # turned a symlinked config (a dotfile manager pointing ~/.omo/omo.jsonc at a repo file)
@@ -622,6 +595,11 @@ def save(cfg: dict, path: str) -> SaveResult:
     # the target's own directory — os.replace is atomic only within one filesystem — and takes
     # the old file's permission bits before the rename: a temp file's default mode (0600 from
     # NamedTemporaryFile, which this used) must not silently become the config's.
+    #
+    # The temp is written BEFORE the backup ring is touched, and the prune runs only after the
+    # rename. Snapshot-and-prune first meant every failed save (a read-only target directory, a
+    # full disk) still evicted the oldest real snapshot for a copy of the unchanged file — 20
+    # failed retries emptied the ring. A failure now removes this save's snapshot as well.
     target = os.path.realpath(path)
     mode = None
     try:
@@ -634,11 +612,46 @@ def save(cfg: dict, path: str) -> SaveResult:
             tmp.write(new_text)
         if mode is not None:
             os.chmod(tmp_path, mode)
+
+        # (1) If original.jsonc absent AND there is an existing on-disk config, pin it verbatim.
+        # Kept even if the rename below fails: it is still the untouched original.
+        if not os.path.exists(original_path) and old_text is not None:
+            shutil.copy2(path, original_path)
+            original_created = True
+
+        # (2) Write verbatim timestamped snapshot in UTC; .mmm avoids same-second collisions
+        now_utc = datetime.now(UTC)
+        # Format: YYYYMMDD-HHMMSS.mmm — milliseconds keep lexicographic sort stable
+        ts = now_utc.strftime("%Y%m%d-%H%M%S") + f".{now_utc.microsecond // 1000:03d}"
+        snapshot_path = os.path.join(backup_dir, f"{ts}.jsonc")
+        if old_text is not None:
+            # Verbatim byte copy of the current on-disk file
+            shutil.copy2(path, snapshot_path)
+        else:
+            # Config didn't exist yet — snapshot an empty string so the slot exists
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                f.write("")
+
         os.replace(tmp_path, target)
     except BaseException:
         with contextlib.suppress(OSError):
             os.remove(tmp_path)
+        if snapshot_path is not None:
+            with contextlib.suppress(OSError):
+                os.remove(snapshot_path)
         raise
+
+    # (3) Prune ONLY timestamped snapshots (glob '[0-9]*.jsonc' excludes original.jsonc)
+    #     Keep the newest 20.
+    timestamped = sorted(
+        glob.glob(os.path.join(backup_dir, "[0-9]*.jsonc"))
+    )  # lexicographic = chronological thanks to YYYYMMDD-… format
+    if len(timestamped) > 20:
+        for old_snap in timestamped[:-20]:
+            try:
+                os.remove(old_snap)
+            except OSError:
+                pass  # best-effort prune
 
     return SaveResult(changed=True, backup=snapshot_path, original_created=original_created)
 

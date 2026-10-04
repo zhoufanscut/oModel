@@ -793,11 +793,15 @@ In summary:
   spans and nothing else about the file — and `diff_text` compares the same bytes `save` does.
   No diff → "nothing to save".
 - **Backups & rollback:** `<config_dir>/.backup/` (next to the config; `<config_dir>` = dir of the
-  active config — `~/.omo/` on omo 4.19.3+, `~/.config/opencode/` for a pre-4.19.3 config). **Exact save order (this sequence):** (1) if
+  active config — `~/.omo/` on omo 4.19.3+, `~/.config/opencode/` for a pre-4.19.3 config). **Exact save order (this sequence):** stage
+  the new text in a temp file beside the target; (1) if
   `.backup/original.jsonc` does **not** exist, copy the current on-disk config to it (verbatim);
   (2) write the verbatim timestamped snapshot `YYYYMMDD-HHMMSS[.mmm].jsonc` (UTC, sorts
-  lexicographically; `.mmm` avoids same-second collisions); (3) prune **only** timestamped snapshots —
-  `glob("[0-9]*.jsonc")`, which **excludes `original.jsonc`** — to the newest 20. So `original.jsonc`
+  lexicographically; `.mmm` avoids same-second collisions); rename the temp over the config; only
+  then (3) prune **only** timestamped snapshots —
+  `glob("[0-9]*.jsonc")`, which **excludes `original.jsonc`** — to the newest 20. A failure before
+  the rename removes the temp **and this save's snapshot**, so a failed save never costs the ring a
+  slot (snapshot-and-prune first let 20 failed retries on a read-only target empty it). So `original.jsonc`
   is written once, never overwritten, never pruned, and **never counts toward the 20** (your pristine
   pre-oModel palette). `omodel --restore` (and a TUI key) lists the **pinned `original.jsonc` + the
   newest 10** timestamped (each with timestamp + size / short diff); items 11–20 are an unlisted

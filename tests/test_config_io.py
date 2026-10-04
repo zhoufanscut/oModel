@@ -341,6 +341,58 @@ class TestPruneSnapshots:
             orig_path = os.path.join(tmpdir, ".backup", "original.jsonc")
             assert os.path.exists(orig_path), "original.jsonc must never be pruned"
 
+    @staticmethod
+    def _full_ring(tmp_path) -> tuple:
+        """A config with an already-full ring of 20 snapshots. Returns (cfg_path, backup_dir)."""
+        cfg_path = str(tmp_path / "oh-my-openagent.jsonc")
+        _write_file(cfg_path, ORIGINAL_JSONC)
+        backup_dir = tmp_path / ".backup"
+        backup_dir.mkdir()
+        (backup_dir / "original.jsonc").write_text(ORIGINAL_JSONC, encoding="utf-8")
+        for i in range(20):
+            (backup_dir / f"20260101-0000{i:02d}.000.jsonc").write_text(f"old {i}", encoding="utf-8")
+        return cfg_path, str(backup_dir)
+
+    def test_a_save_that_fails_at_the_rename_leaves_the_ring_alone(self, tmp_path, monkeypatch):
+        """Snapshot-and-prune ran BEFORE the write, so each failed save evicted the oldest real
+        snapshot for a copy of the unchanged file — 20 failed retries emptied the ring."""
+        cfg_path, backup_dir = self._full_ring(tmp_path)
+        before = sorted(os.listdir(backup_dir))
+
+        def _refuse(*_a, **_k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(os, "replace", _refuse)
+        for i in range(3):
+            cfg = dict(MINIMAL_CONFIG)
+            cfg["agents"] = {"sisyphus": {"model": f"opencode/model-{i}"}}
+            with pytest.raises(PermissionError):
+                save(cfg, cfg_path)
+
+        assert sorted(os.listdir(backup_dir)) == before
+        assert _read_file(cfg_path) == ORIGINAL_JSONC
+        assert not [f for f in os.listdir(tmp_path) if ".tmp-" in f], "temp file left behind"
+
+    @pytest.mark.skipif(getattr(os, "geteuid", lambda: 1)() == 0, reason="root ignores modes")
+    def test_a_save_into_a_read_only_target_leaves_the_ring_alone(self, tmp_path):
+        """The reported case: the config is a symlink into a directory omodel cannot write (a
+        Nix / home-manager store), so the temp write fails — before any backup is taken now."""
+        cfg_path, backup_dir = self._full_ring(tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        real = store / "omo.jsonc"
+        real.write_text(ORIGINAL_JSONC, encoding="utf-8")
+        os.remove(cfg_path)
+        os.symlink(real, cfg_path)
+        before = sorted(os.listdir(backup_dir))
+        store.chmod(0o555)
+        try:
+            with pytest.raises(PermissionError):
+                save({"agents": {"sisyphus": {"model": "opencode/x"}}, "categories": {}}, cfg_path)
+        finally:
+            store.chmod(0o755)
+        assert sorted(os.listdir(backup_dir)) == before
+
 
 # ---------------------------------------------------------------------------
 # list_backups()
