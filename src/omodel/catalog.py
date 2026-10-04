@@ -259,16 +259,22 @@ def _parse_verbose_record(stdout: str, target_header: str):
     if record is None:
         return None
 
-    context = None
-    limit = record.get("limit") or {}
-    if isinstance(limit, dict):
-        context = limit.get("context")
+    # opencode's output is external data: every field is type-checked here, at the seam, so a
+    # string `context` or a list `capabilities` degrades to "unknown" instead of raising — in
+    # the app that was a crash (`ctx >= 1000` on a str) or a detail fetch failing on every try.
+    def _obj(value) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    context = _obj(record.get("limit")).get("context")
+    if isinstance(context, bool) or not isinstance(context, (int, float)):
+        context = None
 
     cost = record.get("cost")
-    caps = record.get("capabilities") or {}
+    if not isinstance(cost, dict):
+        cost = None
+    caps = _obj(record.get("capabilities"))
     reasoning = bool(caps.get("reasoning"))
-    image_caps = caps.get("input") or {}
-    image = bool(image_caps.get("image"))
+    image = bool(_obj(caps.get("input")).get("image"))
 
     return {
         "context": context,

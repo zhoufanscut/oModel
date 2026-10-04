@@ -38,6 +38,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When fetching a model's details from opencode kept failing, the app retried about five times a
   second on its own, starting a new `opencode` each time. It now tries again only when you move
   to another agent and back, or press `r`.
+- A model whose opencode details had an unexpected shape (for example the context size as text)
+  could close the app when you moved onto it. Those details are now shown as unknown.
 
 ### Changed
 

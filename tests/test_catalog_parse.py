@@ -367,6 +367,32 @@ class TestVerboseParsing:
         assert "$$" not in line
         assert "image" in line
 
+    @pytest.mark.parametrize("record", [
+        {"limit": {"context": "200000"}, "capabilities": ["reasoning"], "cost": "free"},
+        {"limit": [], "capabilities": {"input": ["image"]}, "cost": 3},
+        {"limit": {"context": True}, "capabilities": None},
+    ])
+    def test_detail_degrades_on_wrongly_typed_fields(self, record):
+        """opencode's output is external data. A string `context` crashed the app's detail line
+        (`ctx >= 1000` on a str), and a list `capabilities` made every fetch raise — which the
+        app retried in a loop. Each wrong type now reads as "unknown"."""
+        from omodel.app import OModelApp
+        cat = self._make_catalog_with_opencode(["m"])
+        blob = "opencode/m\n" + json.dumps({"id": "m", **record}) + "\n"
+        with patch("subprocess.run", return_value=_mock_run(blob)):
+            info = cat.detail("m")
+        assert info is not None
+        assert info["context"] is None
+        assert info["cost"] is None
+        assert info["reasoning"] is False and info["image"] is False
+        OModelApp._detail_line(info)  # must not raise
+
+    def test_detail_line_ignores_a_non_numeric_context(self):
+        """The app's own guard, for a record that reaches it some other way."""
+        from omodel.app import OModelApp
+        assert "ctx" not in OModelApp._detail_line({"context": "200000"})
+        assert OModelApp._detail_line({"context": 131072.0}) == "ctx 131k"
+
     def test_detail_returns_none_when_opencode_cannot_run(self):
         """An unrunnable binary is "no detail", like a missing one — never an exception, which
         would fail the app's detail worker."""
