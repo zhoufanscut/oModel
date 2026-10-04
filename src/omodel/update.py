@@ -310,6 +310,7 @@ def _host(url: str) -> str:
 # `except OSError` — out of this module, out of the verb's `except UpdateError`, and onto the
 # terminal as a traceback with an EMPTY --json stdout. Every read below catches both.
 _READ_ERRORS = (OSError, http.client.HTTPException)
+_CHUNK = 1 << 16  # download read size
 
 
 # Where the OS keeps its CA bundle, first match wins. The release binary's Python comes from
@@ -427,17 +428,32 @@ def _download(url: str, dest: str, timeout: float) -> None:
     PyInstaller bundle.
 
     A transfer that dies mid-body is a NETWORK error, not a write error: the two are separated
-    here because the messages point at different things to go and check."""
+    here because the messages point at different things to go and check. They are told apart
+    by WHICH CALL raised — a socket timeout or reset is an OSError too, so catching OSError
+    around `copyfileobj` reported "could not write …: timed out" for a dropped connection."""
     response = _open(url, timeout)
     try:
-        with open(dest, "wb") as handle:
-            shutil.copyfileobj(response, handle)
-    except OSError as exc:
-        raise UpdateError("write_failed", f"could not write {dest}: {exc}") from exc
-    except http.client.HTTPException as exc:
-        raise UpdateError(
-            "network", f"the download from {_host(url) or url} ended early: {exc}"
-        ) from exc
+        try:
+            handle = open(dest, "wb")  # noqa: SIM115 - closed in the finally below
+        except OSError as exc:
+            raise UpdateError("write_failed", f"could not write {dest}: {exc}") from exc
+        try:
+            while True:
+                try:
+                    chunk = response.read(_CHUNK)
+                except _READ_ERRORS as exc:
+                    raise UpdateError(
+                        "network", f"the download from {_host(url) or url} ended early: {exc}"
+                    ) from exc
+                if not chunk:
+                    break
+                handle.write(chunk)
+            handle.close()  # flushes, so a full disk can surface HERE — still a write error
+        except OSError as exc:
+            raise UpdateError("write_failed", f"could not write {dest}: {exc}") from exc
+        finally:
+            with contextlib.suppress(OSError):
+                handle.close()
     finally:
         _close(response)
 

@@ -79,6 +79,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A provider whose name has capitals or a dot (`lm.studio`, `MyGateway`) never got a model detail
   line or a variant picker. Any line from `opencode models` that contained a `/` (a warning that
   named a file path, a URL) was read as a provider. Both are fixed.
+- `omodel --update` reported a connection that dropped during the download as "could not write"
+  the file, pointing you at your disk. It now reports it as a network error.
 
 ### Changed
 

@@ -597,6 +597,49 @@ class TestApplyUpdate:
         assert target.read_bytes() == before
         assert sorted(p.name for p in target.parent.iterdir()) == ["omodel"]
 
+    @pytest.mark.parametrize("exc", [
+        TimeoutError("timed out"),
+        ConnectionResetError(104, "Connection reset by peer"),
+    ])
+    def test_a_socket_error_mid_download_is_network_not_write_failed(
+            self, tmp_path, monkeypatch, exc):
+        """A socket timeout or reset is an OSError too, and catching OSError around the whole
+        copy reported `write_failed | could not write …/dl.bin: timed out` — sending the user
+        to check their disk for a dropped connection."""
+        class _Drops(io.BytesIO):
+            def read(self, *args):
+                raise exc
+
+        monkeypatch.setattr(update, "_open", lambda url, timeout: _Drops(b""))
+        with pytest.raises(update.UpdateError) as excinfo:
+            update._download(DOWNLOAD, str(tmp_path / "dl.bin"), 5)
+        assert excinfo.value.kind == "network"
+
+    def test_a_full_disk_is_still_write_failed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(update, "_open", lambda url, timeout: io.BytesIO(b"x" * 10))
+        real_open = open
+
+        class _Full:
+            def __init__(self, *a, **k):
+                self._f = real_open(*a, **k)
+
+            def write(self, data):
+                raise OSError(28, "No space left on device")
+
+            def close(self):
+                self._f.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.close()
+
+        monkeypatch.setattr("builtins.open", _Full)
+        with pytest.raises(update.UpdateError) as excinfo:
+            update._download(DOWNLOAD, str(tmp_path / "dl.bin"), 5)
+        assert excinfo.value.kind == "write_failed"
+
     @pytest.mark.parametrize(("link_type", "label"), [
         (tarfile.SYMTYPE, "symlink"),
         (tarfile.LNKTYPE, "hardlink"),
