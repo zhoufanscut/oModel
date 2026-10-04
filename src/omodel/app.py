@@ -1471,6 +1471,10 @@ class OModelApp(App):
         # used to reschedule it at once, about five opencode spawns a second while it kept
         # failing — exactly what the one-at-a-time gate exists to prevent.
         self._detail_failed: set = set()
+        # A detail fetch that landed under an open VariantModal skipped its `_rows` rebuild (see
+        # _fetch_detail); dismissing the modal does it. Nothing else ever would: the fetch is
+        # cached, so no later fetch re-renders, and the rows stayed stale for the session.
+        self._rows_stale = False
         # Bumped by a refresh (r) so an in-flight detail fetch can tell its result is stale.
         self._detail_generation = 0
         # Single-flight guard for `r` (action_refresh): @work(exclusive=True) on _refresh_catalog
@@ -2151,8 +2155,9 @@ class OModelApp(App):
         # under, say, the `?` overlay skipped the rebuild — and then nothing ever retried it,
         # because the completed fetch is cached so no further fetch is scheduled and a re-highlight
         # hits the still-stale `_rows`. Rows stayed wrong for the rest of the session, which is the
-        # very bug this re-render exists to fix. The residual window is now one open VariantModal,
-        # and picking or dismissing it re-renders anyway.
+        # very bug this re-render exists to fix. The residual window is one open VariantModal: a
+        # skip there sets `_rows_stale`, and dismissing the modal (`esc`) does the rebuild — it
+        # used to return without one, leaving the rows stale for the session.
         #
         # All of it is cosmetic, and this worker outlives the UI: `q` during an in-flight fetch
         # tears the widgets down while the daemon thread is still in opencode (it can't be
@@ -2166,6 +2171,8 @@ class OModelApp(App):
                     self._remember_live_cand_highlight(self._current_target)
                     self._rows.clear()
                     self._render_candidates(self._current_target)
+                else:
+                    self._rows_stale = True  # VariantModal's `esc` rebuilds them (action_variant)
             except NoMatches:
                 return
 
@@ -2654,6 +2661,11 @@ class OModelApp(App):
 
         def _apply(result) -> None:
             if result is None:
+                if self._rows_stale and self._current_target is not None:
+                    self._rows_stale = False
+                    self._remember_live_cand_highlight(self._current_target)
+                    self._rows.clear()
+                    self._render_candidates(self._current_target)
                 return
             # A background `r` refresh finishing while this modal was open clears/rebuilds the
             # per-target row cache (with fresh row dicts). If the row we captured is no longer the
@@ -2741,8 +2753,14 @@ class OModelApp(App):
             row["warn"] = warn
             # Persist the typed row in _custom_rows (durable across undo/redo) and invalidate the
             # per-target row cache so _build_rows re-merges it as a selectable candidate, then
-            # stage it (which re-renders via _refresh_right).
-            self._custom_rows.setdefault(target, []).append(row)
+            # stage it (which re-renders via _refresh_right). Adding a model that is already one of
+            # your rows REPLACES that row: appending made a twin, and `x` — which matches by
+            # identity — then cleared the assignment while the twin stayed on screen.
+            ident = f"{row['provider']}/{row['model']}"
+            self._custom_rows[target] = [
+                r for r in self._custom_rows.get(target, [])
+                if f"{r['provider']}/{r['model']}" != ident
+            ] + [row]
             self._rows.pop(target, None)
             self._stage_row(
                 target,

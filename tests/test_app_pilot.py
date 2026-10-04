@@ -1944,6 +1944,27 @@ def test_pilot_x_on_added_row_that_is_assigned_clears_too(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_adding_the_same_model_twice_keeps_one_row(pilot_config):
+    """The second add appended a twin row. `x` on one of them then cleared the assignment (it
+    was assigned) while the other stayed on screen, offering a model the target no longer had."""
+    cfg_path, _ = pilot_config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            await _add_offchain_model(pilot)
+            await _add_offchain_model(pilot)
+            assert sum("deepseek" in lbl for lbl in _cand_labels(pilot)) == 1, _cand_labels(pilot)
+
+            await _highlight_cand(pilot, "deepseek")
+            await pilot.press("x")
+            await pilot.pause()
+            assert _sisyphus_model(pilot) is None
+            assert not any("deepseek" in lbl for lbl in _cand_labels(pilot)), _cand_labels(pilot)
+
+    asyncio.run(_run())
+
+
 def test_pilot_x_on_chain_row_still_clears(pilot_config):
     """Unchanged for rows you didn't add: `x` on a chain row clears the target's assignment (the
     documented meaning) and leaves the added row alone — omo's chain isn't yours to delete."""
@@ -2555,6 +2576,39 @@ def test_pilot_fetch_landing_under_variant_modal_keeps_the_pick(pilot_config):
             assert any("openai/gpt-5.5 (high)" in s for s in after), (
                 f"a fetch landing under the modal must not cost the pick: {after}"
             )
+
+    asyncio.run(_run())
+
+
+def test_pilot_esc_from_the_variant_picker_rebuilds_rows_a_fetch_left_stale(pilot_config):
+    """The fetch skips its row rebuild under an open VariantModal (above). Picking re-rendered,
+    but `esc` returned without one — and nothing else ever retried, so the rows stayed computed
+    against the old `--verbose` for the rest of the session."""
+    cfg_path, _ = pilot_config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write('{ "agents": { "sisyphus": { "model": "opencode/gpt-5.5" } } }')
+
+    async def _run():
+        _seed_verbose("openai", {"gpt-5.5": ["low", "medium", "high"]})
+        app = _build_app(cfg_path)
+        app.catalog.detail = lambda *a, **k: {
+            "context": 1, "cost": None, "reasoning": False, "image": False
+        }
+        async with app.run_test() as pilot:
+            await _select_target(pilot, "agent:sisyphus")
+            assert await _highlight_candidate(pilot, "openai/gpt-5.5") is not None
+            stale = pilot.app._build_rows("agent:sisyphus")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, VariantModal), pilot.app.screen
+            await _land_detail_fetch(pilot, "agent:sisyphus", "opencode", "gpt-5.5")
+
+            await pilot.press("escape")
+            await pilot.pause()
+            rebuilt = pilot.app._build_rows("agent:sisyphus")
+            assert all(r is not s for r, s in zip(rebuilt, stale)), "esc must rebuild the rows"
+            cands = pilot.app.query_one("#candidates", OptionList)
+            assert "openai/gpt-5.5" in str(cands.get_option_at_index(cands.highlighted).prompt)
 
     asyncio.run(_run())
 

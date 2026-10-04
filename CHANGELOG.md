@@ -72,6 +72,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `omodel candidates` labelled every model you couldn't pick as "GPT-only agent", even when the
   real reason was that no connected provider serves it. It now gives the real reason, and the
   JSON rows carry it as `blocked_by`.
+- Adding the same model twice with `+ add model…` listed it twice, and `x` on one of the two
+  cleared the model but left the other row showing. It now keeps one row.
+- Closing the variant picker with `esc` could leave the model list's `⚠` marks out of date for
+  the rest of the session, if the model's details had arrived while the picker was open.
 
 ### Changed
 
