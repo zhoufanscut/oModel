@@ -257,6 +257,29 @@ class TestSuggestionsStaleShadow:
 
         assert "xdg-marker-agent" not in sugg.agents
 
+    @pytest.mark.parametrize("bad", [
+        {"families": [{"family": "x", "pattern": "(?<v>gpt)"}]},  # JS named group: re rejects it
+        {"families": "nope"},
+        {"agents": [], "families": []},
+    ])
+    def test_a_newer_snapshot_that_does_not_load_falls_back_to_bundled(
+            self, monkeypatch, tmp_path, bad):
+        """Newest-wins made one unloadable snapshot fatal to every command (`--check` exited 1)
+        until someone deleted the file by hand."""
+        xdg_home = tmp_path / "xdg-data"
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg_home))
+        path = os.path.join(str(xdg_home), "omodel", "omo-suggestions.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {"meta": {"generatedAt": "2999-01-01T00:00:00Z"},
+                   "agents": {"xdg-marker-agent": {}}, "categories": {}, **bad}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        sugg = suggestions.load()
+
+        assert "xdg-marker-agent" not in sugg.agents
+        assert "sisyphus" in sugg.agents
+
     def test_omodel_suggestions_env_wins_even_when_older(self, monkeypatch, tmp_path):
         """$OMODEL_SUGGESTIONS is an explicit, unconditional override — it must win even
         though a (newer, so it would otherwise win) XDG snapshot is also present."""
@@ -328,6 +351,30 @@ class TestRefreshNonFatalPaths:
 
         assert rc == 1
         assert "not valid json" in capsys.readouterr().out.lower()
+
+    @pytest.mark.parametrize("stdout", [
+        "[]",
+        '{"meta": {"omoCommit": null}}',
+        json.dumps({"agents": {}, "categories": {},
+                    "families": [{"family": "x", "pattern": "(?<v>a)"}]}),
+    ])
+    def test_bun_output_that_does_not_load_is_FATAL_and_writes_nothing(
+            self, monkeypatch, tmp_path, capsys, stdout):
+        """Valid JSON of the wrong shape was written FIRST — over the repo's bundled file in a
+        checkout — and only then crashed reading it back (`[]` → AttributeError, a null
+        omoCommit → TypeError)."""
+        omo_src = _make_omo_src(tmp_path)
+        monkeypatch.setattr(shutil, "which", _which_bun_only)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _mock_run(stdout))
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        xdg_home = tmp_path / "xdg-data"
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg_home))
+
+        rc = refresh_mod.refresh(omo_src=omo_src)
+
+        assert rc == 1
+        assert "not loadable" in capsys.readouterr().out
+        assert not os.path.exists(os.path.join(str(xdg_home), "omodel", "omo-suggestions.json"))
 
     def test_bun_valid_json_writes_to_resolved_target(self, monkeypatch, tmp_path, capsys):
         omo_src = _make_omo_src(tmp_path)

@@ -49,6 +49,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   own spelling) answered `ok` and set no reasoning level. It now refuses the entry and says the
   level goes under `"variant"`. A wrongly typed `variant` now exits 2 like every other bad input
   (it was 3).
+- A suggestions file saved by `omodel --refresh-omo` that omodel could not read stopped every
+  command, including `omodel --check`, until you deleted it. omodel now falls back to its built-in
+  suggestions, and `--refresh-omo` checks the new data before it saves it.
 
 ### Changed
 

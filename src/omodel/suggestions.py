@@ -7,6 +7,7 @@ an upstream family add would only make it stale).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -97,24 +98,20 @@ def _generated_at(data_str: str) -> str:
     return generated if isinstance(generated, str) else ""
 
 
-def _newer_of_xdg_and_bundled() -> str:
-    """The newer of $XDG_DATA_HOME/omodel/omo-suggestions.json (written by a past
-    `--refresh-omo`) and the bundled resource, compared by meta.generatedAt (ISO-8601 string
-    compare — chronologically correct for this format). Ties, a missing/unparseable
-    generatedAt on either side, or an unreadable/corrupt XDG file all resolve to the bundled
-    resource — a stale XDG snapshot must never permanently shadow a newer bundled release
-    after an app upgrade."""
-    bundled_str = (files("omodel.data") / "omo-suggestions.json").read_text(encoding="utf-8")
+def _read_bundled() -> str:
+    return (files("omodel.data") / "omo-suggestions.json").read_text(encoding="utf-8")
 
+
+def _read_xdg() -> str | None:
+    """$XDG_DATA_HOME/omodel/omo-suggestions.json (written by a past `--refresh-omo`), or None
+    when it is absent or unreadable."""
     xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     xdg_path = os.path.join(xdg_data, "omodel", "omo-suggestions.json")
     try:
         with open(xdg_path, "r", encoding="utf-8") as f:
-            xdg_str = f.read()
+            return f.read()
     except (OSError, ValueError):
-        return bundled_str
-
-    return xdg_str if _generated_at(xdg_str) > _generated_at(bundled_str) else bundled_str
+        return None
 
 
 def load(path: str | None = None) -> Suggestions:
@@ -124,20 +121,32 @@ def load(path: str | None = None) -> Suggestions:
     meta.generatedAt (ISO-8601 string compare; missing/unparseable/unreadable → oldest; ties
     → bundled) — so a stale XDG snapshot from an old `--refresh-omo` run can't permanently
     shadow a newer bundled release after an app upgrade.
-    Each Family.pattern is re.compile()d from the JSON `pattern` string (or None) at load."""
-    data_str: str | None = None
 
+    A newer XDG snapshot that does not LOAD (a shape a newer omo introduced, a JS-only regex
+    such as `(?<name>…)`) falls back to the bundled data. Newest-wins used to mean one bad
+    snapshot took down every command — `--check` included — until the file was deleted by hand.
+    An explicit `path` or $OMODEL_SUGGESTIONS still raises: that one was asked for by name.
+    Each Family.pattern is re.compile()d from the JSON `pattern` string (or None) at load."""
     if path is not None:
         with open(path, "r", encoding="utf-8") as f:
-            data_str = f.read()
-    else:
-        env_path = os.environ.get("OMODEL_SUGGESTIONS")
-        if env_path:
-            with open(env_path, "r", encoding="utf-8") as f:
-                data_str = f.read()
-        else:
-            data_str = _newer_of_xdg_and_bundled()
+            return parse(f.read())
+    env_path = os.environ.get("OMODEL_SUGGESTIONS")
+    if env_path:
+        with open(env_path, "r", encoding="utf-8") as f:
+            return parse(f.read())
 
+    bundled = _read_bundled()
+    xdg = _read_xdg()
+    if xdg is not None and _generated_at(xdg) > _generated_at(bundled):
+        with contextlib.suppress(Exception):  # unloadable — the bundled data still works
+            return parse(xdg)
+    return parse(bundled)
+
+
+def parse(data_str: str) -> Suggestions:
+    """A suggestions JSON blob → Suggestions. Raises on anything that is not loadable data
+    (bad JSON, a missing key, a pattern Python's `re` rejects) — `refresh` calls this to refuse
+    such output BEFORE writing it, and `load` to fall back past it."""
     raw = json.loads(data_str)
 
     families = []
@@ -154,10 +163,14 @@ def load(path: str | None = None) -> Suggestions:
             supports_thinking=fd.get("supportsThinking", False),
         ))
 
+    agents = raw.get("agents", {})
+    categories = raw.get("categories", {})
+    if not isinstance(agents, dict) or not isinstance(categories, dict):
+        raise TypeError("`agents` and `categories` must be objects")
     return Suggestions(
         meta=raw.get("meta", {}),
-        agents=raw.get("agents", {}),
-        categories=raw.get("categories", {}),
+        agents=agents,
+        categories=categories,
         families=families,
         known_variants=raw.get("knownVariants", []),
     )

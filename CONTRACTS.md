@@ -137,7 +137,8 @@ commit.
   Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
   Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
   `normalize_model_id(s)->str`; `load(path=None)->Suggestions` (no explicit path/env override →
-  the NEWER of the `$XDG_DATA_HOME` snapshot and the bundled data, by `meta.generatedAt`).
+  the NEWER of the `$XDG_DATA_HOME` snapshot and the bundled data, by `meta.generatedAt`, unless
+  that snapshot fails to load); `parse(text)->Suggestions` (raises on unloadable data).
 - `resolve.py`: `@dataclass Resolver(catalog, suggestions, gateways, real_tokens)` (`gateways` +
   `real_tokens` are computed in `build()`) with classmethod
   `build(catalog, suggestions)`, `.vendors_served(p)->int`, `.resolve_prefix(model_id, source,

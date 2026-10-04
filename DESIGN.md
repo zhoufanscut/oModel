@@ -615,7 +615,10 @@ In summary:
   `$XDG_DATA_HOME/omodel/omo-suggestions.json` (from a past `--refresh-omo`) and the bundled
   `importlib.resources.files("omodel.data")/"omo-suggestions.json"`, compared by `meta.generatedAt`
   (ISO-8601 string compare; missing/unparseable/unreadable → oldest; ties → bundled) — so a stale
-  user-local snapshot can never shadow newer bundled data after an app upgrade.
+  user-local snapshot can never shadow newer bundled data after an app upgrade. A newer snapshot
+  that does not **load** (`parse` raises — a shape a newer omo introduced, a JS-only regex like
+  `(?<name>…)`) also falls back to bundled; newest-wins otherwise made one bad file fatal to every
+  command, `--check` included.
 - `detect_family(model_id)` — faithful port of `detectHeuristicModelFamily`: **ordered** iteration of
   `families`, `pattern` tested before `includes` within each entry, first match wins; run
   `normalize_model_id` first (`re.sub(r"\.(\d+)", r"-\1", s).lower()` → `kimi-k2.7`→`kimi-k2-7`).
@@ -1147,7 +1150,9 @@ contract: at maintainer time it dynamically `import`s omo's `packages/model-core
 and prints JSON matching the §Data sources "what omo suggests" schema: each RegExp `pattern` →
 `.source` string (e.g. `claude(?:-\d+(?:-\d+)*)?-opus`), `Set` → array, plus a `meta` block
 (`omoVersion` from omo's `package.json`, `omoCommit` from `git rev-parse`, `generatedAt`). `refresh.py`
-runs `bun run <this file> <omo-src>` and writes stdout to the data file.
+runs `bun run <this file> <omo-src>`, checks the stdout **loads** (`suggestions.parse`) and only
+then writes it to the data file — valid JSON of the wrong shape used to be written first, over the
+bundled file in a checkout.
 
 ### `update.py` — `omodel --update` (self-update from GitHub Releases)
 

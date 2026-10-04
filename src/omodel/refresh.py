@@ -134,6 +134,17 @@ def refresh(omo_src: str | None = None) -> int:
         print(f"[refresh] bun output is not valid JSON ({exc}). Keeping bundled data.")
         _print_bundled_meta()
         return 1
+    # …and that it is data omodel can actually LOAD, before anything is overwritten. Valid JSON
+    # of the wrong shape (`[]`, a pattern Python's `re` rejects) used to be written first — over
+    # the repo's bundled file in a checkout — and only then crash on reading it back.
+    try:
+        from omodel.suggestions import parse as parse_suggestions
+        parse_suggestions(stdout)
+    except Exception as exc:
+        print(f"[refresh] bun output is not loadable suggestions data ({exc}). "
+              "Keeping bundled data.")
+        _print_bundled_meta()
+        return 1
 
     # --- Determine write target ---
     out_path = _resolve_write_target()
@@ -143,11 +154,12 @@ def refresh(omo_src: str | None = None) -> int:
         json.dump(parsed, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
-    meta = parsed.get("meta", {})
+    meta = parsed.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
     print(
         f"[refresh] Written to {out_path!r}. "
-        f"omo {meta.get('omoVersion', '?')} @ {meta.get('omoCommit', '?')[:7]} "
-        f"({meta.get('generatedAt', '?')})"
+        f"omo {meta.get('omoVersion') or '?'} @ {str(meta.get('omoCommit') or '?')[:7]} "
+        f"({meta.get('generatedAt') or '?'})"
     )
     return 0
 
