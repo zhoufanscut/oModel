@@ -1293,6 +1293,29 @@ class TestMalformedMapIsReported:
         assert rc == 0
 
 
+class TestUnqualifiedModelIsReported:
+    """CONTRACTS: anything `set` refuses, `check` must report. A bare `gpt-5.5` is refused as
+    `bad_value`, but check said `ok` in degraded mode and blamed the providers otherwise."""
+
+    BODY = '{"agents": {"sisyphus": {"model": "glm-5"}}, "categories": {}}'
+
+    def test_check_reports_bad_value(self, tmp_path):
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, self.BODY)
+        rc, payload = _run_json(["check", "--config", str(path), "--json"])
+        assert rc == 3
+        problems = [p["problem"] for p in payload["problems"] if p["target"] == "agent:sisyphus"]
+        assert problems == ["bad_value"], payload["problems"]
+
+    def test_check_reports_it_in_degraded_mode_too(self, tmp_path):
+        path = tmp_path / "oh-my-openagent.jsonc"
+        _write(path, self.BODY)
+        rc, out = _run_degraded(["check", "--config", str(path), "--json"])
+        payload = _json.loads(out)
+        assert rc == 3
+        assert any(p["problem"] == "bad_value" for p in payload["problems"])
+
+
 class TestMalformedModelIsReported:
     """A non-string `model` reads as unset everywhere (it crashed `"/" in model`), and `check`
     reports it rather than calling the file healthy."""

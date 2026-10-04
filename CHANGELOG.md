@@ -42,6 +42,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   could close the app when you moved onto it. Those details are now shown as unknown.
 - Pressing `s` closed the app, losing your unsaved changes, if the config file had become
   unreadable since launch. It now says the save failed and keeps your changes.
+- `omodel check` passed a model written without its provider (`"gpt-5.5"` instead of
+  `"openai/gpt-5.5"`), which `omodel set` refuses. When opencode was available it blamed the
+  providers instead ("no connected provider serves"). It now reports `bad_value`.
 
 ### Changed
 

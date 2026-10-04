@@ -962,7 +962,19 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
             continue
         if not row["assigned"]:
             continue
-        if row["available"] is False:
+        # The qualification rule `set` refuses on (`bad_value`), so a hand-written bare id is
+        # reported rather than called healthy — and NOT as `unavailable`, which blamed the
+        # providers for a missing prefix ("no provider serves 'gpt-5.5'" while openai did). Not
+        # gated on `degraded`: it is about the value, not about availability.
+        if _split_value(row["model"]) is None:
+            problems.append({
+                "target": target, "problem": "bad_value",
+                "message": (
+                    f"{row['model']!r} is not a provider/model — use a `value` from "
+                    f"`omodel candidates {target}`"
+                ),
+            })
+        elif row["available"] is False:
             problems.append({
                 "target": target, "problem": "unavailable",
                 "message": f"no connected provider serves {row['model']!r}",

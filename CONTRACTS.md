@@ -99,8 +99,8 @@ are not. Every payload carries `"schema": 1`; bump only on a breaking change.
   preset**, including targets the command never named. The TUI escalates the same decision via
   `_ask_sync`; the CLI cannot prompt, so it must report. The prose surfaces say it too — a
   JSON-only signal let `omodel check` print "OK" over a pending conflict.
-- **`check`'s `problem` slugs**: `unknown_target`, `unavailable`, `bad_variant`, `gpt_only`,
-  `malformed_model` (a non-string `model`; every other surface reads it as unset), `malformed_map`
+- **`check`'s `problem` slugs**: `unknown_target`, `bad_value` (an unqualified model — the rule
+  `set` refuses on), `unavailable`, `bad_variant`, `gpt_only`, `malformed_model` (a non-string `model`; every other surface reads it as unset), `malformed_map`
   (the last carries `target: null` — it belongs to the file, not a target).
   Anything `set` refuses, `check` must report — otherwise a config `set` would never have
   produced (a preset re-installing a non-GPT hephaestus) reads as healthy. Variant validity is
