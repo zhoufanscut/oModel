@@ -201,12 +201,10 @@ before changing any public signature or shared shape.
   describing the symptom the user hit over the mechanism you changed. Keep the tone plain — see the
   existing entries. **`## [Unreleased]` stays as a heading even when empty**; never fold a released
   section into it (a bad edit did exactly that, hiding a whole shipped release).
-- **Python floor is 3.9** (CI matrix 3.9–3.13). Every module starts with
-  `from __future__ import annotations`. No runtime PEP-604 unions (`isinstance(x, A | B)`) or PEP-585
-  generics — annotations-as-strings make `dict | None` in signatures fine, but runtime use is not.
-  Signatures now use `X | None` throughout (ruff `UP045`); that is annotation-only and safe at 3.9,
-  and is NOT licence to use `|` where the expression is evaluated. The one rule the floor genuinely
-  blocks is `SIM117` (combining `with` needs 3.10 parenthesized context managers) — hence its ignore.
+- **Python floor is 3.11** (CI matrix 3.11–3.14; `requires-python` drives ruff's target, so the
+  `UP` rules follow it). Every module starts with `from __future__ import annotations`. The floor
+  was 3.9 until 0.7.0 and its workarounds are gone (the `SIM117` ignore, the pilot-test
+  event-loop shims) — don't add new version shims; raise the floor instead.
 - **Real-config safety (hard rule):** never read-then-write the live `~/.omo/omo.jsonc` (or the
   legacy `~/.config/opencode/oh-my-openagent.jsonc`) in tests or examples. Pass an explicit temp
   `path` / `--config` everywhere. Tests monkeypatch `subprocess.run`; no test calls real

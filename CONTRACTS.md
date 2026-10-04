@@ -6,9 +6,8 @@ one without updating this file: both surfaces (`app.py`, `cli.py`) and the agent
 
 ## Hard rules (permanent)
 
-1. **Python floor is 3.9.** Put `from __future__ import annotations` at the top of every
-   module. No runtime PEP-604 unions (`isinstance(x, A | B)`) and no
-   runtime PEP-585 generics; annotations-as-strings make `dict | None` in signatures fine.
+1. **Python floor is 3.11.** Put `from __future__ import annotations` at the top of every
+   module.
 2. **REAL-CONFIG SAFETY.** The live `~/.omo/omo.jsonc` (and the legacy
    `~/.config/opencode/oh-my-openagent.jsonc`) is the user's real file. Never read-then-write it
    in tests or examples. The unified path carries a side effect a temp one does not — the first

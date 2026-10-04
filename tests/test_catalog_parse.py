@@ -32,9 +32,11 @@ def _load_from(stdout: str) -> Catalog:
     """load() over a mocked `opencode models` stdout — the patch nest every parsing test
     needs, in one place. The conftest gives each test an empty cache, so this always
     reaches the (mocked) subprocess."""
-    with patch("subprocess.run", return_value=_mock_run(stdout)):
-        with patch("shutil.which", return_value="/usr/bin/opencode"):
-            return load()
+    with (
+        patch("subprocess.run", return_value=_mock_run(stdout)),
+        patch("shutil.which", return_value="/usr/bin/opencode"),
+    ):
+        return load()
 
 
 # ---------------------------------------------------------------------------
@@ -124,19 +126,23 @@ class TestCatalogErrorRules:
 
     def test_exit_nonzero_raises_catalog_unavailable(self):
         """exit code != 0 (opencode IS on PATH) → CatalogUnavailable."""
-        with patch("subprocess.run", return_value=_mock_run("", returncode=1)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    load()
+        with (
+            patch("subprocess.run", return_value=_mock_run("", returncode=1)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            load()
 
     def test_zero_parsed_lines_raises_catalog_unavailable(self):
         """Zero provider/model lines (even if exit 0) → CatalogUnavailable. There is no
         partial-success state: either a Catalog with data, an empty Catalog, or this."""
         empty_output = "Some header line with no slash\n\n"
-        with patch("subprocess.run", return_value=_mock_run(empty_output, returncode=0)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    load()
+        with (
+            patch("subprocess.run", return_value=_mock_run(empty_output, returncode=0)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            load()
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +158,11 @@ class TestCatalogLoadCacheHit:
         def _must_not_run(*a, **kw):
             raise AssertionError("subprocess must not be called on a cache hit")
 
-        with patch("subprocess.run", side_effect=_must_not_run):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
+        with (
+            patch("subprocess.run", side_effect=_must_not_run),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            cat = load()
         assert "opencode" in cat.available
         assert "claude-opus-4-7" in cat.available["opencode"]
 
@@ -163,9 +171,11 @@ class TestCatalogLoadCacheHit:
         all) is treated as a miss — load() falls through to the (here, stubbed-OK) subprocess
         rather than returning an empty Catalog."""
         cache.write("models", "no slash lines in this blob at all\n", ["opencode", "models"])
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = load()
+        with (
+            patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            cat = load()
         assert "opencode" in cat.available
         assert "claude-opus-4-7" in cat.available["opencode"]
 
@@ -194,23 +204,29 @@ class TestCatalogRefresh:
 
     def test_timeout_raises_catalog_unavailable(self):
         timeout_exc = subprocess.TimeoutExpired(cmd=["opencode"], timeout=90)
-        with patch("subprocess.run", side_effect=timeout_exc):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    refresh()
+        with (
+            patch("subprocess.run", side_effect=timeout_exc),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            refresh()
 
     def test_nonzero_exit_raises_catalog_unavailable(self):
-        with patch("subprocess.run", return_value=_mock_run("", returncode=1)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    refresh()
+        with (
+            patch("subprocess.run", return_value=_mock_run("", returncode=1)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            refresh()
 
     def test_zero_lines_raises_catalog_unavailable(self):
         empty_output = "no slash lines here\n"
-        with patch("subprocess.run", return_value=_mock_run(empty_output)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                with pytest.raises(CatalogUnavailable):
-                    refresh()
+        with (
+            patch("subprocess.run", return_value=_mock_run(empty_output)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            refresh()
 
     def test_happy_path_returns_catalog_and_rebuilds_cache(self):
         """A successful refresh returns the parsed Catalog AND rewrites the cache: stale
@@ -221,9 +237,11 @@ class TestCatalogRefresh:
             ["opencode", "models", "opencode", "--verbose"],
         )
 
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                cat = refresh()
+        with (
+            patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            cat = refresh()
 
         assert "opencode" in cat.available
         assert "claude-opus-4-7" in cat.available["opencode"]

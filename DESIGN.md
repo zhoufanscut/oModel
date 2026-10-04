@@ -34,8 +34,9 @@ prefix and a valid variant, and saves a clean config.
 
 ## Runtime requirements
 
-- **Python ≥ 3.9** (`importlib.resources.files`). Pin Textual to a release whose own
-  `requires-python` ≤ our floor (verify at lock time, else bump floor to 3.10).
+- **Python ≥ 3.11** (raised from 3.9 in 0.7.0: 3.9 is end-of-life and 3.10 reaches it in
+  Oct 2026). Pin Textual to a release whose own `requires-python` ≤ our floor (verify at lock
+  time). Only pipx/uv installs see the floor; the prebuilt binary bundles its own Python.
 - **`opencode` CLI** on `PATH` — the source of "what you have". Degrades gracefully if missing or failing.
 - **No** dependency on a local omo checkout or omo cache at runtime.
 - **No network access at runtime** — with exactly one opt-in exception, `omodel --update`, which
@@ -49,7 +50,7 @@ prefix and a valid variant, and saves a clean config.
 
 | # | Decision | Choice |
 |---|----------|--------|
-| 1 | Stack | Python ≥3.9 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
+| 1 | Stack | Python ≥3.11 + **Textual**. Self-contained; no runtime coupling to omo source or cache. |
 | 2 | Save format | **Edit-in-place**: only `agents`/`categories` are rewritten clean; **everything else — other keys, formatting, comments, commented-out config — is preserved byte-for-byte** (`render()` splices just those two spans). On a unified document the spans are nested inside `"[opencode]"`, so `$schema`, `_migrations`, `profiles` and the rest of the block survive untouched (§Config scope). **Timestamped backup each save** (`.backup/<ts>.jsonc`). |
 | 3 | Picker | **One pick list = the fallbackChain, filtered to models you have** (exact, else newest same-line `detect_family` substitute; unavailable entries hidden), **expanded to one row per serving provider — dedicated (single-vendor) before aggregator/gateway.** `enter` to pick (the row's prefix is what saves); a `+ add model…` row (`a`) types anything off-chain. Suggested variant. |
 | 4 | Layout | **Two-pane list-detail**. |
@@ -1164,7 +1165,7 @@ dependency added here would ship inside the very binary this replaces.
      fatal, a *missing* checksum asset warns and continues (older releases have none) and reports
      `verified: false` rather than implying a check that never ran;
   3. extract **only** the `omodel` member, to a path we choose — never `extractall`, so a `..`
-     member has nowhere to write (3.9 has no `filter="data"`; this is the portable equivalent).
+     member has nowhere to write (no tarfile `filter=` needed).
      LICENSE/NOTICE ride in the tarball and are simply not written;
   4. **run the downloaded binary's `--version` and require the release's version back.** The step
      that earns its keep: a linux binary built against a newer glibc than this machine's (the
@@ -1445,10 +1446,11 @@ dependency added here would ship inside the very binary this replaces.
   ["src/omodel"]`. The non-Python payload (`data/*.json`,`*.jsonc` + `tools/*.ts`) ships
   **automatically** because it lives under the package tree — do **NOT** add a `force-include`
   (it duplicates the path and fails the wheel build). `data/` and `tools/` each carry an
-  `__init__.py` so they are **regular** packages: `importlib.resources.files("omodel.data" /
-  "omodel.tools")` only resolves on a regular package under the **3.9** floor (namespace-package
-  `files()` support landed in 3.10) — without it, every bundled-data read raises `TypeError:
-  … not NoneType` on 3.9. `requires-python = ">=3.9"`; deps `textual` (pinned), `json5`. Entry
+  `__init__.py` so they are **regular** packages — the simplest case for
+  `importlib.resources.files("omodel.data" / "omodel.tools")` in both the wheel and the frozen
+  binary. (Under the old 3.9 floor they were required: namespace-package `files()` landed in 3.10.
+  They stay because removing them buys nothing and is untested in the PyInstaller build.)
+  `requires-python = ">=3.11"`; deps `textual` (pinned), `json5`. Entry
   point `[project.scripts] omodel = "omodel.cli:main"`.
 - **Primary — standalone binary + installer (GitHub Releases):** PyInstaller **one-file** build,
   `pyinstaller --onefile --name omodel --collect-data omodel src/omodel/__main__.py` (bundles

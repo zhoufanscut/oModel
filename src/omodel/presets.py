@@ -44,7 +44,7 @@ import copy
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # On-disk shape version.  We WRITE 2 (dense, unbounded list) and READ both:
 #   1 = the original fixed-3 list, `null` for an empty slot, `active` indexing that 3-list
@@ -108,7 +108,7 @@ def presets_path(config_path: str) -> str:
 
 def timestamp() -> str:
     """UTC `saved_at` stamp, second precision — `2026-07-26T09:14:03Z`."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _as_map(value) -> dict:

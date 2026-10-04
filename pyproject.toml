@@ -1,6 +1,6 @@
 # pyproject.toml — owned by the CLI+packaging specialist (final version).
 # Textual pin: installed textual==8.2.7, requires-python ">=3.9,<4.0".
-# Our floor stays at 3.9 — textual's constraint is satisfied.
+# Our floor is 3.11 — textual's constraint is satisfied.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -10,7 +10,7 @@ name = "omodel"
 version = "0.6.2"
 description = "A small TUI to help set OMO (oh-my-openagent) models"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "zhoufanscut" }]
 keywords = ["tui", "opencode", "oh-my-openagent", "omo", "ai", "models"]
@@ -21,15 +21,14 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Utilities",
 ]
 dependencies = [
-  # Pin at lock time: textual 8.2.7 requires-python ">=3.9,<4.0" — matches our 3.9 floor.
+  # Pin at lock time: textual 8.2.7 requires-python ">=3.9,<4.0" — covers our 3.11 floor.
   "textual==8.2.7",
   # Imported directly (rich.cells.cell_len, app._fit_cells) — a textual transitive today, but
   # textual is migrating onto its own Content, so declare what we actually import.
@@ -89,10 +88,6 @@ ignore = [
   # 14 sites are all boundary catches of exactly that kind, several already commented as
   # such. Narrowing them per-site would mean 14 noqa lines restating one design rule.
   "BLE001",
-  # Combining nested `with` into one statement needs parenthesized context managers (3.10+).
-  # The floor is 3.9, so the only conforming rewrite is a single over-long line. This is the
-  # one rule the floor genuinely blocks — revisit if the floor ever rises.
-  "SIM117",
 ]
 
 [tool.ruff.lint.per-file-ignores]

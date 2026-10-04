@@ -566,7 +566,7 @@ class TestApplyUpdate:
 
     def test_a_traversal_member_is_never_written(self, tmp_path, monkeypatch, binary_install):
         """We extract ONE member to a path we choose, so `../` members have nowhere to go —
-        the portable form of 3.12's `filter='data'` (the floor is 3.9)."""
+        no tarfile `filter=` needed."""
         install, target = binary_install
         net, release = _serving(tmp_path, extra="../../evil.sh")
         monkeypatch.setattr(update, "_open", net.open)

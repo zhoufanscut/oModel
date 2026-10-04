@@ -16,7 +16,7 @@ import os
 import shutil
 import stat
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -591,7 +591,7 @@ def save(cfg: dict, path: str) -> SaveResult:
         original_created = True
 
     # (2) Write verbatim timestamped snapshot in UTC; .mmm avoids same-second collisions
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     # Format: YYYYMMDD-HHMMSS.mmm — milliseconds keep lexicographic sort stable
     ts = now_utc.strftime("%Y%m%d-%H%M%S") + f".{now_utc.microsecond // 1000:03d}"
     snapshot_name = f"{ts}.jsonc"
@@ -756,7 +756,7 @@ def restore(path: str, backup_name: str) -> None:
 
     # Snapshot the current live config first (so the restore itself is undoable)
     os.makedirs(backup_dir, exist_ok=True)
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     ts = now_utc.strftime("%Y%m%d-%H%M%S") + f".{now_utc.microsecond // 1000:03d}"
     snapshot_path = os.path.join(backup_dir, f"{ts}.jsonc")
     if os.path.exists(path):

@@ -106,9 +106,11 @@ class TestVersion:
 class TestCheck:
 
     def test_check_full_mode(self, capsys):
-        with patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)):
-            with patch("shutil.which", return_value="/usr/bin/opencode"):
-                rc = cli.main(["--check"])
+        with (
+            patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            rc = cli.main(["--check"])
 
         captured = capsys.readouterr()
         assert rc == 0

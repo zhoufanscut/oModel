@@ -942,23 +942,16 @@ def test_addmodal_gpt_only_gating():
     )
     resolver = Resolver.build(catalog, suggestions)
 
-    # A Textual screen creates an asyncio.Lock at construction; on Python 3.9 that needs a
-    # CURRENT event loop (3.10+ binds lazily). The app only ever builds a modal inside its
-    # running loop (via push_screen), so construct inside asyncio.run here too — otherwise this
-    # bare construction raises "no current event loop" on 3.9.
-    async def _run():
-        gated = AddModelModal(resolver, suggestions, require_gpt=True)
-        row, _preview, ok = gated._build_row("openai/gpt-5")
-        assert ok and row is not None and row["model"] == "gpt-5", "GPT model must be accepted"
-        row, preview, ok = gated._build_row("zhipuai/glm-5")
-        assert not ok and row is None, "non-GPT model must be blocked"
-        assert "GPT" in preview, f"block preview should explain GPT-only: {preview!r}"
+    gated = AddModelModal(resolver, suggestions, require_gpt=True)
+    row, _preview, ok = gated._build_row("openai/gpt-5")
+    assert ok and row is not None and row["model"] == "gpt-5", "GPT model must be accepted"
+    row, preview, ok = gated._build_row("zhipuai/glm-5")
+    assert not ok and row is None, "non-GPT model must be blocked"
+    assert "GPT" in preview, f"block preview should explain GPT-only: {preview!r}"
 
-        ungated = AddModelModal(resolver, suggestions, require_gpt=False)
-        row, _preview, ok = ungated._build_row("zhipuai/glm-5")
-        assert ok and row is not None, "non-GPT model accepted when not GPT-gated"
-
-    asyncio.run(_run())
+    ungated = AddModelModal(resolver, suggestions, require_gpt=False)
+    row, _preview, ok = ungated._build_row("zhipuai/glm-5")
+    assert ok and row is not None, "non-GPT model accepted when not GPT-gated"
 
 
 # ---------------------------------------------------------------------------
@@ -2777,20 +2770,15 @@ def test_addmodal_gpt_filter_fuzzy_rows():
     )
     resolver = Resolver.build(catalog, suggestions)
 
-    # Construct inside a running loop (see test_addmodal_gpt_only_gating: a Textual screen needs a
-    # current event loop on Python 3.9).
-    async def _run():
-        gated = AddModelModal(resolver, suggestions, require_gpt=True)
-        ids = [f"{r['provider']}/{r['model']}" for r in gated._fuzzy_rows("")]
-        assert "openai/gpt-5.5" in ids, ids
-        assert "opencode/gpt-5.5" in ids, ids
-        assert all("gpt" in i.rsplit("/", 1)[-1].lower() for i in ids), ids
-        assert not any(("glm" in i or "kimi" in i or "deepseek" in i) for i in ids), ids
+    gated = AddModelModal(resolver, suggestions, require_gpt=True)
+    ids = [f"{r['provider']}/{r['model']}" for r in gated._fuzzy_rows("")]
+    assert "openai/gpt-5.5" in ids, ids
+    assert "opencode/gpt-5.5" in ids, ids
+    assert all("gpt" in i.rsplit("/", 1)[-1].lower() for i in ids), ids
+    assert not any(("glm" in i or "kimi" in i or "deepseek" in i) for i in ids), ids
 
-        row, preview, ok = gated._build_row("zhipuai/glm-5")
-        assert not ok and row is None and "GPT" in preview, (preview, ok)
-
-    asyncio.run(_run())
+    row, preview, ok = gated._build_row("zhipuai/glm-5")
+    assert not ok and row is None and "GPT" in preview, (preview, ok)
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Installing with pipx, uv or pip now needs Python 3.11 or newer (it was 3.9). Python 3.9 is no
+  longer supported upstream and 3.10 stops this month. The prebuilt binaries are not affected.
+  If your pipx uses an older Python, reinstall with
+  `pipx install --force --python python3.12 git+https://github.com/zhoufanscut/oModel`.
+
 ## [0.6.2] — 2026-10-01
 
 Bundled suggestions now follow oh-my-openagent 5.1.7, plus two fixes.

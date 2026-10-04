@@ -25,7 +25,7 @@ The swap is the delicate part, and the order below is deliberate:
   2. verify the release's published `.sha256` (same rule as `install.sh`: hard-fail on a
      mismatch, warn-and-continue when the release has no checksum asset);
   3. extract ONLY the `omodel` member, to a path we choose — never `extractall`, which would let
-     a crafted tarball write anywhere (and 3.9 has no `filter="data"`);
+     a crafted tarball write anywhere;
   4. **run the new binary's `--version` and require it to print the release's version.** This is
      the guard that matters: a linux binary built against a newer glibc, a truncated download, a
      mis-uploaded asset — all of them fail here, while the user's working omodel is still in
@@ -662,9 +662,8 @@ def _extract_binary(archive: str, dest: str) -> None:
     """Extract the single `omodel` member of `archive` to `dest`.
 
     Never `extractall`: the destination is ours to choose, so a crafted tarball has nowhere to
-    write (`..` members, absolute paths, symlink tricks). 3.9 has no `filter="data"` — this is
-    the portable form of the same guarantee, and it also means LICENSE/NOTICE, which the tarball
-    also carries, are simply not written."""
+    write (`..` members, absolute paths, symlink tricks) and no `filter=` is needed. It also
+    means LICENSE/NOTICE, which the tarball also carries, are simply not written."""
     try:
         with tarfile.open(archive, "r:gz") as tar:
             member = None

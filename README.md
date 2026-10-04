@@ -49,7 +49,7 @@ the pane.)
 
 ## Requirements
 
-- Python ≥ 3.9
+- Python ≥ 3.11 — only for the pipx / uv install; the prebuilt binary bundles its own
 - `opencode` CLI on `PATH` (degrades gracefully if absent)
 - `bun` — only for `omodel --refresh-omo` (regenerating bundled suggestion data)
 
@@ -70,6 +70,9 @@ GitHub Actions runner ships at build time. On older distros where the binary fai
 with a glibc-version error, use the pipx/uvx install path below instead.
 
 ### pipx / uvx (from GitHub, no PyPI)
+
+These need Python 3.11 or newer. If your default `python3` is older, add `--python python3.12`
+(pipx) or `--python 3.12` (uv; it downloads that Python if you don't have it).
 
 ```sh
 # pipx
