@@ -521,7 +521,10 @@ def _open_session(config_override, as_json: bool = False):
     from omodel.config_io import ConfigParseError
     from omodel.session import Session
     try:
-        session = Session.build(config_override)
+        # scaffold=False: opening a missing config must not create it — `show`, `check` and any
+        # `--dry-run` used to leave a starter file (and its directories) behind. A save still
+        # writes it (Session.save_config).
+        session = Session.build(config_override, scaffold=False)
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         if as_json:
@@ -1605,7 +1608,7 @@ def _cmd_print(config_override: str | None) -> int:
     from omodel.config_io import ConfigParseError, load_config
 
     try:
-        cfg, path = load_config(config_override)
+        cfg, path = load_config(config_override, scaffold=False)  # read-only: create nothing
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         return EXIT_ERROR

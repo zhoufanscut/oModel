@@ -151,7 +151,8 @@ commit.
   `OPENCODE_BLOCK = "[opencode]"`; `scope_of(cfg)->"opencode"|"root"` (CONTENT-based, never
   filename-based); `managed_root(cfg)->dict` (read, never creates) and
   `managed_root_for_write(cfg)->dict` (creates/coerces the block) — the node holding
-  `agents`/`categories`; `load_config(path=None)->(cfg, path)`
+  `agents`/`categories`; `load_config(path=None, scaffold=True)->(cfg, path)` (`scaffold=False`:
+  a missing file reads as `scaffold_text(path)` in memory, nothing written); `write_scaffold(path)`
   (raises `ConfigParseError(ValueError)` — message carries the path — on malformed JSONC, or its subclass `ConfigReadError` when the path cannot be opened or scaffolded at all; cli.py
   catches it for a friendly exit-1 message on the TUI/`--print` paths; scaffolds the UNIFIED
   shape except at an explicit legacy path);
@@ -162,7 +163,7 @@ commit.
   nested under `"[opencode]"` on a unified document — everything else, incl. comments /
   commented-out config outside them, byte-for-byte; falls back to
   `serialize(cfg)` when `base_text` is empty or a key is missing from the managed node);
-  `diff_text(cfg, path)->str` and `save(cfg, path)->SaveResult` both go through `render`;
+  `diff_text(cfg, path, missing_base=None)->str` and `save(cfg, path)->SaveResult` both go through `render`;
   `@dataclass SaveResult(changed, backup, original_created)`; `@dataclass BackupInfo(name, path,
   is_original, size)`; `list_backups(path)->list` (the pinned `original.jsonc` + the newest 10 of
   the `[0-9]*.jsonc` ring — `original-legacy.jsonc` matches neither and is never offered);
@@ -237,9 +238,9 @@ commit.
   `variant_key_for(cfg, subkind)->str` (which spelling to WRITE — `reasoning` for
   agents/categories on a unified document, `variant` for legacy AND for
   `ultrawork`/`compaction` in both scopes). `@dataclass Session(catalog, suggestions,
-  resolver, cfg, config_path, catalog_error=None)` with `__post_init__`-filled `store`,
-  `sync_conflict`, `saved_text`, `saved_store_fp`, `adopted_presets`;
-  classmethod `build(config_path=None)`;
+  resolver, cfg, config_path, catalog_error=None, scaffold_text=None)` with
+  `__post_init__`-filled `store`, `sync_conflict`, `saved_text`, `saved_store_fp`,
+  `adopted_presets`; classmethod `build(config_path=None, scaffold=True)` (the CLI passes False);
   `.managed` (property, the agents/categories-holding node) and `.scope` (property,
   `"opencode"`/`"root"`, surfaced as `config_scope` by `show --json`);
   `.degraded` (property, `not catalog.connected`); `.known_targets()->list`;

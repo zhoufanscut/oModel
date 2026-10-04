@@ -52,6 +52,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A suggestions file saved by `omodel --refresh-omo` that omodel could not read stopped every
   command, including `omodel --check`, until you deleted it. omodel now falls back to its built-in
   suggestions, and `--refresh-omo` checks the new data before it saves it.
+- `omodel show`, `check`, `candidates`, `--print` and any `--dry-run` created a starter config file
+  (and its folders) when the config didn't exist yet, so a mistyped `--config` path quietly became
+  a new empty config. They now create nothing; the file is written on the first real save.
 
 ### Changed
 

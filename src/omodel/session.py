@@ -242,6 +242,9 @@ class Session:
     cfg: dict
     config_path: str
     catalog_error: BaseException | None = None
+    # The starter config standing in for a MISSING config file that `build(scaffold=False)` did
+    # not create: `diff` previews against it and `save_config` writes it first. None otherwise.
+    scaffold_text: str | None = None
 
     # Filled by __post_init__ — never passed in.
     store: presets_mod.Store = field(init=False, default=None)
@@ -355,7 +358,7 @@ class Session:
         self.sync_conflict = match is None and self.store.current() is not None
 
     @classmethod
-    def build(cls, config_path: str | None = None) -> Session:
+    def build(cls, config_path: str | None = None, scaffold: bool = True) -> Session:
         """Load all four data sources and construct a Session — the production wiring, shared by
         `app.create_app()` and every CLI verb.
 
@@ -364,9 +367,14 @@ class Session:
         `degraded`). The resolver is built UNCONDITIONALLY — over the real catalog, or over the
         empty degraded-mode one — so add-model (the only route to a model while degraded) stays
         live; only a genuine Resolver.build() failure (e.g. corrupt bundled suggestions data)
-        leaves it None. Raises ConfigParseError for a malformed config; callers report it."""
+        leaves it None. Raises ConfigParseError for a malformed config; callers report it.
+
+        `scaffold=False` (the CLI) never creates a missing config just by opening it — see
+        `scaffold_text`. The TUI keeps the default and scaffolds at launch."""
         suggestions = suggestions_mod.load()
-        cfg, resolved_path = config_io.load_config(config_path)
+        missing = not os.path.exists(config_io.config_path(config_path))
+        cfg, resolved_path = config_io.load_config(config_path, scaffold=scaffold)
+        pending = config_io.scaffold_text(resolved_path) if missing and not scaffold else None
 
         catalog_error: BaseException | None = None
         try:
@@ -388,6 +396,7 @@ class Session:
             cfg=cfg,
             config_path=resolved_path,
             catalog_error=catalog_error,
+            scaffold_text=pending,
         )
 
     # ----- availability ---------------------------------------------------------------
@@ -719,13 +728,18 @@ class Session:
 
     def diff(self) -> str:
         """Unified diff of what a save would write vs what's on disk."""
-        return config_io.diff_text(self.cfg, self.config_path)
+        return config_io.diff_text(self.cfg, self.config_path, missing_base=self.scaffold_text)
 
     # ----- publication ----------------------------------------------------------------
 
     def save_config(self) -> config_io.SaveResult:
         """Write the config (backup + atomic replace) and re-baseline its dirtiness.
         Raises on write failure. Half of a save — `write_store` is the other."""
+        if self.scaffold_text is not None and not os.path.exists(self.config_path):
+            # Same file a scaffolding load would have made, so the save splices into it exactly
+            # as it would have (comments and all) instead of writing a clean file from scratch.
+            config_io.write_scaffold(self.config_path)
+        self.scaffold_text = None
         result = config_io.save(self.cfg, self.config_path)
         # Re-baseline to what's now on disk (== serialize(cfg) either way).
         self.saved_text = config_io.serialize(self.cfg)

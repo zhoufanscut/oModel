@@ -151,38 +151,52 @@ def managed_root_for_write(cfg: dict) -> dict:
     return block
 
 
-def load_config(path: str | None = None):
+def scaffold_text(resolved: str) -> str:
+    """The starter config a missing `resolved` gets: the UNIFIED shape
+    (`data/default-omo-config.jsonc`) everywhere except the explicit legacy path — omo moves the
+    legacy file aside on migration, and recreating it there would hand the user an empty config
+    that omo no longer reads."""
+    import importlib.resources
+
+    default_name = (
+        "default-config.jsonc"
+        if os.path.abspath(resolved) == os.path.abspath(legacy_config_path())
+        else "default-omo-config.jsonc"
+    )
+    return (importlib.resources.files("omodel.data") / default_name).read_text(encoding="utf-8")
+
+
+def write_scaffold(resolved: str) -> None:
+    """Create the starter config (and its directory) at `resolved`. Raises ConfigReadError."""
+    # dirname() of a bare relative filename (no directory component) is "" — resolve via
+    # abspath first so a relative `--config foo.jsonc` doesn't crash makedirs(exist_ok=True).
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
+        with open(resolved, "w", encoding="utf-8") as f:
+            f.write(scaffold_text(resolved))
+    except OSError as exc:
+        raise ConfigReadError(f"could not create config at {resolved}: {exc}") from exc
+
+
+def load_config(path: str | None = None, scaffold: bool = True):
     """Resolve via config_path(path); if missing, scaffold a bundled default to that location;
     json5.load → ordered dict. Returns (cfg: dict, resolved_path: str). `agents`/`categories`
     (inside `"[opencode]"` on a unified document) are editable; every other key — the rest of
     the `[opencode]` block, `_migrations`, `profiles`, other harness blocks, `$schema` — passes
     through by value. Raises ConfigParseError if the on-disk JSONC is malformed.
 
-    The scaffold is the UNIFIED shape (`data/default-omo-config.jsonc`) everywhere except an
-    explicit legacy path: omo moves the legacy file aside on migration, and recreating it there
-    would hand the user an empty config that omo no longer reads."""
-    import importlib.resources
-
+    The scaffold is `scaffold_text(resolved)`. With `scaffold=False` nothing is written: a
+    missing file reads as that starter config, in memory. The CLI loads this way, so a read-only
+    verb or a `--dry-run` never creates files (`Session.save_config` writes the scaffold if a
+    save does happen)."""
     import json5
 
     resolved = config_path(path)
 
     if not os.path.exists(resolved):
-        default_name = (
-            "default-config.jsonc"
-            if os.path.abspath(resolved) == os.path.abspath(legacy_config_path())
-            else "default-omo-config.jsonc"
-        )
-        default_ref = importlib.resources.files("omodel.data") / default_name
-        default_text = default_ref.read_text(encoding="utf-8")
-        # dirname() of a bare relative filename (no directory component) is "" — resolve via
-        # abspath first so a relative `--config foo.jsonc` doesn't crash makedirs(exist_ok=True).
-        try:
-            os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(default_text)
-        except OSError as exc:
-            raise ConfigReadError(f"could not create config at {resolved}: {exc}") from exc
+        if not scaffold:
+            return json5.loads(scaffold_text(resolved)), resolved
+        write_scaffold(resolved)
 
     # The OPEN is guarded as well as the parse: a directory at the path, or a file this user
     # cannot read, is an error to report, not a traceback (see ConfigReadError).
@@ -531,7 +545,7 @@ def _read_verbatim(path: str) -> str:
         return f.read()
 
 
-def diff_text(cfg: dict, path: str) -> str:
+def diff_text(cfg: dict, path: str, missing_base: str | None = None) -> str:
     """Unified diff of render(cfg, on-disk) vs the current on-disk file (for the confirm modal),
     so the modal shows exactly what changes — agents/categories only, comments outside intact.
 
@@ -539,11 +553,14 @@ def diff_text(cfg: dict, path: str) -> str:
     disagree about whether anything changes (normalizing the inputs first let a mixed-endings
     file preview as "nothing to save" and then write). Only the OUTPUT is shown with `\\n`: the
     diff is display text, and a `\\r` on every line is noise in a modal and a `--json` payload
-    alike. A uniform-CRLF file still diffs only the lines that change."""
+    alike. A uniform-CRLF file still diffs only the lines that change.
+
+    `missing_base` stands in for a file that does not exist yet but would be scaffolded before
+    the write (a `scaffold=False` load), so the preview is the splice a real save makes."""
     try:
         old_text = _read_verbatim(path)
     except FileNotFoundError:
-        old_text = ""
+        old_text = missing_base if missing_base is not None else ""
     new_text = render(cfg, old_text)
 
     diff_lines = difflib.unified_diff(

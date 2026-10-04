@@ -122,7 +122,10 @@ prefix and a valid variant, and saves a clean config.
   load (negative-lookaheads like `k2(?![-.]?p\d)` verified to compile under Python `re`).
 - **Your config (runtime):** the first EXISTING of `~/.omo/omo.jsonc` → `~/.omo/omo.json` → the
   legacy `$XDG_CONFIG_HOME/opencode/oh-my-openagent.jsonc` (fallback `~/.config/...`); `--config`
-  override; scaffold a bundled starter at `~/.omo/omo.jsonc` if none exists. See §Config scope.
+  override; scaffold a bundled starter at `~/.omo/omo.jsonc` if none exists. The TUI scaffolds at
+  launch; the **CLI never creates it just by opening it** (`Session.build(scaffold=False)`: the
+  starter is read in memory, `--dry-run` diffs against it, and the first real save writes it
+  before splicing) — `show`, `check` and dry runs used to leave a file behind. See §Config scope.
 
 ## Config scope
 

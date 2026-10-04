@@ -1503,6 +1503,40 @@ class TestPresetRefsThatIntRefuses:
         assert payload["error"] == "unknown_preset"
 
 
+class TestOpeningAMissingConfigCreatesNothing:
+    """Every CLI verb built its Session with a scaffolding load, so `show`, `check` and any
+    `--dry-run` against a missing config left a starter file (and its directories) behind —
+    and a mistyped `--config` quietly became a new empty config."""
+
+    @pytest.mark.parametrize("argv", [
+        ["show"], ["targets"], ["check"], ["candidates", "agent:sisyphus"], ["preset", "ls"],
+        ["set", "agent:sisyphus", "zhipuai/glm-5", "--dry-run"],
+        ["clear", "agent:sisyphus", "--dry-run"],
+    ])
+    def test_read_only_verbs_and_dry_runs(self, tmp_path, argv):
+        cfg = tmp_path / "not-yet" / "omo.jsonc"
+        rc, _ = _run_json([*argv, "--config", str(cfg), "--json"])
+        assert rc == 0
+        assert not (tmp_path / "not-yet").exists()
+
+    def test_print(self, tmp_path):
+        cfg = tmp_path / "not-yet" / "omo.jsonc"
+        assert _run(["--print", "--config", str(cfg)]) == 0
+        assert not (tmp_path / "not-yet").exists()
+
+    def test_a_real_set_still_creates_it_from_the_starter_config(self, tmp_path):
+        """…and the dry run previewed exactly that write: a splice into the starter file."""
+        cfg = tmp_path / "not-yet" / "omo.jsonc"
+        argv = ["set", "agent:sisyphus", "zhipuai/glm-5", "--config", str(cfg), "--json"]
+        _, preview = _run_json([*argv, "--dry-run"])
+        rc, real = _run_json(argv)
+        assert rc == 0 and real["changed"] is True
+        assert preview["diff"] == real["diff"]
+        text = _read(str(cfg))
+        assert text.startswith("// OMO configuration"), "the starter file, not a clean rewrite"
+        assert '"model": "zhipuai/glm-5"' in text
+
+
 class TestDryRunChangedMatchesTheRealRun:
 
     def test_a_presets_only_write_previews_as_changed(self, tmp_path):
