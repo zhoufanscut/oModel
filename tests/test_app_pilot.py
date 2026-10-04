@@ -3849,6 +3849,43 @@ def test_pilot_undo_moves_the_marker_back_with_the_models(pilot_config):
     asyncio.run(_run())
 
 
+def test_pilot_undo_past_a_switch_takes_the_edit_out_of_the_preset_left(pilot_config):
+    """Switch to B, edit it, switch back (which banks the edit into B), then undo all three. An
+    undo that moves the ● is a switch, so it must bank too: B used to keep the undone edit, the
+    app read dirty with nothing left to undo, and `s` would have saved it. Redo puts it back."""
+    cfg_path, _ = pilot_config
+    a = presets_mod.capture("A", {"agents": {"sisyphus": {"model": "opencode/claude-opus-4-7"}}})
+    b = presets_mod.capture("B", {"agents": {"sisyphus": {"model": "zhipuai/glm-5"}}})
+    presets_mod.write(cfg_path, presets_mod.Store(presets=[a, b], active=0))  # A matches config
+
+    async def _run():
+        app = _build_app(cfg_path)
+        async with app.run_test() as pilot:
+            assert not pilot.app._is_dirty()
+            await _switch_preset(pilot, 1)
+            await _select_target(pilot, "agent:sisyphus")
+            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _switch_preset(pilot, 0)
+
+            pilot.app.query_one("#targets", OptionList).focus()
+            for _ in range(3):
+                await pilot.press("u")
+                await pilot.pause()
+            assert not pilot.app._history.can_undo
+            b_now = pilot.app._projected_store().presets[1]
+            assert b_now.agents["sisyphus"]["model"] == "zhipuai/glm-5", b_now.agents
+            assert not pilot.app._is_dirty(), "undoing everything must read clean"
+
+            for _ in range(3):
+                await pilot.press("ctrl+r")
+                await pilot.pause()
+            assert _active_row(pilot.app) == 0
+            b_now = pilot.app._projected_store().presets[1]
+            assert b_now.agents["sisyphus"]["model"] == "openai/gpt-5.5", b_now.agents
+
+    asyncio.run(_run())
+
+
 def test_pilot_delete_refuses_on_the_active_preset(pilot_config):
     """`x` on the preset you're editing is refused: the config mirrors it, so deleting it would
     strand the config as a state matching nothing. A non-active one deletes behind a confirm and

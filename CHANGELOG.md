@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Both answers now stick, and so does saving after `esc`.
 - Under that same prompt, `a` (add preset) also overwrote the preset you were on with the
   changed config. It now puts the config into the new preset only, like `omodel preset new`.
+- Undo could leave an undone edit in another preset. After editing preset B and switching back,
+  undoing all of it left the edit in B: it came back the next time you opened B, the app said
+  there were unsaved changes, and `s` would have saved it. Undo now takes it out of B too.
 
 ### Changed
 

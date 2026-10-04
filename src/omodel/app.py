@@ -2831,19 +2831,31 @@ class OModelApp(App):
         `_detail_cache` (keyed by model id) are unaffected and kept. `_custom_rows` AND the
         active preset are restored (from the entry's `aux`) so typed off-chain rows and the `●`
         move in lockstep with undo/redo."""
-        self.cfg = state
         # Move the out-of-cfg companions in lockstep with undo/redo: the _custom_rows snapshot
         # this state was pushed with (so undoing an add-model drops its row and redoing brings it
         # back), and which preset was active (so undoing a switch moves the `●` back with the
         # models — otherwise the restored models would be folded into the preset you switched TO).
         aux = self._history.current_aux() or {}
+        active = aux.get("active")
+        # An undo that moves the `●` IS a switch, so bank the live cfg into the preset it leaves,
+        # as Session.switch_preset does — before `cfg` is replaced. Without it that preset keeps
+        # whatever was last banked into it: undo an edit made on B and then the switch away from
+        # B, and B still holds the edit — back on the next switch to B, and `s` would save it.
+        # Not under an unsettled sync conflict, where the live cfg is the foreign config.
+        if (
+            isinstance(active, int)
+            and 0 <= active < len(self._store.presets)
+            and active != self._store.active
+            and not self.session.sync_conflict
+        ):
+            self._store = self._projected_store()
+        self.cfg = state
         self._custom_rows = aux.get("custom_rows") or {}
         # Pending `v` picks are NOT snapshotted into aux (they aren't cfg, and a `v` on a
         # non-assigned row pushes no history entry) — so undo/redo has no matching value to
         # restore and the honest move is to drop them, exactly as a refresh does. Keeping them
         # would re-apply a pick made against a cfg state you have just stepped away from.
         self._pending_variants.clear()
-        active = aux.get("active")
         if isinstance(active, int):
             if 0 <= active < len(self._store.presets):
                 self._store.active = active

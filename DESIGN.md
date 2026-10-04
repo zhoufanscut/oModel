@@ -1021,7 +1021,11 @@ In summary:
   - **Undo carries the active index — and every writer of `active` must say so.** `_record` puts
     `{custom_rows, active}` in each history entry's `aux`, and `_restore_state` applies both:
     undoing a switch has to move the `●` back with the models, or the restored models would be
-    folded into the preset you switched TO. A catalog refresh wipes `aux` **except** `active`
+    folded into the preset you switched TO. And an undo/redo that moves the `●` **is** a switch,
+    so `_restore_state` first banks the live cfg into the preset it leaves (as
+    `Session.switch_preset` does; skipped under an unsettled sync conflict) — otherwise that
+    preset keeps whatever was last banked into it, and an undone edit comes back on the next
+    switch to it. A catalog refresh wipes `aux` **except** `active`
     (`History.clear_aux(keep=("active",))`) — typed rows go stale with the catalog, the index
     doesn't. `active` is written from four places and only `_record` reaches the history, so the
     other three compensate — this is the feature's sharpest edge, and every one of these was a
