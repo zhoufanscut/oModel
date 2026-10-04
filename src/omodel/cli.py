@@ -1191,7 +1191,10 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
                      f"no preset named {name!r} — run `omodel preset ls`", as_json)
 
     if action == "use":
-        if index == session.store.active:
+        # Not under a sync conflict: there `use <active>` is how an agent DISCARDS the foreign
+        # config (§9 of the guide) — with the usual single preset, the only way — so it must
+        # reach switch_preset, which drops it and writes the preset back.
+        if index == session.store.active and not session.sync_conflict:
             _emit({"ok": True, "action": "use", "name": session.store.presets[index].name,
                    "index": index, "changed": False},
                   as_json, lines=[f"already using '{session.store.presets[index].name}'"])

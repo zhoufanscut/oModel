@@ -1017,6 +1017,34 @@ class TestReviewRegressions:
         loaded, _ = config_io.load_config(cfg)
         assert _presets.matching_index(after, loaded) == after.active
 
+    def test_preset_use_on_the_active_preset_discards_a_foreign_edit(self, tmp_path):
+        """The guide's way out of a conflict is `preset use <name>`. On the ACTIVE preset it
+        returned `changed: false` before switch_preset ran, so with one preset there was no way
+        out at all."""
+        from omodel import presets as _presets
+        cfg = self._conflicted(tmp_path)   # 'second' is active
+
+        rc, payload = _run_json(["preset", "use", "second", "--config", cfg, "--json"])
+        assert rc == 0 and payload["changed"] is True, payload
+
+        after = _presets.load(cfg)
+        loaded, _ = config_io.load_config(cfg)
+        assert "handedited/zzz" not in _json.dumps(loaded)
+        active = after.presets[after.active]
+        assert _presets.fingerprint(active.agents, active.categories) == _presets.fingerprint(
+            loaded.get("agents"), loaded.get("categories"))
+        _, check = _run_json(["check", "--config", cfg, "--json"])
+        assert check["sync_conflict"] is False
+
+    def test_preset_use_on_the_active_preset_is_a_no_op_without_a_conflict(self, tmp_path):
+        cfg = _agent_cfg(tmp_path)
+        with open(cfg, encoding="utf-8") as f:
+            before = f.read()
+        rc, payload = _run_json(["preset", "use", "default", "--config", cfg, "--json"])
+        assert rc == 0 and payload["changed"] is False, payload
+        with open(cfg, encoding="utf-8") as f:
+            assert f.read() == before
+
     def test_mutating_payloads_surface_sync_conflict(self, tmp_path):
         """`set` under a conflict adopts the config into the active preset. That is a defensible
         resolution; doing it without telling the agent is not."""

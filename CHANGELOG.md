@@ -29,6 +29,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - If your config had the same key twice (two `"agents"` blocks, or two `"[opencode]"` blocks),
   saving changed the first copy, but omo reads the last one. omodel reported success and omo
   kept the old models. Saves now go into the copy omo reads.
+- `omodel preset use <name>` did nothing when `<name>` was already the active preset, even when
+  something outside omodel had changed the config. That is the documented way to throw such a
+  change away, and with a single preset it was the only one. It now restores the preset.
 
 ### Changed
 
