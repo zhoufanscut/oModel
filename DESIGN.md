@@ -73,7 +73,10 @@ prefix and a valid variant, and saves a clean config.
 ## Data sources
 
 - **What you have (runtime):** parse `opencode models` → lines `provider/model` (split on the
-  **first** `/`). Group → `available = {provider: [model_ids]}` (first-seen order); `connected =
+  **first** `/`; a line counts only if it has that shape — `catalog._LINE_RE`, a provider token without
+  whitespace/`/`/`:`, then an id without whitespace — so a warning naming a path or a URL is not a provider,
+  and the same pattern finds `--verbose` record headers, capitals and dots included). Group →
+  `available = {provider: [model_ids]}` (first-seen order); `connected =
   list(prefixes)` (first-seen order, never a set). Verified prefixes: `opencode deepseek
   moonshotai-cn openai zhipuai` (79 models today — count varies; tests must **not** hard-assert it).
   **Error rule (one definition, used by `catalog.load` too):** `opencode` not on `PATH` → banner +

@@ -14,8 +14,13 @@ from dataclasses import dataclass
 
 from . import cache
 
-# Header line for `opencode models <provider> --verbose` output.
-_HEADER_RE = re.compile(r"^(?P<prov>[a-z0-9_-]+)/(?P<model>\S+)$")
+# One `provider/model` line — a model line of `opencode models` and a record header of
+# `opencode models <provider> --verbose` alike: a provider token (no whitespace, `/` or `:`), the
+# FIRST `/`, then a model id with no whitespace (it may hold more `/`s: `openrouter/a/b`). One
+# shape for both readers. The header pattern used to be `[a-z0-9_-]+`, so a provider spelled with
+# a capital or a dot (`lm.studio`, `MyGateway`) never got a detail line or a variant picker; the
+# model-line reader took ANY line with a `/`, so `Warning: config at /home/…` became a provider.
+_LINE_RE = re.compile(r"^(?P<prov>[^\s/:]+)/(?P<model>\S+)$")
 
 # Subprocess timeouts (seconds). opencode measures ~3s warm; the headroom guards against a
 # hung CLI holding memory forever (each `--verbose` peaks ~320 MB). `--refresh` hits the
@@ -201,15 +206,10 @@ def _parse_models(stdout: str):
     available: dict = {}
     connected: list = []
     for line in stdout.splitlines():
-        line = line.strip()
-        if "/" not in line:
-            continue
-        # Split on the FIRST '/' only.
-        provider, model_id = line.split("/", 1)
-        provider = provider.strip()
-        model_id = model_id.strip()
-        if not provider or not model_id:
-            continue
+        match = _LINE_RE.match(line.strip())
+        if match is None:
+            continue  # a banner, a warning naming a path, a URL — anything but `provider/model`
+        provider, model_id = match.group("prov"), match.group("model")
         if provider not in available:
             available[provider] = []
             connected.append(provider)
@@ -221,12 +221,12 @@ def _parse_models(stdout: str):
 def _find_verbose_record(stdout: str, target_header: str):
     """The parsed JSON record whose header line == `target_header` in
     `opencode models <prov> --verbose` stdout, or None (not found / unparseable). Records are
-    split on header lines at column 0 (`_HEADER_RE`) and each JSON block is brace-counted. Shared
+    split on header lines at column 0 (`_LINE_RE`) and each JSON block is brace-counted. Shared
     scan for _parse_verbose_record (display fields) and _parse_verbose_variants (variant keys)."""
     lines = stdout.splitlines()
     i = 0
     while i < len(lines):
-        if _HEADER_RE.match(lines[i]):
+        if _LINE_RE.match(lines[i]):
             header = lines[i].strip()
             # Collect the JSON block for this record via brace counting.
             i += 1

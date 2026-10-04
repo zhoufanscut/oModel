@@ -84,6 +84,26 @@ class TestCatalogLoad:
         assert cat.available["opencode"][:2] == ["claude-opus-4-7", "claude-opus-4-8"]
         assert "kimi-k2.5" in cat.available["opencode"]
 
+    def test_lines_that_are_not_provider_model_are_ignored(self):
+        """Any line holding a `/` used to become a provider: a warning naming a path, a URL."""
+        cat = _load_from(
+            "Warning: config at /home/u/.config/opencode/opencode.json is deprecated\n"
+            "INFO  fetched https://models.dev/api.json\n"
+            "https://models.dev/api.json\n"
+            "opencode/glm-5\n"
+        )
+        assert cat.connected == ["opencode"]
+        assert cat.available == {"opencode": ["glm-5"]}
+
+    def test_a_banner_alone_is_still_catalog_unavailable(self):
+        """…which is also what keeps "zero lines parsed → CatalogUnavailable" honest."""
+        with (
+            patch("subprocess.run", return_value=_mock_run("Warning: see /tmp/x for details\n")),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+            pytest.raises(CatalogUnavailable),
+        ):
+            load()
+
     def test_split_on_first_slash_only(self):
         """Lines like 'openrouter/anthropic/claude-opus-4-7' split on the FIRST '/'.
         Provider = 'openrouter'; model = 'anthropic/claude-opus-4-7'."""
@@ -392,6 +412,17 @@ class TestVerboseParsing:
         from omodel.app import OModelApp
         assert "ctx" not in OModelApp._detail_line({"context": "200000"})
         assert OModelApp._detail_line({"context": 131072.0}) == "ctx 131k"
+
+    @pytest.mark.parametrize("provider", ["lm.studio", "MyGateway", "local_llm"])
+    def test_detail_finds_a_provider_spelled_with_capitals_or_dots(self, provider):
+        """The header pattern was `[a-z0-9_-]+`, so these providers never got a detail line or
+        a variant picker, though `opencode models` listed them."""
+        cat = Catalog(available={provider: ["m1"]}, connected=[provider])
+        blob = f"{provider}/m1\n" + json.dumps(
+            {"id": "m1", "limit": {"context": 8000}, "variants": {"high": {}}}) + "\n"
+        with patch("subprocess.run", return_value=_mock_run(blob)):
+            assert cat.detail("m1")["context"] == 8000
+        assert cat.variants_for(provider, "m1") == ["high"]
 
     def test_detail_returns_none_when_opencode_cannot_run(self):
         """An unrunnable binary is "no detail", like a missing one — never an exception, which

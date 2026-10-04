@@ -76,6 +76,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cleared the model but left the other row showing. It now keeps one row.
 - Closing the variant picker with `esc` could leave the model list's `⚠` marks out of date for
   the rest of the session, if the model's details had arrived while the picker was open.
+- A provider whose name has capitals or a dot (`lm.studio`, `MyGateway`) never got a model detail
+  line or a variant picker. Any line from `opencode models` that contained a `/` (a warning that
+  named a file path, a URL) was read as a provider. Both are fixed.
 
 ### Changed
 
