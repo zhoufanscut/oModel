@@ -107,6 +107,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Bundled suggestions now come from omo 5.1.19. The only change: for momus, `gpt-6-astra`
+  through `opencode` now suggests reasoning `high` instead of `xhigh`.
 - Installing with pipx, uv or pip now needs Python 3.11 or newer (it was 3.9). Python 3.9 is no
   longer supported upstream and 3.10 stops this month. The prebuilt binaries are not affected.
   If your pipx uses an older Python, reinstall with
