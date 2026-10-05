@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-05
+
+Installs with pipx, uv or pip now need Python 3.11 or newer. Bundled suggestions now follow
+oh-my-openagent 5.1.19, and this release fixes many bugs.
+
 ### Fixed
 
 - When omodel starts and your config matches no preset, it asks whether to keep the config or
