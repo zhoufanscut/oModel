@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.7",
-    "omoCommit": "89688165848b69121270682193b5ac2c175666de",
-    "generatedAt": "2026-10-01T00:13:18.949Z"
+    "omoVersion": "5.1.19",
+    "omoCommit": "a8019016f47a9d814ebcc24bd921a561f065ee80",
+    "generatedAt": "2026-10-05T06:31:42.926Z"
   },
   "agents": {
     "sisyphus": {
@@ -649,7 +649,7 @@
             "opencode"
           ],
           "model": "gpt-6-astra",
-          "variant": "xhigh"
+          "variant": "high"
         }
       ],
       "requiresProvider": [],
