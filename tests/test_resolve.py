@@ -677,21 +677,20 @@ class TestNoiseTolerantMatch:
         """Reported regression: librarian's claude-haiku-4-5 entry rendered the newest non-opus
         claude (claude-sonnet-4-8-jibao) as '≈ omo claude-haiku-4-5'. The haiku entry must
         instead match the date-stamped haiku EXACTLY, and no sonnet may appear (the chain has
-        no sonnet entry — the bug surfaced one as a same-line stand-in for the haiku slot)."""
+        no sonnet entry — the bug surfaced one as a same-line stand-in for the haiku slot).
+
+        Synthetic chain: omo 5.1.30 moved librarian and quick from claude-haiku-4-5 to
+        claude-haiku-5-5, so the real chains no longer hold the entry this bug was about. The
+        same check for categories:quick was folded in here — with a pinned chain it was
+        identical."""
         res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
-        rows = res.candidates("agent:librarian")
+        req = {"fallbackChain": [{"providers": [GATEWAY], "model": "claude-haiku-4-5"}]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:librarian")
         haiku = [r for r in rows if r["model"] == "claude-haiku-4-5-20251001"]
         assert len(haiku) == 1 and haiku[0]["substitute_for"] is None
         assert all("sonnet" not in r["model"] for r in rows)
         assert all(r["substitute_for"] != "claude-haiku-4-5" for r in rows)
-
-    def test_quick_category_also_fixed(self, sugg):
-        """categories:quick wants claude-haiku-4-5 too → same noise-tolerant exact match."""
-        res = Resolver.build(_make_catalog(GATEWAY_MODELS), sugg)
-        rows = res.candidates("cat:quick")
-        haiku = [r for r in rows if r["model"] == "claude-haiku-4-5-20251001"]
-        assert len(haiku) == 1 and haiku[0]["substitute_for"] is None
-        assert all("sonnet" not in r["model"] for r in rows)
 
     def test_sonnet_entry_resolves_to_sonnet_not_haiku(self, sugg):
         """The mirror image: a claude-sonnet-4-6 entry resolves to the exact sonnet, never a
