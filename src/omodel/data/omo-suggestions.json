@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.19",
-    "omoCommit": "a8019016f47a9d814ebcc24bd921a561f065ee80",
-    "generatedAt": "2026-10-05T06:31:42.926Z"
+    "omoVersion": "5.1.30",
+    "omoCommit": "3155cfa132339ea25d5f351c0e7d897d5423c789",
+    "generatedAt": "2026-10-12T08:15:08.894Z"
   },
   "agents": {
     "sisyphus": {
@@ -157,6 +157,14 @@
         },
         {
           "providers": [
+            "anthropic",
+            "github-copilot"
+          ],
+          "model": "claude-haiku-5-5",
+          "variant": "medium"
+        },
+        {
+          "providers": [
             "deepseek"
           ],
           "model": "deepseek-flash",
@@ -174,13 +182,6 @@
             "opencode-go"
           ],
           "model": "minimax-m2.7"
-        },
-        {
-          "providers": [
-            "anthropic",
-            "github-copilot"
-          ],
-          "model": "claude-haiku-4-5"
         }
       ],
       "requiresProvider": [],
@@ -206,6 +207,14 @@
         },
         {
           "providers": [
+            "anthropic",
+            "github-copilot"
+          ],
+          "model": "claude-haiku-5-5",
+          "variant": "medium"
+        },
+        {
+          "providers": [
             "deepseek"
           ],
           "model": "deepseek-flash",
@@ -223,13 +232,6 @@
             "opencode-go"
           ],
           "model": "minimax-m2.7"
-        },
-        {
-          "providers": [
-            "anthropic",
-            "github-copilot"
-          ],
-          "model": "claude-haiku-4-5"
         }
       ],
       "requiresProvider": [],
@@ -705,6 +707,15 @@
         },
         {
           "providers": [
+            "anthropic",
+            "anthropic-api",
+            "github-copilot"
+          ],
+          "model": "claude-haiku-5-5",
+          "variant": "medium"
+        },
+        {
+          "providers": [
             "deepseek"
           ],
           "model": "deepseek-flash",
@@ -738,15 +749,6 @@
             "xai"
           ],
           "model": "grok-4.20-0309-non-reasoning"
-        },
-        {
-          "providers": [
-            "anthropic",
-            "anthropic-api",
-            "github-copilot"
-          ],
-          "model": "claude-haiku-4-5",
-          "variant": "off"
         },
         {
           "providers": [
@@ -799,12 +801,20 @@
         {
           "providers": [
             "openai",
+            "chatgpt-subscription"
+          ],
+          "model": "gpt-6.1-sol",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "openai",
             "chatgpt-subscription",
             "github-copilot",
             "opencode"
           ],
-          "model": "gpt-5.6-terra",
-          "variant": "high"
+          "model": "gpt-5.6-sol",
+          "variant": "medium"
         },
         {
           "providers": [
