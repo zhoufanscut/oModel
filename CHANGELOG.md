@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now come from omo 5.1.30. Explore, librarian and the quick category now
+  suggest `claude-haiku-5-5` (reasoning `medium`) in place of `claude-haiku-4-5`, and try it
+  earlier in their lists. The unspecified-low category now suggests `gpt-6.1-sol` and
+  `gpt-5.6-sol` (both `medium`) in place of `gpt-5.6-terra` (`high`).
+
 ## [0.7.0] — 2026-10-05
 
 Installs with pipx, uv or pip now need Python 3.11 or newer. Bundled suggestions now follow
