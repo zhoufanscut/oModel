@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-12
+
+Bundled suggestions now follow oh-my-openagent 5.1.30.
+
 ### Changed
 
 - Bundled suggestions now come from omo 5.1.30. Explore, librarian and the quick category now
