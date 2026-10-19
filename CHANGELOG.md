@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now come from omo 5.1.35. It adds `gemini-4-argon` to four lists: oracle
+  and momus try it (reasoning `high`) just before `gemini-3.1-pro`, and the visual-engineering
+  and writing categories now try it first (reasoning `low`), ahead of Claude.
+
 ## [0.7.1] — 2026-10-12
 
 Bundled suggestions now follow oh-my-openagent 5.1.30.
