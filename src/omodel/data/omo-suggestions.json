@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.30",
-    "omoCommit": "3155cfa132339ea25d5f351c0e7d897d5423c789",
-    "generatedAt": "2026-10-12T08:15:08.894Z"
+    "omoVersion": "5.1.35",
+    "omoCommit": "07776864a043acdda9f9976ac8f71659a25f1d86",
+    "generatedAt": "2026-10-19T06:25:53.154Z"
   },
   "agents": {
     "sisyphus": {
@@ -107,6 +107,15 @@
             "github-copilot"
           ],
           "model": "gpt-5.6-sol",
+          "variant": "high"
+        },
+        {
+          "providers": [
+            "google",
+            "google-vertex",
+            "opencode"
+          ],
+          "model": "gemini-4-argon",
           "variant": "high"
         },
         {
@@ -383,6 +392,15 @@
         {
           "providers": [
             "google",
+            "google-vertex",
+            "opencode"
+          ],
+          "model": "gemini-4-argon",
+          "variant": "high"
+        },
+        {
+          "providers": [
+            "google",
             "github-copilot",
             "opencode"
           ],
@@ -510,6 +528,15 @@
   "categories": {
     "visual-engineering": {
       "fallbackChain": [
+        {
+          "providers": [
+            "google",
+            "google-vertex",
+            "opencode"
+          ],
+          "model": "gemini-4-argon",
+          "variant": "low"
+        },
         {
           "providers": [
             "anthropic",
@@ -894,6 +921,15 @@
     },
     "writing": {
       "fallbackChain": [
+        {
+          "providers": [
+            "google",
+            "google-vertex",
+            "opencode"
+          ],
+          "model": "gemini-4-argon",
+          "variant": "low"
+        },
         {
           "providers": [
             "anthropic",
