@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-10-19
+
+Bundled suggestions now follow oh-my-openagent 5.1.35.
+
 ### Changed
 
 - Bundled suggestions now come from omo 5.1.35. It adds `gemini-4-argon` to four lists: oracle
