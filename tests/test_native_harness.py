@@ -663,5 +663,33 @@ def test_no_login_refresh_in_the_tui_warns_and_keeps_running(native_env, tmp_pat
             assert app.is_running
             assert isinstance(app.catalog_error, catalog.NoNativeLogin)
             assert any("no logged-in provider" in str(n.message) for n in app._notifications)
+            # omo answered, so the old list is not kept: nothing is runnable until you log in.
+            assert app.catalog.connected == []
 
     asyncio.run(_run())
+
+
+def test_opencode_writes_into_a_native_only_file_go_to_the_opencode_block(tmp_path):
+    """A document with only `[native]` is unified: plain omodel must not write at the root,
+    which OmO Native folds in too."""
+    cfg_path = tmp_path / "omo.jsonc"
+    native = {"agents": {"explore": {"model": "zai/glm-5.3"}}}
+    cfg_path.write_text(json.dumps({"[native]": native}))
+    s = session.Session.build(str(cfg_path))
+    assert s.scope == "opencode"
+    s.set_model("agent:sisyphus", "opencode", "claude-haiku-5-5", "high")
+    s.save()
+    doc = json5.loads(cfg_path.read_text())
+    assert "agents" not in doc
+    assert doc["[native]"] == native
+    assert doc["[opencode]"]["agents"]["sisyphus"] == {"model": "opencode/claude-haiku-5-5",
+                                                      "reasoning": "high"}
+
+
+def test_show_prose_loads_the_catalog_once_and_reports_once(native_env, capsys, monkeypatch):
+    calls = []
+    _stub_omo(monkeypatch, returncode=1, calls=calls)
+    assert cli.main(["show", "--harness", "native", "--config", str(native_env)]) == 0
+    err = capsys.readouterr().err
+    assert len(calls) == 1
+    assert err.count("exited with code 1") == 1 and "[warn]" not in err

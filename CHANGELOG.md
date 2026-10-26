@@ -12,13 +12,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of `[opencode]`. You get native's own agents and categories, its suggested models, and
   the models you are logged into in omo. Native presets are a separate list. In the TUI, `t`
   switches between opencode and native when nothing is unsaved. Without the flag your config is
-  edited exactly as before.
+  edited as before (apart from the first fix below).
 
 ### Changed
 
 - The TUI's top line now starts with the harness you are editing: `oModel [opencode]:` (it used
   to be `oModel:`) or `oModel [native]:`.
 - JSON payloads carry a new `harness` field.
+
+### Fixed
+
+- On a `~/.omo/omo.jsonc` with only an OmO Native `[native]` section, plain `omodel` took the file
+  for the pre-4.19.3 format: it wrote your picks at the top level, which OmO Native reads too, and
+  showed a "pre-4.19.3 config path" notice. It now writes them into `[opencode]`, and
+  `show --json` reports `config_scope: "opencode"` for that file. Picks an earlier omodel wrote at
+  the top level stay there and still apply to both opencode and OmO Native unless their own
+  section sets the same agent; move them under `[opencode]` by hand.
+- `omodel show` printed a model-list problem twice (a `[note]` and a `[warn]`), and when
+  `opencode` failed it ran it a second time.
 
 ## [0.7.3] — 2026-10-26
 

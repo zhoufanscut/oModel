@@ -3110,17 +3110,20 @@ class OModelApp(App):
                 "Refreshing models… (omo --list-models)" if native
                 else "Refreshing models… (opencode --refresh)"
             )
+            no_login = None
             try:
                 new_catalog = await _to_thread_daemon(
                     catalog_mod.refresh_native if native else catalog_mod.refresh
                 )
+            except NoNativeLogin as exc:
+                # omo answered: nothing is logged in NOW, so the honest catalog is empty — unlike
+                # a failed call below, which keeps what we had. Same state as launching this way.
+                no_login = exc
+                new_catalog = catalog_mod.NativeCatalog(available={}, connected=[], info={})
             except CatalogUnavailable as exc:
                 self.catalog_error = exc
                 self._render_providers()
-                if isinstance(exc, NoNativeLogin):
-                    self.notify("Refreshed — but no logged-in provider found.", severity="warning")
-                else:
-                    self.notify("Refresh failed — couldn't read models.", severity="error")
+                self.notify("Refresh failed — couldn't read models.", severity="error")
                 return
             except Exception as exc:
                 # Anything else would fail the worker, and a failed worker exits the app —
@@ -3129,7 +3132,7 @@ class OModelApp(App):
                 self.notify(f"Refresh failed: {exc}", severity="error")
                 return
             self.catalog = new_catalog
-            self.catalog_error = None
+            self.catalog_error = no_login
             try:
                 self.resolver = Resolver.build(new_catalog, self.suggestions)
             except Exception:
@@ -3154,7 +3157,10 @@ class OModelApp(App):
             self._render_providers()
             if self._current_target is not None:
                 self._refresh_right(self._current_target)
-            self.notify(f"Refreshed — {len(new_catalog.connected)} providers.")
+            if no_login is not None:
+                self.notify("Refreshed — but no logged-in provider found.", severity="warning")
+            else:
+                self.notify(f"Refreshed — {len(new_catalog.connected)} providers.")
         finally:
             self._refresh_inflight = False
 

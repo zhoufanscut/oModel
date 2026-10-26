@@ -147,6 +147,7 @@ class TestScope:
         {"_migrations": ["x"]},
         {"legacy_migrations": {}},
         {"$schema": "https://example/assets/omo.schema.json"},
+        {"[native]": {"agents": {}}},
     ])
     def test_unified_markers(self, cfg):
         assert config_io.scope_of(cfg) == "opencode"

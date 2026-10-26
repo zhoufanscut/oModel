@@ -84,8 +84,8 @@ def harness_problem(config_path: str | None, harness: str, suggestions=None) -> 
     if data.for_harness("native") is None:
         return "the bundled omo data has no OmO Native section (regenerate with --refresh-omo)"
     resolved = config_io.config_path(config_path)
-    # Only the PATH is checked: the content scope (`scope_of`) reads a native-only
-    # `{"[native]": …}` file as legacy.
+    # Only the PATH is checked: the legacy file is refused even if someone added a `[native]`
+    # block to it, which `scope_of` would read as unified.
     if os.path.abspath(resolved) == os.path.abspath(config_io.legacy_config_path()):
         return f"{resolved} is the pre-4.19.3 config; OmO Native reads only ~/.omo/omo.jsonc"
     # omo still reads a pre-rename `"[senpi]"` block as native — but only while there is no

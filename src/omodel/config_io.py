@@ -116,8 +116,9 @@ def scope_of(cfg) -> str:
     Detection is CONTENT-based, never filename-based, so `--config <anywhere>` behaves correctly
     and a unified document opened by an explicit path is still edited in the right place. A
     document counts as unified when it has an `"[opencode]"` block, an engine-managed migration
-    key, or omo's unified `$schema` — the last two catch a migrated document whose `[opencode]`
-    block has yet to be created."""
+    key, omo's unified `$schema`, or a `"[native]"` block — the last three catch a document whose
+    `[opencode]` block has yet to be created. `[native]` exists only in the unified format, and
+    OmO Native folds the root in too, so writing opencode picks there would change native's."""
     if not isinstance(cfg, dict):
         return "root"
     # PRESENCE of the key, not its type: a legacy document never has it at all, so a hand-edited
@@ -130,6 +131,8 @@ def scope_of(cfg) -> str:
         return "opencode"
     schema = cfg.get("$schema")
     if isinstance(schema, str) and "omo.schema.json" in schema:
+        return "opencode"
+    if NATIVE_BLOCK in cfg:
         return "opencode"
     return "root"
 

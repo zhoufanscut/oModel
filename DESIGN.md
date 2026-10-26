@@ -144,8 +144,13 @@ last wins (`omo-config-core/src/loader/resolution.ts`), so a top-level `agents` 
   when nothing exists — the legacy file is **never created**, because omo moved it aside and
   recreating it hands the user an empty config omo does not read.
 - **Detects the scope from CONTENT, not the filename** (`config_io.scope_of`: an `"[opencode]"`
-  block, `_migrations`/`legacy_migrations`, or omo's unified `$schema`), so `--config <anywhere>`
-  still edits the right node.
+  block, `_migrations`/`legacy_migrations`, omo's unified `$schema`, or a `"[native]"` block), so
+  `--config <anywhere>` still edits the right node. `[native]` counts because OmO Native folds the
+  root in too: reading a native-only file as legacy would put opencode picks where native reads
+  them. Picks an earlier omodel wrote at the root of such a file stay there, still apply to both
+  harnesses wherever their own block does not set that target, and are no longer shown; move
+  them under `"[opencode]"` by hand. omo's other harness blocks (`"[senpi]"`, `"[codex]"`) are not
+  markers: a document holding only one of them still reads as legacy.
 - **Writes `"[opencode]"` unconditionally** on a unified document — no "edit in place where the
   key already lives" heuristic. omo has *no writer* that produces a top-level `agents`: both the
   migration (`transform-opencode.ts`) and a **fresh install** (`cli/config-manager/
@@ -340,7 +345,8 @@ rather than returning an empty catalog, which every surface would report as "`om
 PATH". It is not an `omo` failure, so no surface offers a bare retry: the TUI header says to log
 in with omo's `/login`, then `r`; the CLI note says availability is unknown; `--print` says no omo
 provider is logged in; and `--refresh-models` exits 0 ("0 providers logged in") — the listing it
-re-cached is fine.
+re-cached is fine. A TUI `r` that lands here empties the catalog, as launching this way does; a
+refresh that fails for any other reason keeps the one you had.
 
 **Variants.** `--list-models` gives `thinking: yes|no`, not the per-model level map. The engine
 **clamps** a level a model does not support to the nearest one it does (pi-ai
@@ -349,8 +355,8 @@ re-cached is fine.
 `bad_variant` guard therefore only refuses a value off the ladder on a thinking model.
 
 **Config.** Native needs the unified file: `--harness native` on the legacy config PATH is refused
-(`harness_unavailable`). The check is by path, not by `scope_of`, because content-based scope
-reads a native-only `{"[native]": …}` document as legacy. Also refused: a document with the
+(`harness_unavailable`). The check is by path, not by `scope_of`, so the legacy file is refused
+even if a `[native]` block was added to it by hand. Also refused: a document with the
 pre-rename `"[senpi]"` block and no `"[native]"`. omo reads `[senpi]` as native only until a
 `[native]` exists, then drops it whole (omo-config-core `canonicalizeLegacyHarnessBlocks`), so the
 first native save would silently switch off the rest of `[senpi]` (`session.harness_problem`). Writes go into `"[native]"`, which is created when absent — spliced in at the end of
@@ -365,11 +371,9 @@ would overlap the new session's first), and when `harness_problem` names a reaso
 
 **Known gaps.** An opencode `r` / `--refresh-models` empties the whole cache (`cache.clear`),
 `native-models` included, so the next native launch re-lists (~2s); the native refresh touches
-only its own entry. And under the opencode harness a native-only document (`{"[native]": …}`, no
-`[opencode]` / `$schema` / `_migrations`) still reads as legacy scope, so opencode writes land at
-the root — which native folds in too — and the opencode surfaces show their "pre-4.19.3 config
-path" notice for `~/.omo/omo.jsonc` itself. That is `scope_of` as before this feature; changing it
-changes opencode behaviour, so it is a separate decision.
+only its own entry. And the opencode harness's first save into a document with no `[opencode]`
+block yet (a native-only one, say) is the clean rewrite, so the file's comments go: the splice
+that inserts a missing block is native-only.
 
 **Out of scope (v1):** the main session model (the engine's `/model` + `settings.json`, and
 `model_profile`), `models` chains (omodel writes `model` + `reasoning`), project-level

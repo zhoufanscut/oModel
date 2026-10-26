@@ -948,7 +948,7 @@ def _cmd_show(config_override, as_json: bool) -> int:
         return EXIT_OK
 
     # Prose form — same content as --print, which stays a supported alias.
-    rc = _cmd_print(config_override)
+    rc = _cmd_print(config_override, session)
     if session.sync_conflict:
         print(_SYNC_CONFLICT_NOTE)
     return rc
@@ -1691,8 +1691,12 @@ def _cmd_restore(config_override: str | None) -> int:
     return EXIT_OK
 
 
-def _cmd_print(config_override: str | None) -> int:
-    """Resolve current agent/category models from config + suggestions/catalog, print."""
+def _cmd_print(config_override: str | None, session=None) -> int:
+    """Resolve current agent/category models from config + suggestions/catalog, print.
+
+    `show` passes its open `session`: its catalog is reused rather than loaded a second time
+    (an uncached failure would re-run opencode/omo), and its catalog error was already reported
+    by `_open_session`, so it is not warned about again."""
     from omodel.catalog import CatalogUnavailable, load_native
     from omodel.catalog import load as load_catalog
     from omodel.config_io import ConfigParseError, load_config
@@ -1708,15 +1712,22 @@ def _cmd_print(config_override: str | None) -> int:
         _print_config_parse_error(exc)
         return EXIT_ERROR
 
+    from omodel.catalog import NoNativeLogin
+
     unavailable = f"{'omo' if _harness == 'native' else 'opencode'} unavailable"
-    try:
-        catalog = load_native() if _harness == "native" else load_catalog()
-    except CatalogUnavailable as exc:
-        print(f"[warn] Could not load catalog: {exc}", file=sys.stderr)
-        from omodel.catalog import Catalog, NoNativeLogin
-        catalog = Catalog(available={}, connected=[])
-        if isinstance(exc, NoNativeLogin):
+    if session is not None:
+        catalog = session.catalog
+        if isinstance(session.catalog_error, NoNativeLogin):
             unavailable = "no omo provider logged in"
+    else:
+        try:
+            catalog = load_native() if _harness == "native" else load_catalog()
+        except CatalogUnavailable as exc:
+            print(f"[warn] Could not load catalog: {exc}", file=sys.stderr)
+            from omodel.catalog import Catalog
+            catalog = Catalog(available={}, connected=[])
+            if isinstance(exc, NoNativeLogin):
+                unavailable = "no omo provider logged in"
 
     # read_map, not `cfg.get(k, {})` — the default only applies when the key is ABSENT, so a
     # present `"agents": null` (or a truthy non-dict) returned None and tracebacked on .items().
