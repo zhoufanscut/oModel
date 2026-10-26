@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.35",
-    "omoCommit": "07776864a043acdda9f9976ac8f71659a25f1d86",
-    "generatedAt": "2026-10-19T06:25:53.154Z"
+    "omoVersion": "5.1.48",
+    "omoCommit": "8706f468c3a891fd82189e0bac84fed2fe449688",
+    "generatedAt": "2026-10-26T06:25:23.595Z"
   },
   "agents": {
     "sisyphus": {
@@ -824,6 +824,14 @@
           ],
           "model": "grok-4.7",
           "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "zai-coding-plan",
+            "opencode-go"
+          ],
+          "model": "glm-5.3",
+          "variant": "high"
         },
         {
           "providers": [
