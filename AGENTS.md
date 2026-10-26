@@ -15,7 +15,9 @@ it) when working **on this repository's source**.
 the pre-4.19.3 `~/.config/opencode/oh-my-openagent.jsonc`. See DESIGN §Config scope.
 Core flow: **what omo suggests + what you already have → pick one → save a clean config.**
 It bundles a snapshot of omo's model requirements and reads live availability from the `opencode` CLI;
-neither an omo checkout nor a network call is needed at runtime.
+neither an omo checkout nor a network call is needed at runtime. `--harness native` edits OmO
+Native's `"[native]"` block instead (the standalone `omo` command; availability from
+`omo --list-models` × omo logins) — see DESIGN §Harnesses.
 
 ## Commands
 

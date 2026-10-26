@@ -66,11 +66,13 @@ jobs:
           ref: ${{ steps.ref.outputs.ref }}
           path: oh-my-openagent
           # The extractor only reads packages/model-core/src (a self-contained
-          # closure, ~240 KB) plus the root package.json. Sparse-checkout (cone
-          # mode also keeps root files) avoids materializing the whole repo on
-          # the runner; the default depth=1 already skips history.
+          # closure, ~240 KB), OmO Native's chains in packages/senpi-task/src, and
+          # the root package.json. Sparse-checkout (cone mode also keeps root files)
+          # avoids materializing the whole repo on the runner; the default depth=1
+          # already skips history.
           sparse-checkout: |
             packages/model-core
+            packages/senpi-task
 
       - name: Set up bun
         uses: oven-sh/setup-bun@v2

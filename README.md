@@ -12,7 +12,7 @@ clean — everything else in the file, including comments and commented-out conf
 verbatim (timestamped backups each save).
 
 ```
- oModel: opencode · anthropic · openai
+ oModel [opencode]: opencode · anthropic · openai
 ┌──────────────────────────────┐┌──────────────────────────────────────────────────┐
 │ AGENTS                       ││ agent: sisyphus                                  │
 │   sisyphus                   ││ model: anthropic/claude-opus-5                   │

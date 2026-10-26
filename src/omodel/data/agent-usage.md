@@ -101,13 +101,15 @@ Failures also come back as JSON when you pass `--json`:
 ```
 
 `error` is a stable slug: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`,
-`gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, and `bad_config`
-(the config file could not be read or parsed — an exit 1, so stop and report it). A mistyped
+`gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`,
+`harness_unavailable` (`--harness native` on a config OmO Native never reads — exit 3), and
+`bad_config` (the config file could not be read or parsed — an exit 1, so stop and report it). A mistyped
 command line (unknown verb or flag, missing argument) is `bad_input` with exit 2.
 
 ## 5. Commands
 
-Every command takes `--config PATH` (use a temp path for anything experimental) and `--json`.
+Every command takes `--config PATH` (use a temp path for anything experimental), `--json`, and
+`--harness opencode|native` (default `opencode`; see §11).
 
 | Command | What it does |
 |---|---|
@@ -242,3 +244,34 @@ to delete the active preset — switch away first.
   a preset saved with a non-GPT hephaestus model will apply one. `omodel check` reports it.)
 - It does not choose models for you. `candidates` tells you what is possible; which one suits the
   user's cost, speed and quality tradeoff is a judgement call — make it explicitly, or ask.
+
+## 11. OmO Native: `--harness native`
+
+omo comes in two editions that share `~/.omo/omo.jsonc`: the OpenCode plugin, which reads the
+`"[opencode]"` block, and OmO Native — the standalone `omo` command — which reads `"[native]"`
+and never `[opencode]`. omodel edits one per call, chosen by `--harness` (either side of the verb;
+default `opencode`). Every payload from an opened config says which one it used, as `harness`
+(so does a `harness_unavailable` refusal); `config_scope` stays the file's shape, not the
+harness.
+
+Under `--harness native`:
+
+- **The targets are native's**, and differ from opencode's: run `omodel targets --harness native
+  --json`. There are no `sisyphus`/`hephaestus`/… agents and no `.ultrawork`/`.compaction`
+  sub-targets; there is an `architect` category. An opencode target is `unknown_target` here.
+- **Provider ids are native's** — `chatgpt-subscription`, `anthropic-subscription`, `zai`,
+  `kimi-coding` — so copy `value` from `candidates`; do not reuse an `[opencode]` value.
+- **Availability** is omo's model list (`omo --list-models`) limited to the providers the user is
+  logged into in omo (its `auth.json`, the provider API-key environment variables, custom
+  providers in its `models.json`). `degraded_reason` names `omo` instead of `opencode` — either
+  `"omo is not on PATH"`, or a message saying no logged-in provider was found. A login omodel
+  cannot see shows as `unavailable`; `--force` still writes it.
+- **`harness_unavailable`** (exit 3) means OmO Native can't be edited in this file: it is the
+  pre-4.19.3 config path, or it still has the old `"[senpi]"` block and no `"[native]"` (ask the
+  user to rename it — writing `[native]` would make omo ignore everything in `[senpi]`).
+- **Variants**: for a model omo lists as a thinking model, `variants` is omo's whole ladder
+  (`off` … `max`) — omo moves an unsupported level to the nearest one the model has. A model that
+  doesn't think gets `[]`.
+- **Presets** are a separate list; `preset` verbs see only native's.
+- Not managed: the main session model (omo's `/model` and `model_profile`) — omodel sets the
+  helper agents and categories only.

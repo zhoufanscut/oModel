@@ -45,6 +45,26 @@ class Suggestions:
     categories: dict   # {name: {"fallbackChain":[...], "variant"?:""}}
     families: list     # [Family, ...]  ORDERED — iteration order is significant for detect_family
     known_variants: list
+    # OmO Native's {"agents", "categories"} (same requirement shape; DESIGN §Harnesses), or None
+    # when the snapshot predates it. Reached through `for_harness("native")`.
+    native: dict | None = None
+
+    def for_harness(self, harness: str) -> Suggestions | None:
+        """This data as `harness` sees it: itself for opencode; for native, a copy whose
+        agents/categories are native's (families and known variants are shared), or None when
+        the snapshot carries no native section."""
+        if harness != "native":
+            return self
+        if not self.native:
+            return None
+        return Suggestions(
+            meta=self.meta,
+            agents=self.native.get("agents", {}),
+            categories=self.native.get("categories", {}),
+            families=self.families,
+            known_variants=self.known_variants,
+            native=self.native,
+        )
 
     def detect_family(self, model_id: str) -> Family | None:
         """Faithful port of omo `detectHeuristicModelFamily` → Family | None.
@@ -167,10 +187,18 @@ def parse(data_str: str) -> Suggestions:
     categories = raw.get("categories", {})
     if not isinstance(agents, dict) or not isinstance(categories, dict):
         raise TypeError("`agents` and `categories` must be objects")
+    native = raw.get("native")
+    if native is not None and not (
+        isinstance(native, dict)
+        and isinstance(native.get("agents", {}), dict)
+        and isinstance(native.get("categories", {}), dict)
+    ):
+        raise TypeError("`native` must be an object of `agents` and `categories` objects")
     return Suggestions(
         meta=raw.get("meta", {}),
         agents=agents,
         categories=categories,
         families=families,
         known_variants=raw.get("knownVariants", []),
+        native=native,
     )

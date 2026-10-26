@@ -66,3 +66,7 @@ def _isolate_omodel_config(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    # omo's engine-state dir (catalog.native_agent_dir) follows these before $HOME; one exported
+    # in a dev's shell would point the native login check at the real ~/.omo/agent.
+    for name in ("OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(name, raising=False)

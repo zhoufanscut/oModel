@@ -88,6 +88,16 @@ line when a new one does.
   plugin config. omo folds base → `[opencode]`, **last wins**, so a top-level `agents` is legal but
   outranked — which is why oModel always writes the block on a unified document.
   → DESIGN §Config scope
+- **harness** — which omo *edition* a session edits: `opencode` (the OpenCode plugin, the
+  `[opencode]` block — the default) or `native` (**OmO Native**, the standalone `omo` command from
+  `omo-ai`, the `[native]` block). Picked by `--harness` or the TUI's `t`. Not the same as *config
+  scope*: scope is the document's shape, harness is which block of it you edit. → DESIGN §Harnesses
+- **the `[native]` block** — OmO Native's block in `~/.omo/omo.jsonc`; its engine folds root →
+  `[native]` and never reads `[opencode]`. Its own agents (explore, plan-reviewer…), categories
+  (+`architect`) and provider ids (`chatgpt-subscription`, `zai`…). → DESIGN §Harnesses
+- **login (native)** — a provider omo's engine counts as connected: a credential is *present*
+  (`auth.json` key, API-key env var, keyed `models.json` provider), never checked for validity.
+  Native's "what you have" = `omo --list-models` × logins. → catalog.native_logins
 - **warn-but-allow (⚠)** — oModel flags but never blocks you (bad variant, unavailable add). One hard
   exception: **Hephaestus is GPT-only** (non-GPT blocked). → DESIGN decision #5, session.py `GPT_ONLY_AGENTS`
 

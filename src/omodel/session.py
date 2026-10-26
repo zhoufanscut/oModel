@@ -68,6 +68,45 @@ ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 LEGACY_CATEGORY_ALIASES = {"deep": "deep-low"}
 
 
+class HarnessUnavailable(Exception):
+    """`--harness native` cannot be served for this config: it is the pre-4.19.3 (legacy) path,
+    which OmO Native never reads, or the bundled data has no native section. The CLI refuses with
+    `harness_unavailable` (exit 3); the TUI stays on the harness it has. DESIGN §Harnesses."""
+
+
+def harness_problem(config_path: str | None, harness: str, suggestions=None) -> str | None:
+    """Why `harness` can't be opened on `config_path` (None = the default resolution), or None.
+    `Session.build` raises it as HarnessUnavailable; the TUI's `t` asks first so a refusal leaves
+    you where you were. `suggestions` saves a reload when the caller already has the data."""
+    if harness != "native":
+        return None
+    data = suggestions if suggestions is not None else suggestions_mod.load()
+    if data.for_harness("native") is None:
+        return "the bundled omo data has no OmO Native section (regenerate with --refresh-omo)"
+    resolved = config_io.config_path(config_path)
+    # Only the PATH is checked: the content scope (`scope_of`) reads a native-only
+    # `{"[native]": …}` file as legacy.
+    if os.path.abspath(resolved) == os.path.abspath(config_io.legacy_config_path()):
+        return f"{resolved} is the pre-4.19.3 config; OmO Native reads only ~/.omo/omo.jsonc"
+    # omo still reads a pre-rename `"[senpi]"` block as native — but only while there is no
+    # `"[native]"`: once one exists, `[senpi]` is dropped whole (omo-config-core
+    # `canonicalizeLegacyHarnessBlocks`). The first native save would add `[native]`, and with it
+    # silently switch off everything else in `[senpi]` (memory, …), so refuse instead.
+    try:
+        import json5
+
+        with open(resolved, encoding="utf-8") as f:
+            doc = json5.load(f)
+    except (OSError, ValueError):
+        doc = None  # missing or unreadable: load_config reports it
+    if isinstance(doc, dict) and "[senpi]" in doc and config_io.NATIVE_BLOCK not in doc:
+        return (
+            f'{resolved} still uses the old "[senpi]" block for OmO Native; rename it to '
+            '"[native]" first (omo reads either, but ignores [senpi] once [native] exists)'
+        )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Target-id helpers and guards (moved out of app.py — it re-imports the ones it calls directly,
 # and reaches gpt_only / read_map / target_label through the module; see the module docstring)
@@ -79,9 +118,12 @@ def is_gpt_model(model_id: str) -> bool:
     return "gpt" in model_id.rsplit("/", 1)[-1].lower()
 
 
-def subkinds_for(name: str) -> tuple:
+def subkinds_for(name: str, harness: str = "opencode") -> tuple:
     """Sub-target kinds addable to agent `name`, in `SUBKINDS` order: `compaction` for every
-    agent; `ultrawork` only for the agents omo honors it on (`ULTRAWORK_AGENTS` — Sisyphus)."""
+    agent; `ultrawork` only for the agents omo honors it on (`ULTRAWORK_AGENTS` — Sisyphus).
+    None under native, whose agent schema has neither key."""
+    if harness == "native":
+        return ()
     return tuple(k for k in SUBKINDS if k != "ultrawork" or name in ULTRAWORK_AGENTS)
 
 
@@ -144,11 +186,11 @@ def canonicalize_categories(categories) -> bool:
     return True
 
 
-def managed_root(cfg) -> dict:
+def managed_root(cfg, harness: str = "opencode") -> dict:
     """The node holding `agents`/`categories` for READS — `config_io.managed_root`, re-exported so
     `app.py` / `cli.py` reach the scope through one place (they already go through this module for
     `read_map` / `target_label`). Never creates anything."""
-    return config_io.managed_root(cfg)
+    return config_io.managed_root(cfg, harness)
 
 
 # omo resolves a reasoning level from the FIRST of these that is set, checking every source's
@@ -173,14 +215,17 @@ def read_variant(node) -> str | None:
     return None
 
 
-def variant_key_for(cfg, subkind: str | None) -> str:
+def variant_key_for(cfg, subkind: str | None, harness: str = "opencode") -> str:
     """Which spelling to WRITE: `reasoning` for agents/categories on a unified document,
     `variant` for a legacy document — and `variant` for `ultrawork`/`compaction` sub-objects in
     BOTH scopes, because their override reads that key and nothing else
     (`omo-opencode/src/plugin/ultrawork-model-override.ts:81,84,93`; `reasoning` is accepted by
-    the schema there but no consumer ever reads it)."""
+    the schema there but no consumer ever reads it). Native (unified only, no sub-objects) always
+    takes `reasoning`."""
     if subkind is not None:
         return "variant"
+    if harness == "native":
+        return "reasoning"
     return "reasoning" if config_io.scope_of(cfg) == "opencode" else "variant"
 
 
@@ -245,6 +290,10 @@ class Session:
     # The starter config standing in for a MISSING config file that `build(scaffold=False)` did
     # not create: `diff` previews against it and `save_config` writes it first. None otherwise.
     scaffold_text: str | None = None
+    # Which omo edition this session edits: "opencode" (the `[opencode]` block) or "native" (the
+    # `[native]` block, OmO Native). Fixed for the session's life — the TUI switches harness by
+    # starting a new one. Picks the block, the targets, the catalog and the presets file.
+    harness: str = "opencode"
 
     # Filled by __post_init__ — never passed in.
     store: presets_mod.Store = field(init=False, default=None)
@@ -266,8 +315,9 @@ class Session:
         # missing or mangled file is SEEDED in memory from the config you already have, so there
         # is always at least one preset and the invariant holds from the first frame. NOTHING is
         # written until a save (one write rule) — the seed materializes with the first one.
-        self._adopt_legacy_presets()
-        self.store = presets_mod.load(self.config_path)
+        if self.harness == "opencode":
+            self._adopt_legacy_presets()  # the stranded store is an opencode one
+        self.store = presets_mod.load(self.config_path, self.harness)
         if self.store.is_empty():
             self.store = presets_mod.seeded(self.managed)
         # Presets captured before omo's reasoning rename carry `variant`; applied to a unified
@@ -315,7 +365,7 @@ class Session:
         rename alone never shows as unsaved work. The corrected spelling reaches the presets file
         with the next save — until then the in-memory store is what every switch writes, which is
         the part that has to be right."""
-        top_key = variant_key_for(self.cfg, None)
+        top_key = variant_key_for(self.cfg, None, self.harness)
 
         def fix(node, key: str) -> None:
             if not isinstance(node, dict):
@@ -358,7 +408,9 @@ class Session:
         self.sync_conflict = match is None and self.store.current() is not None
 
     @classmethod
-    def build(cls, config_path: str | None = None, scaffold: bool = True) -> Session:
+    def build(
+        cls, config_path: str | None = None, scaffold: bool = True, harness: str = "opencode"
+    ) -> Session:
         """Load all four data sources and construct a Session — the production wiring, shared by
         `app.create_app()` and every CLI verb.
 
@@ -370,18 +422,31 @@ class Session:
         leaves it None. Raises ConfigParseError for a malformed config; callers report it.
 
         `scaffold=False` (the CLI) never creates a missing config just by opening it — see
-        `scaffold_text`. The TUI keeps the default and scaffolds at launch."""
-        suggestions = suggestions_mod.load()
+        `scaffold_text`. The TUI keeps the default and scaffolds at launch.
+
+        `harness="native"` builds the OmO Native session (DESIGN §Harnesses): native's targets,
+        the `omo --list-models` catalog, the `[native]` block. Raises HarnessUnavailable for the
+        legacy config path or a snapshot with no native data — checked BEFORE anything is
+        scaffolded."""
+        all_suggestions = suggestions_mod.load()
+        problem = harness_problem(config_path, harness, all_suggestions)
+        if problem is not None:
+            raise HarnessUnavailable(problem)  # before load_config can scaffold anything
+        suggestions = all_suggestions.for_harness(harness)
         missing = not os.path.exists(config_io.config_path(config_path))
         cfg, resolved_path = config_io.load_config(config_path, scaffold=scaffold)
         pending = config_io.scaffold_text(resolved_path) if missing and not scaffold else None
 
         catalog_error: BaseException | None = None
         try:
-            catalog = catalog_mod.load()
+            catalog = catalog_mod.load_native() if harness == "native" else catalog_mod.load()
         except CatalogUnavailable as exc:
             catalog_error = exc
-            catalog = Catalog(available={}, connected=[])
+            catalog = (
+                catalog_mod.NativeCatalog(available={}, connected=[], info={})
+                if harness == "native"
+                else Catalog(available={}, connected=[])
+            )
 
         resolver: Resolver | None = None
         try:
@@ -397,6 +462,7 @@ class Session:
             config_path=resolved_path,
             catalog_error=catalog_error,
             scaffold_text=pending,
+            harness=harness,
         )
 
     # ----- availability ---------------------------------------------------------------
@@ -419,7 +485,7 @@ class Session:
         out: list = []
         for name in self.suggestions.agents:
             out.append(f"agent:{name}")
-            for kind in subkinds_for(name):
+            for kind in subkinds_for(name, self.harness):
                 out.append(f"agent:{name}.{kind}")
         for name in self.suggestions.categories:
             out.append(f"cat:{name}")
@@ -436,7 +502,7 @@ class Session:
             return name in self.suggestions.categories
         if name not in self.suggestions.agents:
             return False
-        return sub is None or sub in subkinds_for(name)
+        return sub is None or sub in subkinds_for(name, self.harness)
 
     # ----- cfg nodes ------------------------------------------------------------------
 
@@ -445,7 +511,7 @@ class Session:
         """The node of `cfg` holding `agents`/`categories` — `cfg["[opencode]"]` on a unified
         document, `cfg` itself on a legacy one. Read-only view; writes go through
         `ensure_node`."""
-        return managed_root(self.cfg)
+        return managed_root(self.cfg, self.harness)
 
     @property
     def scope(self) -> str:
@@ -477,7 +543,7 @@ class Session:
         object / sub-object are created on demand so edits can land. Every level goes through
         `coerce_dict`, so a hand-edited config's non-dict value anywhere along the path is coerced
         back to `{}` instead of crashing or handing back a non-dict node."""
-        root = config_io.managed_root_for_write(self.cfg)
+        root = config_io.managed_root_for_write(self.cfg, self.harness)
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
             agents = coerce_dict(root, "agents")
@@ -585,7 +651,7 @@ class Session:
         node = self.ensure_node(target)
         node["model"] = f"{provider}/{model}"
         parsed = split_target(target)
-        key = variant_key_for(self.cfg, parsed[2] if parsed else None)
+        key = variant_key_for(self.cfg, parsed[2] if parsed else None, self.harness)
         for stale in REASONING_KEYS:
             if stale != key:
                 node.pop(stale, None)
@@ -686,7 +752,16 @@ class Session:
             self.store = self.projected_store()  # bank the in-flight edits into the old preset
         self.store.active = index
         agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
-        root = config_io.managed_root_for_write(self.cfg)
+        if (
+            self.harness == "native"
+            and not agents
+            and not categories
+            and config_io.NATIVE_BLOCK not in self.cfg
+        ):
+            # An empty preset onto a block the file doesn't have: nothing to write, and creating
+            # an empty block would read as unsaved work that a save then has nothing to do for.
+            return preset
+        root = config_io.managed_root_for_write(self.cfg, self.harness)
         root["agents"] = agents
         root["categories"] = categories
         return preset
@@ -728,7 +803,9 @@ class Session:
 
     def diff(self) -> str:
         """Unified diff of what a save would write vs what's on disk."""
-        return config_io.diff_text(self.cfg, self.config_path, missing_base=self.scaffold_text)
+        return config_io.diff_text(
+            self.cfg, self.config_path, missing_base=self.scaffold_text, harness=self.harness
+        )
 
     # ----- publication ----------------------------------------------------------------
 
@@ -740,7 +817,7 @@ class Session:
             # as it would have (comments and all) instead of writing a clean file from scratch.
             config_io.write_scaffold(self.config_path)
         self.scaffold_text = None
-        result = config_io.save(self.cfg, self.config_path)
+        result = config_io.save(self.cfg, self.config_path, self.harness)
         # Re-baseline to what's now on disk (== serialize(cfg) either way).
         self.saved_text = config_io.serialize(self.cfg)
         return result
@@ -750,7 +827,7 @@ class Session:
         RAISES on failure (presets.write does, by contract) — a silently dropped preset write
         would be a lie about durable state."""
         self.store = presets_mod.write(
-            self.config_path, self.projected_store() if store is None else store
+            self.config_path, self.projected_store() if store is None else store, self.harness
         )
         self.saved_store_fp = presets_mod.store_fingerprint(self.store)
         return self.store

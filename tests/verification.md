@@ -445,19 +445,46 @@ directory, and **nothing downloaded** — the check runs before the first byte.
 
 ---
 
+## Check 12 — OmO Native harness (`--harness native`)
+
+Automated (hermetic: `omo` is stubbed, logins come from a tmp agent dir):
+
+```sh
+python -m pytest tests/test_native_harness.py -q
+```
+
+Live, against the installed `omo` and a COPY of the config — never the real file:
+
+```sh
+cp ~/.omo/omo.jsonc /tmp/omo-native.jsonc
+omodel --harness native show --config /tmp/omo-native.jsonc --json
+omodel --harness native set cat:quick <value from candidates> --config /tmp/omo-native.jsonc --json
+omodel --harness native --check --config /tmp/omo-native.jsonc
+```
+
+**Expected:** `harness: "native"`, `providers` = the providers in `~/.omo/agent/auth.json` (plus
+any whose API-key env var is set), the set lands inside `"[native]"` with `[opencode]` and every
+comment byte-for-byte unchanged, and a `.omodel-presets-native.json` appears beside the copy. To
+cross-check availability against omo's own resolver, `omo doctor --models --json` marks each
+chain rung `no-login` vs runnable; the two must agree on which providers are logged in.
+
+---
+
 ## Running all automated checks at once
 
 ```sh
 python -m pytest tests/ -x -q
 ```
 
-Expected outcome — every one of the 13 test files passes:
+Expected outcome — every one of the 15 test files passes:
 - `test_detect_family.py`, `test_catalog_parse.py`, `test_resolve.py`, `test_config_io.py`
 - `test_app_pilot.py` (the full Textual pilot suite — much the slowest; it dominates wall clock)
 - `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py`, `test_refresh.py`
 - `test_session.py` (the headless core both surfaces edit through) and
   `test_agent_surface_integration.py` (the CLI verbs end-to-end over a real temp config)
 - `test_update.py` (`omodel --update` — the swap, and every failure path leaving the binary alone)
+- `test_native_harness.py` (`--harness native` — logins, the `[native]` splice, presets, `t`)
+- `test_unified_config.py` (the `[opencode]` scope of `~/.omo/omo.jsonc`)
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
-plus the 11 checks above run clean on the integration branch.
+plus the 12 checks above run clean on the integration branch.

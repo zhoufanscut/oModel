@@ -38,6 +38,8 @@ prefix and a valid variant, and saves a clean config.
   Oct 2026). Pin Textual to a release whose own `requires-python` ≤ our floor (verify at lock
   time). Only pipx/uv installs see the floor; the prebuilt binary bundles its own Python.
 - **`opencode` CLI** on `PATH` — the source of "what you have". Degrades gracefully if missing or failing.
+- **`omo` CLI** (OmO Native) on `PATH` — only for `--harness native`, the same role for the
+  `[native]` block (§Harnesses). Same degradation.
 - **No** dependency on a local omo checkout or omo cache at runtime.
 - **No network access at runtime** — with exactly one opt-in exception, `omodel --update`, which
   reaches api.github.com only when that flag is passed (decision #19, §update.py). Launching the
@@ -69,6 +71,7 @@ prefix and a valid variant, and saves a clean config.
 | 17 | Presets | **Named presets ARE the working state** (as many as you keep — seeded with one `default`), in their own pane under `#targets`, stored next to the config (`<config_dir>/.omodel-presets.json` — which follows the config to `~/.omo/`, adopting a stranded pre-4.19.3 store once; §Config scope). Exactly one is **active**, and the invariant is: **the config on disk always equals the active preset — never a fourth, orphan state.** Your edits go into the active preset; `enter` switches (a replace, banking your edits into the one you leave); `a` adds one holding the current models (as does `enter` on the trailing `+ add preset…` row) — it is row-blind and never overwrites; `r` renames; `x` refuses on the active one (so you can never reach zero). **One write rule: only `s` touches disk, and it writes BOTH files** — so quitting without saving discards both in lockstep and the invariant survives. See §presets.py. |
 | 18 | Agent surface | **omodel is a tool an LLM agent can call**, not only a TUI a human drives: JSON subcommands (§CLI) over a headless `session.py` that `app.py` and `cli.py` BOTH edit through. The alternative — leaving the CLI read-only — was rejected because an agent asked to change a model would then hand-edit `oh-my-openagent.jsonc`, bypassing provider prefixing, variant validity, the GPT-only lock, the backup and the preset invariant: exactly the failure mode oModel exists to prevent. So the extraction is the point, and the verbs are the cheap part. `session.py` must never import Textual (cli.py's lazy-import discipline depends on it). |
 | 19 | Self-update | **`omodel --update` updates the program, on demand, after asking.** A flat flag, not a subcommand: the subcommands are the agent surface (#18), and this one edits no config and is not a model change. No launch-time version check and no background poll — decision #1's "self-contained, no runtime coupling" covers the network too, and a TUI that phones home on every start to say "0.3.1 is out" has spent a socket timeout on the path where the user wanted a model picker. It **confirms before swapping** (like `--restore`), which is why there is no `--update-check`: declining is the check, `--json`/no-TTY decline by construction, `--yes` is the one way to mean it. Only the **standalone binary** is replaced in place (download → published sha256 → **run the new binary and require the release's version back** → `os.replace`); pipx/uv/pip/source installs get a tag-pinned command and exit 3, because writing into a tree another package manager owns is how you end up with a venv and no way back. The rejected alternative — "just re-run `install.sh`" — works, but is unfindable from inside the tool and re-downloads with no version comparison at all. See §update.py. |
+| 20 | Harnesses | **One harness per session: `--harness opencode` (default) or `native`** (OmO Native, the `omo` command). Native edits `"[native]"` with its own targets, catalog (`omo --list-models` × logins), cache key and presets file; the opencode path is unchanged. In the TUI, `t` switches harness — only with nothing unsaved, by restarting the app on the other harness, so no undo history, row cache or preset index crosses over. See §Harnesses. |
 
 ## Data sources
 
@@ -89,8 +92,8 @@ prefix and a valid variant, and saves a clean config.
   `moonshotai-cn`) wrapped in box-drawing/ANSI with **no `--json`/plain flag** (verified) — fragile,
   and would need a name→ID map. `opencode models` already yields the usable provider set as clean IDs
   in one call (a provider appears only if it can serve models = exactly "usable"). oModel **never
-  calls `auth list`**; `connected` (above) *is* the logged-in/usable set, shown as an `oModel:`
-  header line. (`auth list`'s only extra info — api/oauth method, and providers logged-in-but-serving-
+  calls `auth list`**; `connected` (above) *is* the logged-in/usable set, shown as the
+  `oModel [opencode]:` header line. (`auth list`'s only extra info — api/oauth method, and providers logged-in-but-serving-
   zero-models — isn't needed for resolution or flags.)
 - **Per-model detail (on demand):** `opencode models <provider> --verbose` emits, **per model**, a
   bare `provider/model` header line **followed by a multi-line pretty-printed (2-space) JSON block**
@@ -269,6 +272,110 @@ Consequences worth knowing:
 - A pre-4.19.4 config saying `none` is **converted on the next write**, not rejected: omo already
   resolves it to `off`, so re-picking makes the file say what omo was doing anyway.
 
+## Harnesses: OpenCode and OmO Native (decision #20)
+
+omo ships two editions that read the same `~/.omo/omo.jsonc`: the **OpenCode plugin** (the
+`[opencode]` block, everything above) and **OmO Native** — the standalone `omo` command
+(`omo-ai`), whose engine (senpi) folds **root → `"[native]"`** and never reads `[opencode]`
+(`omo-config-core/src/loader/resolution.ts`). omodel edits one harness per session, chosen by
+`--harness opencode|native` (default `opencode`, so every existing command is unchanged) or the
+TUI's `t` key. Everything harness-specific hangs off that one choice:
+
+| | opencode | native |
+|---|---|---|
+| Managed block | `"[opencode]"` (or root on a legacy file) | `"[native]"` — unified file only |
+| Targets | `data` top level: 11 agents (+ ultrawork/compaction), 9 categories | `data.native`: 7 agents, 10 categories (`architect` is native-only); no sub-targets |
+| What you have | `opencode models` | `omo --list-models` × your logins (below) |
+| Variants offered | opencode `--verbose` per model | omo's ladder when the engine lists the model as `thinking: yes` |
+| Presets file | `.omodel-presets.json` | `.omodel-presets-native.json` |
+| Cache key | `models`, `verbose-<prov>` | `native-models` |
+| Guards | GPT-only (Hephaestus), ultrawork (Sisyphus) | none — neither agent exists in native |
+
+**Targets.** Native's chains live in `packages/senpi-task/src/{category,agents/builtin}/
+fallback-chains.ts`, not model-core, with native's own provider ids (`chatgpt-subscription`,
+`anthropic-subscription`, `zai`, `kimi-coding`). `tools/snapshot_omo.ts` extracts them into the
+same bundled JSON under `native: {agents, categories}`, in the same `{providers, model, variant}`
+shape, so `resolve.py` runs unchanged on a `Suggestions` whose agents/categories are native's
+(`Suggestions.for_harness`). The three ulw reviewer agents (`omo-native-code-reviewer`,
+`-qa-executor`, `-gate-reviewer`) have no chain of their own — they resolve through the
+categories on their definition, in order — so their suggestion is those categories' chains
+concatenated, recorded as `viaCategories`. The family registry is shared. Native's agents take no
+`ultrawork`/`compaction` (its agent schema is `.strict()` and has neither key), so the target
+list has no sub-targets.
+
+**What you have.** No public `omo` command prints the logged-in model list (measured 2026-10-26,
+omo-ai 5.1.48 / engine 2026.10.25-2):
+
+- `omo --list-models` prints the engine's **whole** catalog — 1936 models / 48 providers on a
+  machine logged into five — as a table with `thinking` and `images` columns. Public, ~2s.
+- `omo doctor --models --json` reports exact availability, but only for chain rungs.
+- omo-ai's internal `engineAvailableModels()` is exact, but needs bun/node and the npm package:
+  the recommended install (`curl … get.omo.dev/install.sh`) is one compiled binary with neither.
+
+So omodel takes the catalog from `omo --list-models` (cached 24h as `native-models`, rebuilt by
+`r` / `--refresh-models`, the same as opencode) and filters it to the providers you are **logged
+into**, decided the way the engine decides offline — presence of a credential, never its validity
+(`catalog.native_logins`, run on every load, not cached, so `/login` shows up without a refresh):
+
+1. a top-level key of `<agent dir>/auth.json` (keys only; omodel never reads the values);
+2. any env var the engine maps to that provider — the table in `data/native-auth.json`, generated
+   from the pinned pi-ai by `tools/snapshot_native_auth.ts` (manual: pi-ai is an npm dependency,
+   not in the omo repo);
+3. a custom provider in `<agent dir>/models.json` that carries an `apiKey`;
+4. code-level rules: `anthropic-subscription` from `CLAUDE_CODE_OAUTH_TOKEN[_<n>]`; Bedrock from
+   `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`, `AWS_BEARER_TOKEN_BEDROCK` or the
+   container/web-identity vars; Vertex from ADC credentials + project + location.
+
+The agent dir is `$OMO_CODING_AGENT_DIR` / `$SENPI_CODING_AGENT_DIR` / `$PI_CODING_AGENT_DIR`,
+else `~/.omo/agent` (omo-native `agent-dir.js`). Checked against the engine's own list on
+2026-10-26: rule 1 alone matched it exactly (117 models, 5 providers); a dummy `GROQ_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN(_2)`, `AWS_PROFILE` or `GOOGLE_CLOUD_API_KEY`
+each added that provider in the engine; `AWS_ACCESS_KEY_ID` alone did not; a `models.json`
+provider counted with an `apiKey` and not without. **Not detected:** the anthropic-subscription
+lane's opt-in "ambient Claude login" (the engine spawns `claude auth status` for it; omodel will
+not), and Vertex ADC was read from source only. Missed logins cost an `⚠ unavailable`, never a
+refusal you can't override (`--force`, add-model). When `omo` answers but NO provider passes the
+check, the load raises `NoNativeLogin` (a `CatalogUnavailable`: "no logged-in provider found …")
+rather than returning an empty catalog, which every surface would report as "`omo` is not on
+PATH". It is not an `omo` failure, so no surface offers a bare retry: the TUI header says to log
+in with omo's `/login`, then `r`; the CLI note says availability is unknown; `--print` says no omo
+provider is logged in; and `--refresh-models` exits 0 ("0 providers logged in") — the listing it
+re-cached is fine.
+
+**Variants.** `--list-models` gives `thinking: yes|no`, not the per-model level map. The engine
+**clamps** a level a model does not support to the nearest one it does (pi-ai
+`clampThinkingLevel`: up first, then down), so for a thinking model omodel offers omo's ladder
+(`catalog.NATIVE_LADDER`: `off … max`) and for a non-thinking one offers nothing. The CLI's
+`bad_variant` guard therefore only refuses a value off the ladder on a thinking model.
+
+**Config.** Native needs the unified file: `--harness native` on the legacy config PATH is refused
+(`harness_unavailable`). The check is by path, not by `scope_of`, because content-based scope
+reads a native-only `{"[native]": …}` document as legacy. Also refused: a document with the
+pre-rename `"[senpi]"` block and no `"[native]"`. omo reads `[senpi]` as native only until a
+`[native]` exists, then drops it whole (omo-config-core `canonicalizeLegacyHarnessBlocks`), so the
+first native save would silently switch off the rest of `[senpi]` (`session.harness_problem`). Writes go into `"[native]"`, which is created when absent — spliced in at the end of
+the root object, so the rest of the file keeps its comments (the clean-rewrite fallback is for a
+splice that does not read back, as before). The reasoning key is `reasoning`. omodel never edits
+`[native]`'s other keys (`memory`, `model_profile`, …) or the top level that native also folds in.
+
+**The TUI switch.** `t` exits the app with `("harness", other)` and `run_app` starts a new one, so
+nothing per-session crosses over. It is refused while anything is unsaved, while a detail fetch or
+`r` refresh is in flight (the new app's one-at-a-time guards start fresh, so an old opencode call
+would overlap the new session's first), and when `harness_problem` names a reason.
+
+**Known gaps.** An opencode `r` / `--refresh-models` empties the whole cache (`cache.clear`),
+`native-models` included, so the next native launch re-lists (~2s); the native refresh touches
+only its own entry. And under the opencode harness a native-only document (`{"[native]": …}`, no
+`[opencode]` / `$schema` / `_migrations`) still reads as legacy scope, so opencode writes land at
+the root — which native folds in too — and the opencode surfaces show their "pre-4.19.3 config
+path" notice for `~/.omo/omo.jsonc` itself. That is `scope_of` as before this feature; changing it
+changes opencode behaviour, so it is a separate decision.
+
+**Out of scope (v1):** the main session model (the engine's `/model` + `settings.json`, and
+`model_profile`), `models` chains (omodel writes `model` + `reasoning`), project-level
+`.omo/omo.jsonc`, copying an `[opencode]` setup into `[native]`, and `omo models discover` —
+which rewrites `models.json`, so omodel never runs it.
+
 ## CLI
 
 Two audiences, one parser. The flat flags are the **human** surface and are unchanged; the
@@ -282,6 +389,8 @@ omodel --refresh-omo [--omo-src P]  # regenerate bundled suggestion data from an
 omodel --print                  # print current resolved agent/category models, no UI
 omodel --check                  # dry-run: resolve candidate lists for every target, exit 0 (CI-safe; degrades to suggestions-only if `opencode` absent)
 omodel --refresh-models         # force `opencode models --refresh` + rebuild the ~/.cache/omodel cache
+omodel --harness native ...     # edit OmO Native's `[native]` block instead (TUI, --print, --check,
+                                #   --refresh-models, every subcommand; §Harnesses). `t` in the TUI.
 omodel --update [--yes] [--force]   # update omodel ITSELF from its GitHub releases (asks first)
 omodel --version
 ```
@@ -402,7 +511,7 @@ formats and the detail pane's line split are what the code actually emits. Provi
 omo's own first-choice ones for `sisyphus`, so the picture names no particular user's setup.
 
 ```
- oModel: opencode · anthropic · openai
+ oModel [opencode]: opencode · anthropic · openai
 ┌──────────────────────────────┐┌──────────────────────────────────────────────────┐
 │ AGENTS                       ││ agent: sisyphus                                  │
 │   sisyphus                   ││ model: anthropic/claude-opus-5                   │
@@ -575,7 +684,7 @@ In summary:
   naming a set the guard didn't use would send an agent to retry with a doomed variant.
 - `catalog.refresh()` — the `r` key / `omodel --refresh-models` — runs `opencode models --refresh`
   (network re-fetch), clears the cache, and rewrites `models.json` from the result. The TUI runs it in a
-  worker (off the UI thread); `r` is documented in the `?` help overlay (the `oModel:` header shows
+  worker (off the UI thread); `r` is documented in the `?` help overlay (the `oModel [<harness>]:` header shows
   only the connected list — no cache-age suffix).
 - **The completing fetch re-renders BOTH panes**, not just `#detail`: its `--verbose` write is also the
   variant source above, so the candidate rows resolved before it landed are stale in the same breath
@@ -1174,6 +1283,15 @@ runs `bun run <this file> <omo-src>`, checks the stdout **loads** (`suggestions.
 then writes it to the data file — valid JSON of the wrong shape used to be written first, over the
 bundled file in a checkout.
 
+It also extracts OmO Native's chains from `packages/senpi-task/src` into a `native` section
+(§Harnesses). Those files import `@oh-my-opencode/model-core` by package name, which only a
+`bun install` would resolve, so the script rewrites the two specifiers to model-core source paths
+as the files load (a bun `onLoad` plugin — a runtime `onResolve` does not fire for bare
+specifiers under bun 1.4). The weekly refresh's sparse checkout therefore includes
+`packages/senpi-task`; an omo without it yields no `native` section, which leaves oModel without
+the native harness rather than failing. `tools/snapshot_native_auth.ts` is the separate, manual
+extractor for `data/native-auth.json`.
+
 ### `update.py` — `omodel --update` (self-update from GitHub Releases)
 
 The **only** module that touches the network at runtime, and only when the verb is run. There is
@@ -1290,7 +1408,8 @@ dependency added here would ship inside the very binary this replaces.
   `action_help_quit` rather than letting markup back through the choke point — and takes the chance
   to name **`q`**, since the `key` Textual resolves is its default `ctrl+q`, which exits via
   `App.action_quit` with **no** unsaved-changes prompt (the `q` → QuitModal flow under §Events).
-- **Header** `Static#providers`: one line `oModel: <id · id · …>` from `catalog.connected` in its
+- **Header** `Static#providers`: one line `oModel [<harness>]: <id · id · …>` — the harness
+  (§Harnesses) always leads, so you can tell `[opencode]` from `[native]` — from `catalog.connected` in its
   **first-seen order** (per §Data sources; e.g. `opencode · deepseek · moonshotai-cn · openai ·
   zhipuai`) — so you see what's available at a glance; doubles as the
   ⚠-unavailable explainer ("no listed provider serves this"). Just the connected list — **no cache-age

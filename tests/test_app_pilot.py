@@ -319,7 +319,7 @@ def test_pilot_providers_header_visible(pilot_config):
             providers_widget = pilot.app.query_one("#providers", Static)
             # Static.content is the canonical way to read the current display value
             text = str(providers_widget.content)
-            assert "oModel:" in text, f"Missing 'oModel:' in header: {text!r}"
+            assert text.startswith("oModel [opencode]: "), f"Missing harness label in header: {text!r}"
             # Test catalog has opencode as the first connected provider
             assert "opencode" in text, f"opencode missing from providers header: {text!r}"
             # deepseek is also in connected

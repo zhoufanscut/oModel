@@ -67,6 +67,9 @@ MAX_NAME = 24
 DEFAULT_NAME = "default"
 
 _FILENAME = ".omodel-presets.json"
+# OmO Native's presets are a separate list in a separate file (DESIGN §Harnesses): picking native
+# shows and switches only these, and the opencode file keeps its shape.
+_NATIVE_FILENAME = ".omodel-presets-native.json"
 
 # Sub-target kinds an agent may carry (mirrors app._SUBKINDS / config_io's clean rule).
 _SUBKINDS = ("ultrawork", "compaction")
@@ -101,10 +104,12 @@ class Store:
         return not self.presets
 
 
-def presets_path(config_path: str) -> str:
+def presets_path(config_path: str, harness: str = "opencode") -> str:
     """`<config_dir>/.omodel-presets.json` — sibling of the config and of `.backup/`, so the
-    presets follow whichever config is active (`--config` included)."""
-    return os.path.join(os.path.dirname(os.path.abspath(config_path)), _FILENAME)
+    presets follow whichever config is active (`--config` included). `.omodel-presets-native.json`
+    for the native harness."""
+    name = _NATIVE_FILENAME if harness == "native" else _FILENAME
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), name)
 
 
 def timestamp() -> str:
@@ -155,7 +160,7 @@ def normalize_active(store: Store) -> Store:
     return store
 
 
-def load(config_path: str) -> Store:
+def load(config_path: str, harness: str = "opencode") -> Store:
     """The presets Store for `config_path`.
 
     NEVER raises — missing file, unreadable file, malformed JSON, a non-dict root or a version
@@ -167,7 +172,7 @@ def load(config_path: str) -> Store:
     compaction is unconditional rather than gated on the version, because it is also the right
     reading of a hand-edited version-2 file that happens to contain a `null`."""
     try:
-        with open(presets_path(config_path), encoding="utf-8") as f:
+        with open(presets_path(config_path, harness), encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return Store()
@@ -296,14 +301,14 @@ def adopt(src_config_path: str, dst_config_path: str):
     return len(landed.presets)
 
 
-def write(config_path: str, store: Store) -> Store:
+def write(config_path: str, store: Store, harness: str = "opencode") -> Store:
     """Persist the whole store (atomic temp+rename) and return it as READ BACK FROM DISK, so
     the caller renders what actually landed.  RAISES on failure (read-only dir, the path taken
     by a directory) — app.py notifies; see the module docstring.
 
     This is the ONLY function here that touches disk, and app.py calls it only from `s`,
     alongside the config write. That is what keeps config-equals-active-preset true at rest."""
-    path = presets_path(config_path)
+    path = presets_path(config_path, harness)
     _preserve_unreadable(path)
     # Onto the file `path` RESOLVES to, like the config's save: replacing the path itself turned
     # a symlinked presets file (a dotfile manager) into a regular one, and the managed copy
@@ -326,7 +331,7 @@ def write(config_path: str, store: Store) -> Store:
         except OSError:
             pass  # best-effort cleanup; the real error is the one we re-raise
         raise
-    return load(config_path)
+    return load(config_path, harness)
 
 
 def capture(name: str, managed: dict) -> Preset:

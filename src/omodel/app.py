@@ -13,8 +13,8 @@ per-target row cache, `_custom_rows`, and all rendering. `cfg` / `_store` / `_sa
 `_saved_store_fp` are PROPERTIES onto the session (see §session state).
 
 STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do not rename):
-  * Static#providers      — "oModel: <id · id · …>" from catalog.connected (first-seen);
-                            on CatalogUnavailable shows the banner + `r` retry instead.
+  * Static#providers      — "oModel [<harness>]: <id · id · …>" from catalog.connected
+                            (first-seen); on CatalogUnavailable the label + the banner + `r` retry.
   * OptionList#targets     — AGENTS then CATEGORIES. Option IDs: 'agent:<name>',
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
                             'cat:<name>'.
@@ -70,8 +70,10 @@ unlimited and the list is dense, so a delete renumbers the rest · u undo / ctrl
 (in-session undo of EVERY edit — set/clear/variant/add-model/add-sub/delete-sub — for mis-press recovery;
 snapshot stack in history.py, also gated to the base screen) · s save
 (diff+confirm) · r refresh (live re-fetch off-thread + rebuild cache; also retries after
-CatalogUnavailable) — EXCEPT on a #presets row, where r RENAMES · ? help (open HelpModal — the
-base-screen keys, grouped by pane; base-screen-only) ·
+CatalogUnavailable) — EXCEPT on a #presets row, where r RENAMES · t switch harness (opencode ⇄
+native; refused while anything is unsaved; restarts the app on the other harness via run_app;
+base-screen-only) · ? help (open HelpModal — the base-screen keys, grouped by pane;
+base-screen-only) ·
 q quit (when dirty: a three-way save & quit / discard / cancel — `s` writes the config AND
 the presets file, so a discard drops both). In the two BUTTON modals (QuitModal, ConfirmModal)
 ←/→ and vim h/l walk the button row, wrapping like tab (`app.focus_next`/`focus_previous`) — the
@@ -130,7 +132,7 @@ from . import __version__, config_io
 from . import catalog as catalog_mod
 from . import presets as presets_mod
 from . import session as session_mod
-from .catalog import Catalog, CatalogUnavailable
+from .catalog import Catalog, CatalogUnavailable, NoNativeLogin
 from .history import History
 from .resolve import Resolver
 
@@ -1253,7 +1255,8 @@ class HelpModal(ModalScreen):
             "  v            pick a variant",
             "  a            add / edit a model  (agent: sub-target)",
             "  x            clear (sub-target / added row: delete)",
-            "  r            refresh models from opencode",
+            "  r            refresh the model list",
+            "  t            switch harness: opencode ⇄ native",
             "",
             "Presets  (tab to reach)",
             "  enter        switch — banks your edits first",
@@ -1371,6 +1374,7 @@ class OModelApp(App):
         Binding("ctrl+r", "redo", "redo"),
         Binding("s", "save", "save"),
         Binding("r", "refresh", "refresh"),
+        Binding("t", "switch_harness", "harness", show=False),
         Binding("question_mark", "help", "help", show=False),
         Binding("q", "quit_confirm", "quit"),
     ]
@@ -1588,7 +1592,7 @@ class OModelApp(App):
                 f"Adopted {self.session.adopted_presets} preset(s) from the previous config "
                 "location.",
             )
-        if self.session.scope == "root":
+        if self.session.scope == "root" and self.session.harness == "opencode":
             self.notify(
                 "Using the pre-4.19.3 config path — oh-my-openagent 4.19.3+ reads "
                 "~/.omo/omo.jsonc instead. Launch omo once to migrate.",
@@ -1605,13 +1609,21 @@ class OModelApp(App):
         # Just the connected list — no cache-age / "r to refresh" suffix. Refresh (`r`) is
         # documented in the `?` help overlay, and the bare list reads cleaner (decision: keep the
         # header aesthetic and uncluttered; staleness isn't worth a permanent suffix).
+        # The harness leads the line in every state (`oModel [opencode]:` / `oModel [native]:`), so
+        # you always know which block you are editing — the provider list after it is that
+        # harness's own (DESIGN §Harnesses).
         header = self.query_one("#providers", Static)
-        if self.catalog_error is not None:
-            header.update("⚠ couldn't read models — press r to retry")
+        harness = self.session.harness
+        label = f"oModel [{harness}]"
+        if isinstance(self.catalog_error, NoNativeLogin):
+            header.update(f"{label}: ⚠ no logged-in provider — log in with omo's /login, then r")
+        elif self.catalog_error is not None:
+            header.update(f"{label}: ⚠ couldn't read models — press r to retry")
         elif self.catalog.connected:
-            header.update("oModel: " + " · ".join(self.catalog.connected))
+            header.update(f"{label}: " + " · ".join(self.catalog.connected))
         else:
-            header.update("oModel: (none — opencode not found; suggestions/add only)")
+            tool = "omo" if harness == "native" else "opencode"
+            header.update(f"{label}: (none — {tool} not found; suggestions/add only)")
 
     # ----- left pane: targets ----------------------------------------------------------
 
@@ -1813,7 +1825,7 @@ class OModelApp(App):
                 )
                 return
             agents, categories = presets_mod.assignments(preset)
-            root = config_io.managed_root_for_write(self.cfg)
+            root = config_io.managed_root_for_write(self.cfg, self.session.harness)
             root["agents"] = agents
             root["categories"] = categories
             if self._record(f"restore preset '{preset.name}' over the config"):
@@ -2473,6 +2485,7 @@ class OModelApp(App):
             "undo",
             "redo",
             "help",
+            "switch_harness",
         ):
             # Pane-crossing focus, undo/redo, AND the `?` help overlay are base-screen-only: a
             # ModalScreen manages its own focus and keys (e.g. AddSubModal binds `u` to pick
@@ -2784,7 +2797,7 @@ class OModelApp(App):
         if target is None or not target.startswith("agent:"):
             return
         name = target[len("agent:"):].split(".", 1)[0]
-        allowed = _subkinds_for(name)
+        allowed = _subkinds_for(name, self.session.harness)
         present = set(self._agent_subtargets(name))
         if all(k in present for k in allowed):
             self.bell()  # every kind this agent supports is already added — nothing to choose
@@ -2853,7 +2866,7 @@ class OModelApp(App):
         # `state` is a whole-document history snapshot, so the maps have to be reached through
         # the scope adapter — reading its root on a unified config compared against (None, None)
         # and always claimed the models would land elsewhere.
-        managed = config_io.managed_root(state)
+        managed = config_io.managed_root(state, self.session.harness)
         return presets_mod.fingerprint(
             target.agents, target.categories
         ) != presets_mod.fingerprint(managed.get("agents"), managed.get("categories"))
@@ -2960,7 +2973,7 @@ class OModelApp(App):
         unreadable mid-session): surface it the same way, since an exception here would close
         the app and take every staged edit with it."""
         try:
-            diff = config_io.diff_text(self.cfg, self.config_path)
+            diff = config_io.diff_text(self.cfg, self.config_path, harness=self.session.harness)
         except Exception as exc:
             self.notify(f"Save failed: {exc}", severity="error")
             return
@@ -3055,6 +3068,33 @@ class OModelApp(App):
             return
         self._refresh_catalog()
 
+    def action_switch_harness(self) -> None:
+        """`t` — switch between the opencode and native harness (DESIGN §Harnesses).
+
+        Only from a clean state: the two harnesses are separate sessions (block, targets,
+        catalog, presets file), and carrying unsaved edits or an undo stack across would mean
+        undoing into a block you are no longer looking at. So this refuses while anything is
+        unsaved, checks the other harness can open (`harness_problem`), then exits with
+        `("harness", other)` for `run_app` to restart on it."""
+        other = "opencode" if self.session.harness == "native" else "native"
+        if self._detail_fetching or self._refresh_inflight:
+            # The next app starts with fresh one-at-a-time guards, so a call still running here
+            # (~320 MB each for opencode) would overlap with the new session's first one.
+            busy = "Refresh still running" if self._refresh_inflight else "Still loading model details"
+            self.notify(f"{busy} — try again in a moment.", severity="warning")
+            return
+        if self._is_dirty():
+            self.notify(
+                f"Save (s) or undo (u) your changes before switching to {other}.",
+                severity="warning",
+            )
+            return
+        problem = session_mod.harness_problem(self.config_path, other)
+        if problem is not None:
+            self.notify(f"Can't switch to {other}: {problem}", severity="error")
+            return
+        self.exit(result=("harness", other))
+
     @work(exclusive=True, group="refresh")
     async def _refresh_catalog(self) -> None:
         """Background worker: run `opencode models --refresh` (network, ~3s+) off the event
@@ -3065,13 +3105,22 @@ class OModelApp(App):
         worker's entire body regardless of which branch returns."""
         self._refresh_inflight = True
         try:
-            self.query_one("#providers", Static).update("Refreshing models… (opencode --refresh)")
+            native = self.session.harness == "native"
+            self.query_one("#providers", Static).update(
+                "Refreshing models… (omo --list-models)" if native
+                else "Refreshing models… (opencode --refresh)"
+            )
             try:
-                new_catalog = await _to_thread_daemon(catalog_mod.refresh)
+                new_catalog = await _to_thread_daemon(
+                    catalog_mod.refresh_native if native else catalog_mod.refresh
+                )
             except CatalogUnavailable as exc:
                 self.catalog_error = exc
                 self._render_providers()
-                self.notify("Refresh failed — couldn't read models.", severity="error")
+                if isinstance(exc, NoNativeLogin):
+                    self.notify("Refreshed — but no logged-in provider found.", severity="warning")
+                else:
+                    self.notify("Refresh failed — couldn't read models.", severity="error")
                 return
             except Exception as exc:
                 # Anything else would fail the worker, and a failed worker exits the app —
@@ -3136,7 +3185,7 @@ class OModelApp(App):
         )
 
 
-def create_app(config_path: str | None = None) -> OModelApp:
+def create_app(config_path: str | None = None, harness: str = "opencode") -> OModelApp:
     """Build the session and construct (but do NOT run) an OModelApp — the production wiring,
     factored out of `run_app` so it's directly testable without launching the Textual event loop.
 
@@ -3145,10 +3194,18 @@ def create_app(config_path: str | None = None) -> OModelApp:
     CatalogUnavailable the app still launches with a banner + `r` retry and suggestions/
     add-model only, and the resolver is built even over the empty catalog so add-model (the only
     route to a model while degraded) stays live."""
-    return OModelApp(session=Session.build(config_path))
+    return OModelApp(session=Session.build(config_path, harness=harness))
 
 
-def run_app(config_path: str | None = None) -> None:
+def run_app(config_path: str | None = None, harness: str = "opencode") -> None:
     """Build and run OModelApp() for the default (no-subcommand) CLI invocation.
-    Called by cli.main(). See create_app() for the construction details."""
-    create_app(config_path).run()
+    Called by cli.main(). See create_app() for the construction details.
+
+    `t` (action_switch_harness) exits the app with `("harness", <other>)`; this loop then starts
+    a fresh one on that harness — a whole new Session, so no undo history, row cache or preset
+    index crosses between the two blocks (DESIGN §Harnesses)."""
+    while True:
+        result = create_app(config_path, harness).run()
+        if not (isinstance(result, tuple) and len(result) == 2 and result[0] == "harness"):
+            return
+        harness = result[1]

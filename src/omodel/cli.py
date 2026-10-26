@@ -57,8 +57,9 @@ def main(argv: list | None = None) -> int:
 
     Flushing HERE turns that into a catchable BrokenPipeError, and the reader stopping early is
     not a failure: omodel did its work, so this is EXIT_OK and silent."""
-    global _found_conflict
+    global _found_conflict, _harness
     _found_conflict = None  # per invocation: main() is importable and called repeatedly
+    _harness = "opencode"
     try:
         code = _main(argv)
         sys.stdout.flush()
@@ -93,6 +94,8 @@ def _main(argv: list | None = None) -> int:
     parser = _build_parser()
     _Parser.json_errors = "--json" in (sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
+    global _harness
+    _harness = getattr(args, "harness", None) or "opencode"
 
     # --version: no imports beyond __init__
     if args.version:
@@ -116,7 +119,8 @@ def _main(argv: list | None = None) -> int:
         from omodel.refresh import refresh
         return refresh(omo_src=args.omo_src)
 
-    # --refresh-models: force opencode upstream re-fetch + rebuild our cache
+    # --refresh-models: force opencode upstream re-fetch + rebuild our cache (or, under
+    # --harness native, re-list omo's models)
     if args.refresh_models:
         return _cmd_refresh_models()
 
@@ -143,13 +147,17 @@ def _main(argv: list | None = None) -> int:
     _default_color_system()
     from omodel.app import run_app
     from omodel.config_io import ConfigParseError
+    from omodel.session import HarnessUnavailable
     # load_config() runs once, at app construction (before the UI starts) and is never
     # re-called during the session — catching this narrow type around the whole call is safe.
     try:
-        run_app(config_path=args.config)
+        run_app(config_path=args.config, harness=_harness)
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         return EXIT_ERROR
+    except HarnessUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_REJECTED
     return EXIT_OK
 
 
@@ -186,6 +194,12 @@ def _flag_misuse(args) -> str | None:
     # must too rather than being the one silently-ignored survivor).
     if args.json and not args.update and command in (None, "agent-guide"):
         return "--json only means something with --update or a JSON subcommand."
+    # The harness picks which block a session edits; these never open one.
+    if getattr(args, "harness", None) is not None and (
+        args.update or args.restore or args.refresh_omo or command == "agent-guide"
+    ):
+        return ("--harness only means something for the TUI, --print, --check, "
+                "--refresh-models or a JSON subcommand.")
     return None
 
 
@@ -292,7 +306,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--refresh-models",
         action="store_true",
         dest="refresh_models",
-        help="Force `opencode models --refresh` and rebuild the local ~/.cache/omodel cache.",
+        help="Force `opencode models --refresh` and rebuild the local ~/.cache/omodel cache "
+             "(with --harness native: re-run `omo --list-models`).",
     )
     parser.add_argument(
         "--update",
@@ -322,6 +337,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the omodel version and exit.",
     )
+    # default=None, not "opencode": the misuse check has to tell an explicit `--harness opencode`
+    # on a verb that ignores it from no flag at all. `_main` reads None as opencode.
+    parser.add_argument(
+        "--harness", choices=("opencode", "native"), default=None,
+        help="Which omo edition to edit: opencode (the [opencode] block, default) or native "
+             "(OmO Native, the `omo` command — the [native] block).",
+    )
 
     # Shared options for every subcommand. `default=SUPPRESS` is load-bearing: without it the
     # subparser's own `--config=None` would overwrite a value the MAIN parser already parsed,
@@ -337,6 +359,10 @@ def _build_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--json", action="store_true", default=argparse.SUPPRESS,
         help=f"Emit machine-readable JSON (schema {SCHEMA}).",
+    )
+    common.add_argument(
+        "--harness", choices=("opencode", "native"), default=argparse.SUPPRESS,
+        help="opencode (default) or native (OmO Native, the `omo` command).",
     )
 
     subs = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -484,6 +510,10 @@ def _default_color_system() -> None:
 # session exists (`bad_config`, usage errors) and outside the agent verbs.
 _found_conflict: bool | None = None
 
+# The harness this invocation edits (`--harness`, either position) — set by `_main`. Stamped on
+# every payload once a session is open, beside `sync_conflict`.
+_harness: str = "opencode"
+
 
 def _emit(payload: dict, as_json: bool, lines=()) -> None:
     """Print `payload` as JSON, or `lines` as prose. Every JSON verb goes through here so the
@@ -498,6 +528,7 @@ def _emit(payload: dict, as_json: bool, lines=()) -> None:
         payload.setdefault("schema", SCHEMA)
         if _found_conflict is not None:
             payload.setdefault("sync_conflict", _found_conflict)
+            payload.setdefault("harness", _harness)
         # `ok` on EVERY payload, success or refusal. It is the field an agent branches on first,
         # and the read verbs used to omit it — so `payload["ok"]` KeyError'd on exactly the calls
         # that had succeeded. `check` sets its own (it reports ok=False for a problem config).
@@ -548,17 +579,19 @@ def _open_session(config_override, as_json: bool = False):
     reports them exactly once. They go to STDERR: `--json` callers parse stdout, and a notice
     must never be the reason a payload fails to decode."""
     from omodel.config_io import ConfigParseError
-    from omodel.session import Session
+    from omodel.session import HarnessUnavailable, Session
     try:
         # scaffold=False: opening a missing config must not create it — `show`, `check` and any
         # `--dry-run` used to leave a starter file (and its directories) behind. A save still
         # writes it (Session.save_config).
-        session = Session.build(config_override, scaffold=False)
+        session = Session.build(config_override, scaffold=False, harness=_harness)
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         if as_json:
             return None, _fail("bad_config", str(exc), True, code=EXIT_ERROR)
         return None, EXIT_ERROR
+    except HarnessUnavailable as exc:
+        return None, _fail("harness_unavailable", str(exc), as_json, harness=_harness)
     global _found_conflict
     _found_conflict = session.sync_conflict
     if session.adopted_presets:
@@ -567,7 +600,7 @@ def _open_session(config_override, as_json: bool = False):
             f"location into {os.path.dirname(session.config_path)}.",
             file=sys.stderr,
         )
-    if session.scope == "root":
+    if session.scope == "root" and session.harness == "opencode":
         print(
             "[note] Using the pre-4.19.3 config path. oh-my-openagent 4.19.3+ reads "
             "~/.omo/omo.jsonc instead — launch omo once to migrate.",
@@ -576,10 +609,17 @@ def _open_session(config_override, as_json: bool = False):
     # A BROKEN opencode (on PATH, but `opencode models` failed) was silent here: the same
     # `degraded` as an absent one, with nothing on stderr to say which. Only `--check` and
     # `--print` named the failure, and neither is what an agent runs.
-    if session.catalog_error is not None:
+    from omodel.catalog import NoNativeLogin
+
+    if isinstance(session.catalog_error, NoNativeLogin):
+        # omo answered; a retry changes nothing until you log in.
+        print(f"[note] availability is unknown: {session.catalog_error}.", file=sys.stderr)
+    elif session.catalog_error is not None:
+        retry = " --harness native" if session.harness == "native" else ""
         print(
-            f"[note] opencode is installed but could not be read ({session.catalog_error}) — "
-            "availability is unknown; `omodel --refresh-models` retries it.",
+            f"[note] {_tool(session)} is installed but could not be read "
+            f"({session.catalog_error}) — availability is unknown; "
+            f"`omodel --refresh-models{retry}` retries it.",
             file=sys.stderr,
         )
     return session, None
@@ -601,6 +641,11 @@ def _split_value(value):
     return provider, model
 
 
+def _tool(session) -> str:
+    """The CLI that answers "what you have" for this session's harness, for prose."""
+    return "omo" if session.harness == "native" else "opencode"
+
+
 def _degraded_reason(session):
     """Why availability is unknown, or None when it isn't.
 
@@ -613,7 +658,7 @@ def _degraded_reason(session):
         return None
     if session.catalog_error is not None:
         return str(session.catalog_error)
-    return "opencode is not on PATH"
+    return "omo is not on PATH" if session.harness == "native" else "opencode is not on PATH"
 
 
 def _assignment_row(session, target: str) -> dict:
@@ -766,7 +811,7 @@ def _validate(session, target: str, value: str, variant, force: bool):
         offered = _variant_guard_set(session, provider, model)
         return ("bad_variant", (
             f"{variant!r} is not a variant of {value!r} "
-            f"(opencode reports: {', '.join(offered)}) — or pass --force."
+            f"({_tool(session)} reports: {', '.join(offered)}) — or pass --force."
         ))
     return None
 
@@ -938,7 +983,7 @@ def _cmd_candidates(config_override, target: str, as_json: bool) -> int:
     }
     lines = []
     if session.degraded:
-        lines.append("(degraded: opencode unavailable — availability unknown)")
+        lines.append(f"(degraded: {_tool(session)} unavailable — availability unknown)")
     for c in cands:
         marker = "*" if c["current"] else " "
         variant = f" ({c['variant']})" if c["variant"] else ""
@@ -1068,7 +1113,7 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
     if session.sync_conflict:
         lines.append(_SYNC_CONFLICT_NOTE)
     if session.degraded:
-        lines.append("(degraded: opencode unavailable — availability was not checked)")
+        lines.append(f"(degraded: {_tool(session)} unavailable — availability was not checked)")
     _emit(payload, as_json, lines=lines)
     return EXIT_REJECTED if problems else EXIT_OK
 
@@ -1573,14 +1618,19 @@ def _set_lines(target, before, value, variant, published) -> list:
 def _cmd_refresh_models() -> int:
     import shutil
 
-    from omodel.catalog import CatalogUnavailable
+    from omodel.catalog import CatalogUnavailable, NoNativeLogin, refresh_native
     from omodel.catalog import refresh as refresh_catalog
 
-    if shutil.which("opencode") is None:
-        print("error: `opencode` not found on PATH", file=sys.stderr)
+    tool = "omo" if _harness == "native" else "opencode"
+    if shutil.which(tool) is None:
+        print(f"error: `{tool}` not found on PATH", file=sys.stderr)
         return EXIT_ERROR
     try:
-        catalog = refresh_catalog()
+        catalog = refresh_native() if _harness == "native" else refresh_catalog()
+    except NoNativeLogin as exc:
+        # The listing was re-read and cached; that it serves nobody yet is not a refresh failure.
+        print(f"Refreshed omo's model list; 0 providers logged in ({exc}).")
+        return EXIT_OK
     except CatalogUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -1643,36 +1693,44 @@ def _cmd_restore(config_override: str | None) -> int:
 
 def _cmd_print(config_override: str | None) -> int:
     """Resolve current agent/category models from config + suggestions/catalog, print."""
-    from omodel.catalog import CatalogUnavailable
+    from omodel.catalog import CatalogUnavailable, load_native
     from omodel.catalog import load as load_catalog
     from omodel.config_io import ConfigParseError, load_config
+    from omodel.session import harness_problem
 
+    problem = harness_problem(config_override, _harness)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
+        return EXIT_REJECTED
     try:
         cfg, path = load_config(config_override, scaffold=False)  # read-only: create nothing
     except ConfigParseError as exc:
         _print_config_parse_error(exc)
         return EXIT_ERROR
 
+    unavailable = f"{'omo' if _harness == 'native' else 'opencode'} unavailable"
     try:
-        catalog = load_catalog()
+        catalog = load_native() if _harness == "native" else load_catalog()
     except CatalogUnavailable as exc:
         print(f"[warn] Could not load catalog: {exc}", file=sys.stderr)
-        from omodel.catalog import Catalog
+        from omodel.catalog import Catalog, NoNativeLogin
         catalog = Catalog(available={}, connected=[])
+        if isinstance(exc, NoNativeLogin):
+            unavailable = "no omo provider logged in"
 
     # read_map, not `cfg.get(k, {})` — the default only applies when the key is ABSENT, so a
     # present `"agents": null` (or a truthy non-dict) returned None and tracebacked on .items().
     from omodel.session import managed_root, read_map, read_variant
 
-    managed = managed_root(cfg)
+    managed = managed_root(cfg, _harness)
     agents_cfg = read_map(managed, "agents")
     categories_cfg = read_map(managed, "categories")
 
-    print(f"Config: {path}")
+    print(f"Config: {path}" + ("  [native]" if _harness == "native" else ""))
     if catalog.connected:
         print(f"Providers: {' · '.join(catalog.connected)}")
     else:
-        print("Providers: (none — opencode unavailable)")
+        print(f"Providers: (none — {unavailable})")
     print()
 
     print("AGENTS:")
@@ -1707,16 +1765,24 @@ def _cmd_check(config_override: str | None) -> int:
 
     ALWAYS exit 0 — that is the contract CI depends on. `omodel check` (the subcommand) is the
     one that exits 3 on a problem."""
-    from omodel.catalog import CatalogUnavailable
+    from omodel.catalog import CatalogUnavailable, load_native
     from omodel.catalog import load as load_catalog
     from omodel.resolve import Resolver
+    from omodel.session import harness_problem
     from omodel.suggestions import load as load_suggestions
 
-    suggestions = load_suggestions()
+    all_suggestions = load_suggestions()
+    # Still exit 0 — --check is CI-safe whatever it finds — but not "OK" for a harness every
+    # other verb refuses on this config (the legacy path, a stranded `[senpi]`, no native data).
+    problem = harness_problem(config_override, _harness, all_suggestions)
+    if problem is not None:
+        print(f"[check] {_harness} unavailable: {problem}")
+        return EXIT_OK
+    suggestions = all_suggestions.for_harness(_harness)
 
     degraded = False
     try:
-        catalog = load_catalog()
+        catalog = load_native() if _harness == "native" else load_catalog()
         if not catalog.connected:
             # opencode absent → empty catalog, not CatalogUnavailable
             degraded = True
@@ -1727,7 +1793,8 @@ def _cmd_check(config_override: str | None) -> int:
         degraded = True
 
     if degraded:
-        print("[check] Degraded mode: no opencode catalog; using bundled suggestions only.")
+        tool = "omo" if _harness == "native" else "opencode"
+        print(f"[check] Degraded mode: no {tool} catalog; using bundled suggestions only.")
 
     try:
         resolver = Resolver.build(catalog, suggestions)
@@ -1743,7 +1810,7 @@ def _cmd_check(config_override: str | None) -> int:
     targets = []
     for name in suggestions.agents:
         targets.append(f"agent:{name}")
-        for kind in subkinds_for(name):
+        for kind in subkinds_for(name, _harness):
             targets.append(f"agent:{name}.{kind}")
     for name in suggestions.categories:
         targets.append(f"cat:{name}")

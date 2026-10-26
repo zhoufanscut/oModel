@@ -2,7 +2,7 @@
   "meta": {
     "omoVersion": "5.1.48",
     "omoCommit": "8706f468c3a891fd82189e0bac84fed2fe449688",
-    "generatedAt": "2026-10-26T06:25:23.595Z"
+    "generatedAt": "2026-10-26T07:32:14.875Z"
   },
   "agents": {
     "sisyphus": {
@@ -1325,5 +1325,860 @@
     "xhigh",
     "max",
     "auto"
-  ]
+  ],
+  "native": {
+    "agents": {
+      "explore": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding"
+            ],
+            "model": "kimi-for-coding-highspeed",
+            "variant": "off"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6-luna-fast",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot"
+            ],
+            "model": "claude-haiku-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "deepseek"
+            ],
+            "model": "deepseek-flash",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "opencode-go",
+              "bailian-coding-plan"
+            ],
+            "model": "qwen3.7-plus"
+          },
+          {
+            "providers": [
+              "opencode-go"
+            ],
+            "model": "minimax-m2.7"
+          }
+        ]
+      },
+      "librarian": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding"
+            ],
+            "model": "kimi-for-coding-highspeed",
+            "variant": "off"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6-luna-fast",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot"
+            ],
+            "model": "claude-haiku-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "deepseek"
+            ],
+            "model": "deepseek-flash",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "opencode-go",
+              "bailian-coding-plan"
+            ],
+            "model": "qwen3.7-plus"
+          },
+          {
+            "providers": [
+              "opencode-go"
+            ],
+            "model": "minimax-m2.7"
+          }
+        ]
+      },
+      "plan-consultant": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-fable-5-1",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "opencode-go",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ]
+      },
+      "plan-reviewer": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "xhigh"
+          },
+          {
+            "providers": [
+              "github-copilot"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "opencode"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "google",
+              "google-vertex",
+              "opencode"
+            ],
+            "model": "gemini-4-argon",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "google",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gemini-3.1-pro",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "opencode-go"
+            ],
+            "model": "glm-5.2"
+          }
+        ]
+      },
+      "omo-native-code-reviewer": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn",
+              "opencode-go"
+            ],
+            "model": "glm-5.3",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode-go"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ],
+        "viaCategories": [
+          "unspecified-high"
+        ]
+      },
+      "omo-native-qa-executor": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol-fast",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-5.6-sol-fast",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-sonnet-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "xiaomi",
+              "opencode-go"
+            ],
+            "model": "mimo-v2.6-pro",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "xai",
+              "github-copilot",
+              "opencode-go"
+            ],
+            "model": "grok-4.7",
+            "variant": "xhigh"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn",
+              "opencode-go"
+            ],
+            "model": "glm-5.3",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-sonnet-5",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "qwen-token-plan",
+              "alibaba-token-plan",
+              "qwen-token-plan-cn",
+              "alibaba-token-plan-cn"
+            ],
+            "model": "qwen3.8-max-preview",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "deepseek",
+              "opencode-go"
+            ],
+            "model": "deepseek-v4-pro",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "xiaomi",
+              "opencode-go"
+            ],
+            "model": "mimo-v2.5-pro",
+            "variant": "high"
+          }
+        ],
+        "viaCategories": [
+          "deep-low",
+          "unspecified-low"
+        ]
+      },
+      "omo-native-gate-reviewer": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn",
+              "opencode-go"
+            ],
+            "model": "glm-5.3",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode-go"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ],
+        "viaCategories": [
+          "deep-high",
+          "unspecified-high"
+        ]
+      }
+    },
+    "categories": {
+      "visual-engineering": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "google",
+              "google-vertex",
+              "opencode"
+            ],
+            "model": "gemini-4-argon",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-fable-5-1",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode-go"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ]
+      },
+      "architect": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-fable-5-1",
+            "variant": "max"
+          }
+        ]
+      },
+      "ultrabrain": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "github-copilot"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "opencode"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "github-copilot"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "opencode"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "max"
+          }
+        ]
+      },
+      "deep-low": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol-fast",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-5.6-sol-fast",
+            "variant": "medium"
+          }
+        ]
+      },
+      "deep-high": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-6-astra",
+            "variant": "high"
+          }
+        ]
+      },
+      "artistry": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-fable-5-1",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode-go"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ]
+      },
+      "quick": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6-luna-fast",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot"
+            ],
+            "model": "claude-haiku-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "deepseek"
+            ],
+            "model": "deepseek-flash",
+            "variant": "off"
+          },
+          {
+            "providers": [
+              "qwen-token-plan",
+              "alibaba-token-plan",
+              "bailian-coding-plan"
+            ],
+            "model": "qwen3.6-flash",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "opencode-go"
+            ],
+            "model": "minimax-m3"
+          },
+          {
+            "providers": [
+              "opencode-go"
+            ],
+            "model": "minimax-m2.7"
+          },
+          {
+            "providers": [
+              "xai"
+            ],
+            "model": "grok-4.20-0309-non-reasoning"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn"
+            ],
+            "model": "glm-5.3-flash",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "xiaomi"
+            ],
+            "model": "mimo-v2.6-flash",
+            "variant": "low"
+          }
+        ]
+      },
+      "unspecified-low": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-sonnet-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "xiaomi",
+              "opencode-go"
+            ],
+            "model": "mimo-v2.6-pro",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "xai",
+              "github-copilot",
+              "opencode-go"
+            ],
+            "model": "grok-4.7",
+            "variant": "xhigh"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn",
+              "opencode-go"
+            ],
+            "model": "glm-5.3",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.1-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "gpt-5.6-sol",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-sonnet-5",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "qwen-token-plan",
+              "alibaba-token-plan",
+              "qwen-token-plan-cn",
+              "alibaba-token-plan-cn"
+            ],
+            "model": "qwen3.8-max-preview",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "deepseek",
+              "opencode-go"
+            ],
+            "model": "deepseek-v4-pro",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "xiaomi",
+              "opencode-go"
+            ],
+            "model": "mimo-v2.5-pro",
+            "variant": "high"
+          }
+        ]
+      },
+      "unspecified-high": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "medium"
+          },
+          {
+            "providers": [
+              "zai",
+              "zai-coding-cn",
+              "opencode-go"
+            ],
+            "model": "glm-5.3",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "kimi-coding",
+              "kimi-for-coding",
+              "moonshotai",
+              "opencode-go"
+            ],
+            "model": "kimi-k3",
+            "variant": "max"
+          }
+        ]
+      },
+      "writing": {
+        "fallbackChain": [
+          {
+            "providers": [
+              "google",
+              "google-vertex",
+              "opencode"
+            ],
+            "model": "gemini-4-argon",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-5-5",
+            "variant": "low"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-opus-4-6",
+            "variant": "max"
+          }
+        ]
+      }
+    }
+  }
 }

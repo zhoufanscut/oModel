@@ -7,6 +7,7 @@ CONTRACTS.md (app.py and resolve.py depend on these exact shapes).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -65,6 +66,12 @@ class CatalogUnavailable(Exception):
     `provider/model` lines. (opencode MISSING from PATH is NOT this — `load()` returns
     an empty Catalog so the UI degrades to suggestions/add-model only.) The UI shows a
     "couldn't read models" banner + `r` retry."""
+
+
+class NoNativeLogin(CatalogUnavailable):
+    """`omo --list-models` answered, but no listed provider passes `native_logins`. Not a failure
+    of `omo`, so no retry fixes it: every surface says "log in" instead of "couldn't read", and
+    `--refresh-models` still counts as done (the listing it re-cached is fine)."""
 
 
 @dataclass
@@ -407,3 +414,259 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
     cache.write("models", result.stdout, [opencode_bin, "models"])
 
     return Catalog(available=available, connected=connected)
+
+
+# ---------------------------------------------------------------------------
+# OmO Native (`omo`) — DESIGN §Harnesses
+# ---------------------------------------------------------------------------
+# No public `omo` command prints the models you can use, so the native catalog is the engine's
+# whole catalog (`omo --list-models`, cached like `opencode models`) filtered to the providers you
+# are logged into, decided the way the engine decides offline: a credential is PRESENT (never
+# checked for validity). `native_logins` is that rule; it reads files and the environment only,
+# so it runs on every load rather than being cached — a `/login` in omo shows up at once.
+
+_NATIVE_MODELS_TIMEOUT = 30
+_NATIVE_CACHE_KEY = "native-models"
+
+# Where omo keeps engine state (omo-native `bin/lib/agent-dir.js` `AGENT_DIR_ENV_NAMES`).
+_AGENT_DIR_ENV = ("OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR")
+
+# omo's reasoning ladder, offered for a model the engine lists as `thinking: yes`. The engine
+# clamps a level a model lacks to the nearest one it has (pi-ai `clampThinkingLevel`), so the
+# whole ladder is safe to offer; `--list-models` does not print the per-model level map.
+NATIVE_LADDER = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+# Bedrock's ambient-credential rule (pi-ai `getEnvApiKey`): any ONE of these sets it up, except
+# the access key, which needs its secret too.
+_BEDROCK_ENV = (
+    "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_WEB_IDENTITY_TOKEN_FILE",
+)
+_CLAUDE_OAUTH_RE = re.compile(r"^CLAUDE_CODE_OAUTH_TOKEN(_\d+)?$")
+
+
+def native_agent_dir(env=None) -> str:
+    """omo's engine-state directory: the first set `$OMO_CODING_AGENT_DIR` /
+    `$SENPI_CODING_AGENT_DIR` / `$PI_CODING_AGENT_DIR`, else `<home>/.omo/agent` (home =
+    `$HOME`, else `$USERPROFILE`, as omo resolves it)."""
+    env = os.environ if env is None else env
+    for name in _AGENT_DIR_ENV:
+        value = (env.get(name) or "").strip()
+        if value:
+            return os.path.abspath(value)
+    home = env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, ".omo", "agent")
+
+
+def _read_json_object(path: str) -> dict:
+    """The JSON(C) object at `path`, or {} when it is missing, unreadable or not an object."""
+    import json5
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json5.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _auth_env_table() -> dict:
+    """{provider: [env var, ...]} — the bundled `data/native-auth.json` (pi-ai's map)."""
+    from importlib.resources import files
+
+    try:
+        raw = json.loads((files("omodel.data") / "native-auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    table = raw.get("envKeys") if isinstance(raw, dict) else None
+    return table if isinstance(table, dict) else {}
+
+
+def native_logins(agent_dir: str | None = None, env=None) -> set:
+    """The providers omo's engine counts as logged in, from files and the environment only.
+
+    1. a top-level key of `<agent dir>/auth.json` (keys only — the values are credentials and are
+       never read into anything);
+    2. a set env var the engine maps to the provider (`data/native-auth.json`);
+    3. a custom provider in `<agent dir>/models.json` that carries an `apiKey`;
+    4. `anthropic-subscription` from `CLAUDE_CODE_OAUTH_TOKEN[_<n>]`; `amazon-bedrock` and
+       `google-vertex` from their ambient-credential rules.
+
+    Not detected: the anthropic-subscription lane's opt-in ambient Claude login (the engine asks
+    `claude auth status`). See DESIGN §Harnesses for what was measured against the engine."""
+    env = os.environ if env is None else env
+    agent_dir = native_agent_dir(env) if agent_dir is None else agent_dir
+    out = set(_read_json_object(os.path.join(agent_dir, "auth.json")))
+
+    def is_set(name: str) -> bool:
+        return bool(env.get(name))
+
+    for provider, names in _auth_env_table().items():
+        if isinstance(names, list) and any(is_set(n) for n in names if isinstance(n, str)):
+            out.add(provider)
+
+    providers = _read_json_object(os.path.join(agent_dir, "models.json")).get("providers")
+    if isinstance(providers, dict):
+        for provider, entry in providers.items():
+            if isinstance(entry, dict) and entry.get("apiKey"):
+                out.add(provider)
+
+    if any(_CLAUDE_OAUTH_RE.match(name) and env.get(name) for name in env):
+        out.add("anthropic-subscription")
+    if any(is_set(n) for n in _BEDROCK_ENV) or (
+        is_set("AWS_ACCESS_KEY_ID") and is_set("AWS_SECRET_ACCESS_KEY")
+    ):
+        out.add("amazon-bedrock")
+    adc = env.get("GOOGLE_APPLICATION_CREDENTIALS") or os.path.join(
+        env.get("HOME") or os.path.expanduser("~"), ".config", "gcloud",
+        "application_default_credentials.json",
+    )
+    if (
+        os.path.exists(adc)
+        and (is_set("GOOGLE_CLOUD_PROJECT") or is_set("GCLOUD_PROJECT"))
+        and is_set("GOOGLE_CLOUD_LOCATION")
+    ):
+        out.add("google-vertex")
+    return out
+
+
+def _parse_list_models(stdout: str) -> list:
+    """`omo --list-models` stdout → [(provider, model, info)] in its order, where info is
+    {"context": str, "max_out": str, "reasoning": bool, "image": bool}. The table is a header row
+    (`provider  model  context  max-out  thinking  images`) then one whitespace-separated row per
+    model; anything else (a "no models" message, a warning) is skipped."""
+    rows: list = []
+    started = False
+    for line in stdout.splitlines():
+        parts = line.split()
+        if not started:
+            started = parts[:2] == ["provider", "model"]
+            continue
+        if len(parts) != 6 or parts[4] not in ("yes", "no") or parts[5] not in ("yes", "no"):
+            continue
+        provider, model, context, max_out, thinking, images = parts
+        rows.append((provider, model, {
+            "context": context, "max_out": max_out,
+            "reasoning": thinking == "yes", "image": images == "yes",
+        }))
+    return rows
+
+
+@dataclass
+class NativeCatalog(Catalog):
+    """The `Catalog` for OmO Native: same `available`/`connected` shape, filled from
+    `omo --list-models` × `native_logins`. `info` holds the table's per-model columns, which is
+    all `detail` and `variants_for` read — there is no per-provider `--verbose` to fetch."""
+
+    info: dict = None  # {(provider, model): {"context", "max_out", "reasoning", "image"}}
+
+    def detail(self, model_id: str, use_cache: bool = True, provider: str | None = None):
+        """The listed columns for `provider`/`model_id` (or the first provider serving it), as the
+        display-only dict the detail pane reads. No cost — the engine's table has none. Never a
+        subprocess."""
+        providers = self.providers_for(model_id)
+        prov = provider if provider in providers else (providers[0] if providers else None)
+        row = (self.info or {}).get((prov, model_id))
+        if row is None:
+            return None
+        context = _token_count(row["context"])
+        return {"context": context, "cost": None, "reasoning": row["reasoning"], "image": row["image"]}
+
+    def variants_for(self, provider: str, model: str, stale_ok: bool = True) -> list:
+        """omo's ladder for a model the engine lists as thinking, else [] ("nothing to offer").
+        Looks at `provider`'s row, then any other serving provider's — the same search order as
+        the opencode reader. `stale_ok` is accepted for signature parity; the table is read with
+        the catalog, so there is no separate age to check."""
+        info = self.info or {}
+        for prov in [provider, *self.providers_for(model)]:
+            row = info.get((prov, model))
+            if row is not None:
+                return list(NATIVE_LADDER) if row["reasoning"] else []
+        return []
+
+
+def _token_count(text: str):
+    """`200K` / `1.5M` / `8192` → int, or None for anything else (the table's formatting)."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([KM]?)", text or "")
+    if m is None:
+        return None
+    scale = {"": 1, "K": 1_000, "M": 1_000_000}[m.group(2)]
+    return int(float(m.group(1)) * scale)
+
+
+def _native_catalog(stdout: str, logins: set) -> NativeCatalog:
+    """The listing filtered to `logins`. No row left is CatalogUnavailable rather than an empty
+    catalog: an empty one reads as "`omo` is not on PATH" everywhere downstream, and here `omo`
+    answered — omodel just cannot see a login (none yet, or one it does not detect)."""
+    available: dict = {}
+    connected: list = []
+    info: dict = {}
+    for provider, model, row in _parse_list_models(stdout):
+        if provider not in logins:
+            continue
+        if provider not in available:
+            available[provider] = []
+            connected.append(provider)
+        if model not in available[provider]:
+            available[provider].append(model)
+        info[(provider, model)] = row
+    if not connected:
+        raise NoNativeLogin(
+            "no logged-in provider found (omodel checks omo's auth.json, provider API-key env "
+            "vars and models.json apiKey) — log in with omo's /login"
+        )
+    return NativeCatalog(available=available, connected=connected, info=info)
+
+
+def _run_list_models(omo_bin: str) -> str:
+    """`omo --list-models` stdout, or CatalogUnavailable (same error rule as `opencode models`:
+    unrunnable, exit != 0, a timeout, or no table rows)."""
+    try:
+        result = subprocess.run(
+            [omo_bin, "--list-models"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=_NATIVE_MODELS_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CatalogUnavailable(
+            f"`{omo_bin} --list-models` timed out after {_NATIVE_MODELS_TIMEOUT}s"
+        ) from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CatalogUnavailable(f"`{omo_bin} --list-models` could not run: {exc}") from exc
+    if result.returncode != 0:
+        raise CatalogUnavailable(f"`{omo_bin} --list-models` exited with code {result.returncode}")
+    if not _parse_list_models(result.stdout):
+        raise CatalogUnavailable(f"`{omo_bin} --list-models` listed no models")
+    return result.stdout
+
+
+def load_native(omo_bin: str = "omo", use_cache: bool = True, agent_dir: str | None = None,
+                env=None) -> NativeCatalog:
+    """The native catalog. Same contract as `load`: `omo` not on PATH → an empty catalog;
+    unrunnable / exit != 0 / no rows → CatalogUnavailable. One more: rows but none from a
+    logged-in provider → NoNativeLogin (a CatalogUnavailable). The `omo --list-models` output is
+    cached 24h under `native-models`; the login filter is applied fresh every time."""
+    if shutil.which(omo_bin) is None:
+        return NativeCatalog(available={}, connected=[], info={})
+    stdout = cache.read(_NATIVE_CACHE_KEY) if use_cache else None
+    if stdout is None or not _parse_list_models(stdout):
+        stdout = _run_list_models(omo_bin)
+        if use_cache:
+            cache.write(_NATIVE_CACHE_KEY, stdout, [omo_bin, "--list-models"])
+    return _native_catalog(stdout, native_logins(agent_dir, env))
+
+
+def refresh_native(omo_bin: str = "omo", agent_dir: str | None = None, env=None) -> NativeCatalog:
+    """`r` / `--refresh-models` under native: re-run `omo --list-models` and rewrite its cache
+    entry. Only that entry — the opencode cache is left alone. (omo has no `--refresh`: the list
+    is the engine's built-in catalog plus `models.json`; `omo models discover` rewrites
+    `models.json`, so omodel never runs it.) Raises like `load_native`; on NoNativeLogin the
+    cache entry is already rewritten."""
+    if shutil.which(omo_bin) is None:
+        return NativeCatalog(available={}, connected=[], info={})  # load_native checks PATH first
+    stdout = _run_list_models(omo_bin)
+    cache.write(_NATIVE_CACHE_KEY, stdout, [omo_bin, "--list-models"])
+    return _native_catalog(stdout, native_logins(agent_dir, env))

@@ -59,6 +59,12 @@ class BackupScopeMismatch(ValueError):
 
 OPENCODE_BLOCK = "[opencode]"
 
+# OmO Native (the `omo` command) folds root → `"[native]"` and never reads `[opencode]`
+# (`omo-config-core/src/loader/resolution.ts`). omodel edits it only under `--harness native`, and
+# refuses the legacy config PATH (`session.harness_problem`). DESIGN §Harnesses.
+NATIVE_BLOCK = "[native]"
+HARNESSES = ("opencode", "native")
+
 
 def _home() -> Path:
     """omo's home resolution (`loader/paths.ts` resolveHomeDir): $HOME, else $USERPROFILE.
@@ -128,27 +134,38 @@ def scope_of(cfg) -> str:
     return "root"
 
 
-def managed_root(cfg) -> dict:
-    """The node holding `agents`/`categories` for READS — `cfg["[opencode]"]` on a unified
-    document, `cfg` on a legacy one. Never creates anything; returns `{}` when the block is
-    absent or not a dict."""
-    if scope_of(cfg) != "opencode":
+def harness_block(cfg, harness: str = "opencode") -> str | None:
+    """The top-level key holding `harness`'s agents/categories: `"[native]"` for native,
+    `"[opencode]"` for opencode on a unified document, None (the document root) on a legacy one.
+    Native on a legacy document is refused before it gets here (`Session.build`)."""
+    if harness == "native":
+        return NATIVE_BLOCK
+    return OPENCODE_BLOCK if scope_of(cfg) == "opencode" else None
+
+
+def managed_root(cfg, harness: str = "opencode") -> dict:
+    """The node holding `agents`/`categories` for READS — `cfg["[opencode]"]` (or
+    `cfg["[native]"]`) on a unified document, `cfg` on a legacy one. Never creates anything;
+    returns `{}` when the block is absent or not a dict."""
+    key = harness_block(cfg, harness)
+    if key is None:
         return cfg if isinstance(cfg, dict) else {}
-    block = cfg.get(OPENCODE_BLOCK)
+    block = cfg.get(key) if isinstance(cfg, dict) else None
     return block if isinstance(block, dict) else {}
 
 
-def managed_root_for_write(cfg: dict) -> dict:
+def managed_root_for_write(cfg: dict, harness: str = "opencode") -> dict:
     """The node holding `agents`/`categories` for WRITES, created on demand. On a unified
-    document this is `cfg["[opencode]"]`, coerced back to `{}` if a hand edit left a non-dict
-    there — writing agents at the document root instead would be accepted, saved, and then
-    silently outranked by the `[opencode]` block (omo folds base → `[opencode]`, last wins)."""
-    if scope_of(cfg) != "opencode":
+    document this is `cfg["[opencode]"]` (or `cfg["[native]"]`), coerced back to `{}` if a hand
+    edit left a non-dict there — writing agents at the document root instead would be accepted,
+    saved, and then silently outranked by the block (omo folds base → block, last wins)."""
+    key = harness_block(cfg, harness)
+    if key is None:
         return cfg
-    block = cfg.get(OPENCODE_BLOCK)
+    block = cfg.get(key)
     if not isinstance(block, dict):
         block = {}
-        cfg[OPENCODE_BLOCK] = block
+        cfg[key] = block
     return block
 
 
@@ -429,6 +446,66 @@ def _span_for_path(text: str, path):
     return span
 
 
+def _object_tail(text: str, start: int):
+    """For the object that begins at `start` (trivia-skipped, must be `{`): `(open, last_end)` —
+    the index of its `{`, and the end of its LAST member's value (None when it has no members) —
+    or None when no object starts there or a member can't be read (json5-only syntax). Where
+    `_insert_member` puts a new member."""
+    n = len(text)
+    i = _skip_trivia(text, start)
+    if i >= n or text[i] != "{":
+        return None
+    open_at = i
+    i += 1
+    last_end = None
+    while True:
+        i = _skip_trivia(text, i)
+        if i >= n:
+            return None
+        if text[i] == "}":
+            return open_at, last_end
+        if text[i] == ",":
+            i += 1
+            continue
+        if text[i] != '"':
+            return None
+        i = _skip_trivia(text, _read_string(text, i))
+        if i >= n or text[i] != ":":
+            return None
+        i = _skip_trivia(text, i + 1)
+        if i >= n:
+            return None
+        last_end = _skip_value(text, i)
+        i = last_end
+
+
+def _insert_members(text: str, start: int, members: dict) -> tuple | None:
+    """ONE edit `(at, at, text)` adding `members` (in order) as the LAST members of the object that
+    begins at `start`, or None when that object can't be scanned. After the last member (before
+    any trailing comma or comment, which stay where they are), aligned with that member's line;
+    into an empty object, one indent level in from the line holding its `{`. One edit, not one per
+    member: two inserts at the same offset would land in reverse order with no comma between."""
+    tail = _object_tail(text, start)
+    if tail is None:
+        return None
+    open_at, last_end = tail
+    nl = _newline_at(text, open_at)
+    if last_end is not None:
+        indent = _line_indent(text, last_end)
+        at, lead, close = last_end, ",", ""
+    else:
+        outer = _line_indent(text, open_at)
+        indent = outer + "  "
+        # Everything between the braces (whitespace, a comment) stays inside, after the members.
+        at, lead, close = open_at + 1, "", f"{nl}{outer}"
+    parts = [
+        f'{nl}{indent}"{key}": '
+        + _reindent(json.dumps(value, indent=2, ensure_ascii=False), indent, nl)
+        for key, value in members.items()
+    ]
+    return (at, at, lead + ",".join(parts) + close)
+
+
 def _line_indent(text: str, pos: int) -> str:
     """Leading whitespace of the line containing `pos` — used to align a spliced value's
     continuation/closing lines under its key."""
@@ -487,7 +564,7 @@ def _newline_at(text: str, pos: int) -> str:
     return "\n"
 
 
-def render(cfg: dict, base_text: str) -> str:
+def render(cfg: dict, base_text: str, harness: str = "opencode") -> str:
     """Text-preserving serialization. Return `base_text` with ONLY the managed `agents` and
     `categories` value spans replaced by their clean (comment-free) form; comments, commented-out
     config, other keys, key order, and formatting OUTSIDE those two objects are preserved
@@ -498,21 +575,49 @@ def render(cfg: dict, base_text: str) -> str:
     down and everything around them — `$schema`, `_migrations`, `profiles`, the rest of the
     `[opencode]` block, and any comments inside it — survives untouched. The serialize() fallback
     stays safe in both scopes because `cfg` is the whole document: it rewrites the file cleanly
-    (losing comments) but never relocates agents/categories out of their scope."""
+    (losing comments) but never relocates agents/categories out of their scope.
+
+    `harness="native"` manages `"[native]"` instead (DESIGN §Harnesses). A block, or both keys,
+    absent from the file are INSERTED — the block as the root's last member, the keys as the
+    block's — rather than falling back to the clean rewrite: on a first native save the file has
+    no `[native]` block at all, and that must not cost the user every comment in it."""
     if not base_text or not base_text.strip():
         return serialize(cfg)
     newline = _newline_of(base_text)
-    managed = managed_root(cfg)
+    managed = managed_root(cfg, harness)
     agents_val = managed.get("agents")
     agents_val = _clean_agents(agents_val) if isinstance(agents_val, dict) else (agents_val or {})
     categories_val = managed.get("categories")
     categories_val = categories_val if categories_val is not None else {}
     values = {"agents": agents_val, "categories": categories_val}
 
-    prefix = [OPENCODE_BLOCK] if scope_of(cfg) == "opencode" else []
+    block_key = harness_block(cfg, harness)
+    prefix = [block_key] if block_key is not None else []
     spans = {key: _span_for_path(base_text, prefix + [key]) for key in ("agents", "categories")}
     edits = []  # (start, end, replacement), applied later-first so offsets stay valid
-    for key, sibling in (("agents", "categories"), ("categories", "agents")):
+    keys = ("agents", "categories")
+    if (
+        harness == "native"
+        and spans["agents"] is None
+        and spans["categories"] is None
+        and (values["agents"] or values["categories"])
+    ):
+        # Neither key is in the file. Add them to the `[native]` block, or the whole block to the
+        # root when it is missing too; only what has content is written. Native only: on the
+        # opencode path this case keeps its clean rewrite (unchanged behaviour).
+        content = {k: v for k, v in values.items() if v}
+        block_span = _span_for_path(base_text, prefix)
+        edit = (
+            _insert_members(base_text, 0, {block_key: content})
+            if block_span is None
+            else _insert_members(base_text, block_span[0], content)
+        )
+        if edit is None:
+            return serialize(cfg).replace("\n", newline)  # unscannable — see the fallback below
+        edits.append(edit)
+        keys = ()  # both handled by the insert
+    for key in keys:
+        sibling = "categories" if key == "agents" else "agents"
         if spans[key] is not None:
             value_start, value_end = spans[key]
             edits.append((value_start, value_end, _reindent(
@@ -542,7 +647,7 @@ def render(cfg: dict, base_text: str) -> str:
     result = base_text
     for start, end, text in sorted(edits, key=lambda e: e[0], reverse=True):
         result = result[:start] + text + result[end:]
-    if not _reads_back_as(result, cfg, values, prefix):
+    if not _reads_back_as(result, cfg, values, prefix, drop_empty_block=harness == "native"):
         # The span scanner knows `"` strings, comments and nesting — not every json5 form. A
         # `'single-quoted'` string holding a `"` or `}` inside the managed block shifted a span,
         # and the splice wrote a truncated, unparseable file (reported `ok`, then `bad_config`).
@@ -552,10 +657,17 @@ def render(cfg: dict, base_text: str) -> str:
     return result
 
 
-def _reads_back_as(text: str, cfg: dict, values: dict, prefix: list) -> bool:
+def _reads_back_as(
+    text: str, cfg: dict, values: dict, prefix: list, drop_empty_block: bool = False
+) -> bool:
     """Does `text` parse (as json5, like `load_config`) to `cfg` with the managed node's
     `agents`/`categories` replaced by `values`? An absent key reads as `{}` on both sides — the
-    splice leaves a key alone when it is missing from the file and empty in cfg."""
+    splice leaves a key alone when it is missing from the file and empty in cfg.
+
+    `drop_empty_block` (native) extends that to the block itself: a `"[native]"` left empty once
+    its two keys are set aside reads as absent on both sides, so an empty block in cfg that the
+    splice had nothing to write for is not taken for a failed splice (which would clean-rewrite
+    the file)."""
     import json5
 
     try:
@@ -571,8 +683,12 @@ def _reads_back_as(text: str, cfg: dict, values: dict, prefix: list) -> bool:
         for key in prefix:
             node = node.get(key) if isinstance(node, dict) else None
         if not isinstance(node, dict):
-            return doc, {}
+            # Native: an absent block reads as empty, like an absent key. The opencode path keeps
+            # its old answer (no managed keys → a mismatch → the clean rewrite), unchanged.
+            return doc, ({"agents": {}, "categories": {}} if drop_empty_block else {})
         managed = {k: node.pop(k, None) or {} for k in ("agents", "categories")}
+        if drop_empty_block and prefix and node == {}:
+            doc.pop(prefix[0], None)
         return doc, managed
 
     want_rest, _ = _split(cfg)
@@ -588,7 +704,9 @@ def _read_verbatim(path: str) -> str:
         return f.read()
 
 
-def diff_text(cfg: dict, path: str, missing_base: str | None = None) -> str:
+def diff_text(
+    cfg: dict, path: str, missing_base: str | None = None, harness: str = "opencode"
+) -> str:
     """Unified diff of render(cfg, on-disk) vs the current on-disk file (for the confirm modal),
     so the modal shows exactly what changes — agents/categories only, comments outside intact.
 
@@ -604,7 +722,7 @@ def diff_text(cfg: dict, path: str, missing_base: str | None = None) -> str:
         old_text = _read_verbatim(path)
     except FileNotFoundError:
         old_text = missing_base if missing_base is not None else ""
-    new_text = render(cfg, old_text)
+    new_text = render(cfg, old_text, harness)
 
     diff_lines = difflib.unified_diff(
         old_text.splitlines(keepends=True),
@@ -652,7 +770,7 @@ def _prune_ring(backup_dir: str) -> None:
             os.remove(old_snap)
 
 
-def save(cfg: dict, path: str) -> SaveResult:
+def save(cfg: dict, path: str, harness: str = "opencode") -> SaveResult:
     """No diff → SaveResult(changed=False) ("nothing to save"). Else EXACT order: stage
     render(cfg, on-disk) in a temp file beside the target, then
       (1) if <dir>/.backup/original.jsonc absent, copy current on-disk config there (verbatim);
@@ -673,7 +791,7 @@ def save(cfg: dict, path: str) -> SaveResult:
     except FileNotFoundError:
         old_text = None
 
-    new_text = render(cfg, old_text)
+    new_text = render(cfg, old_text, harness)
 
     if old_text is not None and new_text == old_text:
         return SaveResult(changed=False)

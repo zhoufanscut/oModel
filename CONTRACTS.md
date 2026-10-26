@@ -73,11 +73,18 @@ are not. Every payload carries `"schema": 1`; bump only on a breaking change.
   collapse it.
 - **Refusal shape** — `{"schema", "ok": false, "error": <slug>, "message", …context}`. `error`
   slugs are stable: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`, `gpt_only`,
-  `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, `bad_config` (the config
+  `unknown_preset`, `active_preset`, `bad_input`, `write_failed`, `harness_unavailable`
+  (`--harness native` on the legacy config path, on a file that still has the pre-rename
+  `"[senpi]"` block and no `"[native]"`, or with bundled data that has no native section — exit
+  3; the payload carries `harness`), `bad_config` (the config
   could not be read or parsed — exit 1; the one failure that used to print no payload at all).
 - **`degraded_reason`** (beside `degraded`) — `null` when not degraded; else
-  `"opencode is not on PATH"` or the `CatalogUnavailable` message (non-zero exit, zero lines,
-  timeout). Additive — no schema bump.
+  `"opencode is not on PATH"` (`"omo is not on PATH"` under `--harness native`) or the
+  `CatalogUnavailable` message (non-zero exit, zero lines, timeout; under native also "no
+  logged-in provider found …" when `omo` answered but no listed provider passes the login check).
+  Additive — no schema bump.
+- **`harness`** — `"opencode"` or `"native"`, stamped beside `sync_conflict` on every payload once
+  a session is open. Additive — no schema bump.
 - **`degraded`** (on `show`/`candidates`/`check`) — `not catalog.connected`, i.e. availability is
   UNKNOWN. Never omit it: a consumer reading `candidates: []` without it concludes "no models
   exist" rather than "opencode is unreachable". Correspondingly `available` is `null` (not
@@ -132,13 +139,26 @@ commit.
   `load(opencode_bin="opencode", use_cache=True)->Catalog`;
   `refresh(opencode_bin="opencode")->Catalog` (force `opencode models --refresh` + rebuild cache).
   All three opencode calls read through the on-disk cache (`cache.py`) and carry a `timeout=`.
+  OmO Native (DESIGN §Harnesses): `@dataclass NativeCatalog(Catalog)` (+ `info: dict` keyed by
+  `(provider, model)` — the `omo --list-models` columns; `.detail()` and `.variants_for()` read
+  only that, never a subprocess; `variants_for` is `NATIVE_LADDER` for a thinking model, else
+  `[]`); `load_native(omo_bin="omo", use_cache=True, agent_dir=None, env=None)->NativeCatalog`
+  (same error contract as `load`, plus `class NoNativeLogin(CatalogUnavailable)` when rows are
+  listed but none is from a logged-in provider; the listing is cached as `native-models`, the
+  login filter is not); `refresh_native(...)->NativeCatalog` (rewrites `native-models` only, also
+  before raising `NoNativeLogin`);
+  `native_logins(agent_dir=None, env=None)->set` (files + environment only — `auth.json` KEYS,
+  `data/native-auth.json`, `models.json` providers with an `apiKey`, the Bedrock / Vertex /
+  anthropic-subscription rules); `native_agent_dir(env=None)->str`.
 - `cache.py`: on-disk cache of opencode stdout (24h TTL, flat, under `~/.cache/omodel/`).
   `cache_dir()->str`; `read(key, ttl_seconds=None)->str|None`; `write(key, stdout, args=None)->None`;
   `age_seconds(key)->float|None`; `clear()->None`; `CACHE_VERSION`. Best-effort: missing/corrupt/
   expired → miss; write errors swallowed (a non-writable cache never breaks the caller).
 - `suggestions.py`: `FAMILY_VENDOR` (frozen map, key set == bundled families); `@dataclass Family`; `@dataclass
-  Suggestions(meta, agents, categories, families, known_variants)` with `.detect_family(id)->
-  Family|None`, `.vendor_for(id)->str|None`; `vendor(family)->str|None`;
+  Suggestions(meta, agents, categories, families, known_variants, native=None)` with
+  `.detect_family(id)->Family|None`, `.vendor_for(id)->str|None`, `.for_harness(harness)->
+  Suggestions|None` (native's agents/categories over the shared families; None when the
+  snapshot has no `native` section); `vendor(family)->str|None`;
   `normalize_model_id(s)->str`; `load(path=None)->Suggestions` (no explicit path/env override →
   the NEWER of the `$XDG_DATA_HOME` snapshot and the bundled data, by `meta.generatedAt`, unless
   that snapshot fails to load); `parse(text)->Suggestions` (raises on unloadable data).
@@ -151,22 +171,25 @@ commit.
   recreates the legacy file); `unified_config_path()->str`; `legacy_config_path()->str`
   (`$XDG_CONFIG_HOME` applies to the LEGACY path ONLY — `~/.omo` is `$HOME`/`$USERPROFILE` on
   every platform, matching omo);
-  `OPENCODE_BLOCK = "[opencode]"`; `scope_of(cfg)->"opencode"|"root"` (CONTENT-based, never
-  filename-based); `managed_root(cfg)->dict` (read, never creates) and
-  `managed_root_for_write(cfg)->dict` (creates/coerces the block) — the node holding
-  `agents`/`categories`; `load_config(path=None, scaffold=True)->(cfg, path)` (`scaffold=False`:
+  `OPENCODE_BLOCK = "[opencode]"`; `NATIVE_BLOCK = "[native]"`; `HARNESSES`;
+  `scope_of(cfg)->"opencode"|"root"` (CONTENT-based, never filename-based);
+  `harness_block(cfg, harness="opencode")->str|None`; `managed_root(cfg, harness="opencode")->dict`
+  (read, never creates) and `managed_root_for_write(cfg, harness="opencode")->dict`
+  (creates/coerces the block) — the node holding `agents`/`categories`; `load_config(path=None, scaffold=True)->(cfg, path)` (`scaffold=False`:
   a missing file reads as `scaffold_text(path)` in memory, nothing written); `write_scaffold(path)`
   (raises `ConfigParseError(ValueError)` — message carries the path — on malformed JSONC, or its subclass `ConfigReadError` when the path cannot be opened or scaffolded at all; cli.py
   catches it for a friendly exit-1 message on the TUI/`--print` paths; scaffolds the UNIFIED
   shape except at an explicit legacy path);
   `serialize(cfg)->str` (canonical clean form — dirtiness + from-scratch fallback; never required
   to equal the on-disk bytes; scope-aware, and `cfg` is the WHOLE document so it never relocates
-  agents/categories out of their scope); `render(cfg, base_text)->str` (**text-preserving write
-  form**: `base_text` with only the managed `agents`/`categories` value spans rewritten clean —
-  nested under `"[opencode]"` on a unified document — everything else, incl. comments /
-  commented-out config outside them, byte-for-byte; falls back to
-  `serialize(cfg)` when `base_text` is empty or a key is missing from the managed node);
-  `diff_text(cfg, path, missing_base=None)->str` and `save(cfg, path)->SaveResult` both go through `render`;
+  agents/categories out of their scope); `render(cfg, base_text, harness="opencode")->str`
+  (**text-preserving write form**: `base_text` with only the managed `agents`/`categories` value
+  spans rewritten clean — nested under `"[opencode]"` (or `"[native]"`) on a unified document —
+  everything else, incl. comments / commented-out config outside them, byte-for-byte; falls back
+  to `serialize(cfg)` when `base_text` is empty or a key is missing from the managed node — except
+  under native, where a missing block or pair of keys is INSERTED instead);
+  `diff_text(cfg, path, missing_base=None, harness="opencode")->str` and
+  `save(cfg, path, harness="opencode")->SaveResult` both go through `render`;
   `@dataclass SaveResult(changed, backup, original_created)`; `@dataclass BackupInfo(name, path,
   is_original, size)`; `list_backups(path)->list` (the pinned `original.jsonc` + the newest 10 of
   the `[0-9]*.jsonc` ring — `original-legacy.jsonc` matches neither and is never offered);
@@ -176,10 +199,11 @@ commit.
   `adopt_original_backup(src_config_path, dst_config_path)->bool` (copies the pre-omodel pin to
   `<dst>/.backup/original-legacy.jsonc`, leaving the source in place and `original.jsonc` free for
   the first save's pin of the unified config).
-- `app.py`: `class OModelApp(App)` (Textual) + `create_app(config_path=None)->OModelApp` (the
-  testable construction half — builds catalog/suggestions/resolver/cfg; the resolver is built even
-  in CatalogUnavailable degraded mode, over the empty catalog) + `run_app(config_path=None)->None`
-  (== `create_app(...).run()`). Stable widget
+- `app.py`: `class OModelApp(App)` (Textual) + `create_app(config_path=None, harness="opencode")
+  ->OModelApp` (the testable construction half — builds catalog/suggestions/resolver/cfg; the
+  resolver is built even in CatalogUnavailable degraded mode, over the empty catalog) +
+  `run_app(config_path=None, harness="opencode")->None` (`create_app(...).run()`, restarted on the
+  other harness when the app exits with `("harness", <name>)` — the `t` key). Stable widget
   IDs as documented in `app.py`'s docstring. Every cfg mutation routes through `_record`/`_stage_row`
   (which push onto `History`); `u` undo / `ctrl+r` redo; dirtiness is `_is_dirty()` (serialize vs
   `_saved_text`), not a flag.
@@ -201,10 +225,10 @@ commit.
   deep-copied in and out. Consumed only by `app.py`.
 - `presets.py`: `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass
   Store(presets, active)` with `.current()->Preset|None` and `.is_empty()->bool`;
-  `load(config_path)->Store` (a DENSE, unbounded list; missing/corrupt/wrong-version → empty
+  `load(config_path, harness="opencode")->Store` (a DENSE, unbounded list; missing/corrupt/wrong-version → empty
   store, never raises; `active` normalized into range; MIGRATES the original fixed-3 shape —
   `null` holes dropped, `active` following the preset it named);
-  `write(config_path, store)->Store` (**the ONLY disk write in this module** — atomic, RAISES on
+  `write(config_path, store, harness="opencode")->Store` (**the ONLY disk write in this module** — atomic, RAISES on
   failure so app.py notifies, returns the store as read back; an existing file `load` cannot use
   is moved to `<path>.corrupt` (or `.corrupt.N`) first, since `load` degrades it to an empty store
   the app would otherwise clobber; writes through a symlink); `adopt(src_config_path, dst_config_path)->int|None` (one-time hand-over of
@@ -220,7 +244,8 @@ commit.
   `store_fingerprint(store)` (has `s` anything to persist? — excludes `saved_at`),
   `model_count(preset)`, `sanitize_name(text, index)` (also strips `[`/`]` — Textual parses plain
   strings as markup, and a persisted name crashed every launch), `timestamp()`,
-  `presets_path(config_path)`;
+  `presets_path(config_path, harness="opencode")` (`.omodel-presets-native.json` for native — a
+  separate list);
   constants `FILE_VERSION`, `MAX_NAME = 24`, `DEFAULT_NAME`. The `managed` argument is the node
   that HOLDS `agents`/`categories` (`Session.managed`), not necessarily the whole config — that
   is what keeps this module a leaf with no knowledge of the `"[opencode]"` scope. Stored at
@@ -232,18 +257,21 @@ commit.
   nothing else anywhere writes either file.
 - `session.py`: the headless core BOTH `app.py` and `cli.py` edit through (decision #18).
   Module-level: `SUBKINDS`, `GPT_ONLY_AGENTS`, `ULTRAWORK_AGENTS`; `is_gpt_model(id)->bool`;
-  `subkinds_for(name)->tuple`; `is_no_variant(v)->bool`; `coerce_dict(parent, key)->dict`;
+  `subkinds_for(name, harness="opencode")->tuple` (`()` under native); `is_no_variant(v)->bool`; `coerce_dict(parent, key)->dict`;
   `gpt_only(target)->bool`; `target_label(target)->str`; `split_target(target)->tuple|None`
-  (shape only — existence is `Session.is_known`); `managed_root(cfg)->dict` (re-export of
+  (shape only — existence is `Session.is_known`); `managed_root(cfg, harness="opencode")->dict` (re-export of
   `config_io.managed_root`, so app.py/cli.py reach the scope through one place);
   `REASONING_KEYS = ("reasoning", "variant", "reasoningEffort")`;
   `read_variant(node)->str|None` (omo's read precedence);
-  `variant_key_for(cfg, subkind)->str` (which spelling to WRITE — `reasoning` for
-  agents/categories on a unified document, `variant` for legacy AND for
-  `ultrawork`/`compaction` in both scopes). `@dataclass Session(catalog, suggestions,
-  resolver, cfg, config_path, catalog_error=None, scaffold_text=None)` with
+  `variant_key_for(cfg, subkind, harness="opencode")->str` (which spelling to WRITE — `reasoning`
+  for agents/categories on a unified document and always under native, `variant` for legacy AND
+  for `ultrawork`/`compaction` in both scopes); `class HarnessUnavailable(Exception)`;
+  `harness_problem(config_path, harness, suggestions=None)->str|None`.
+  `@dataclass Session(catalog, suggestions, resolver, cfg, config_path, catalog_error=None,
+  scaffold_text=None, harness="opencode")` with
   `__post_init__`-filled `store`, `sync_conflict`, `saved_text`, `saved_store_fp`,
-  `adopted_presets`; classmethod `build(config_path=None, scaffold=True)` (the CLI passes False);
+  `adopted_presets`; classmethod `build(config_path=None, scaffold=True, harness="opencode")`
+  (the CLI passes scaffold=False; raises HarnessUnavailable);
   `.managed` (property, the agents/categories-holding node) and `.scope` (property,
   `"opencode"`/`"root"`, surfaced as `config_scope` by `show --json`);
   `.degraded` (property, `not catalog.connected`); `.known_targets()->list`;
@@ -306,7 +334,9 @@ commit.
   object rule rather than importing it (drift there can only mis-draw the `●`; see DESIGN §presets.py).
 
 ## Bundled data (generated — do not hand-edit; regenerate with `--refresh-omo`)
-- `data/omo-suggestions.json` — 11 agents, 9 categories. Consume via `suggestions.load()`.
+- `data/omo-suggestions.json` — 11 agents, 9 categories, plus `native: {agents, categories}`
+  (OmO Native's chains from senpi-task; absent from a pre-5.0 omo). Consume via
+  `suggestions.load()` / `.for_harness()`.
   **The omo version/commit is not pinned here** — a weekly CI job refreshes this file from omo's
   newest stable tag, so any number written down goes stale within days; read `meta.omoVersion` /
   `meta.omoCommit` out of the file itself. Only those TWO counts are pinned (asserted by
@@ -323,6 +353,10 @@ commit.
     reddening a `== 9` pin on a rename that changed no behaviour. Checked structurally instead
     (`test_known_variants_cover_what_chains_use`).
 - `data/default-config.jsonc` — oModel's own minimal starter.
+- `data/native-auth.json` — `{meta, envKeys: {provider: [env var, …]}}`, pi-ai's provider →
+  API-key env-var map, read by `catalog.native_logins`. NOT refreshed by `--refresh-omo` (pi-ai is
+  an npm dependency, not in the omo repo): regenerate by hand with
+  `bun run src/omodel/tools/snapshot_native_auth.ts <pi-ai dir>` when omo-ai moves its engine pin.
 
 ## Appendix — module ownership (from the original fan-out)
 
