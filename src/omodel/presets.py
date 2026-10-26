@@ -83,6 +83,11 @@ class Preset:
     saved_at: str
     agents: dict
     categories: dict
+    # OmO Native's main-session model, `{"model": "provider/model", "reasoning"?: level}`, or
+    # None for "this preset doesn't set it". Native presets only; it lives in omo's
+    # settings.json/state.json rather than the config, so it is NOT part of `fingerprint` (the
+    # launch match) — omo rewrites those files itself. See DESIGN §Main model.
+    main: dict | None = None
 
 
 @dataclass
@@ -148,7 +153,19 @@ def _entry(raw) -> Preset | None:
         saved_at=saved_at if isinstance(saved_at, str) else "",
         agents=_as_map(raw.get("agents")),
         categories=_as_map(raw.get("categories")),
+        main=_as_main(raw.get("main")),
     )
+
+
+def _as_main(value) -> dict | None:
+    """A stored main model: a copy holding a string `model` (and `reasoning` when it is a
+    string), else None."""
+    if not isinstance(value, dict) or not isinstance(value.get("model"), str) or not value["model"]:
+        return None
+    out = {"model": value["model"]}
+    if isinstance(value.get("reasoning"), str) and value["reasoning"]:
+        out["reasoning"] = value["reasoning"]
+    return out
 
 
 def normalize_active(store: Store) -> Store:
@@ -207,6 +224,8 @@ def _payload(store: Store) -> str:
                         "saved_at": p.saved_at,
                         "agents": _as_map(p.agents),
                         "categories": _as_map(p.categories),
+                        # Only when set, so an opencode presets file keeps its shape.
+                        **({"main": _as_main(p.main)} if _as_main(p.main) else {}),
                     }
                     for p in store.presets
                 ],
@@ -334,18 +353,20 @@ def write(config_path: str, store: Store, harness: str = "opencode") -> Store:
     return load(config_path, harness)
 
 
-def capture(name: str, managed: dict) -> Preset:
+def capture(name: str, managed: dict, main: dict | None = None) -> Preset:
     """Snapshot the editable state under `name` — staged edits included. Deep-copied IN
     (`_as_map`), so later edits can't mutate the stored preset.
 
     `managed` is the node that HOLDS `agents`/`categories`, not necessarily the whole config:
     on omo's unified document that is `cfg["[opencode]"]`. Callers pass `Session.managed`; this
-    module stays a leaf and never has to know which scope it is looking at."""
+    module stays a leaf and never has to know which scope it is looking at. `main` is the live
+    native main model (`Session.main_node`), or None."""
     return Preset(
         name=name,
         saved_at=timestamp(),
         agents=_as_map(managed.get("agents")),
         categories=_as_map(managed.get("categories")),
+        main=_as_main(main),
     )
 
 
@@ -356,12 +377,12 @@ def assignments(preset: Preset) -> tuple:
     return _as_map(preset.agents), _as_map(preset.categories)
 
 
-def seeded(managed: dict, name: str = DEFAULT_NAME) -> Store:
+def seeded(managed: dict, name: str = DEFAULT_NAME, main: dict | None = None) -> Store:
     """The first-launch store: preset 1 captured from your existing config, active.  Returned
     IN MEMORY, never written — the first `s` materializes it (one write rule).  Until then a
     fresh launch that changes nothing stays clean, and re-seeding next time is identical.
     `managed` is the agents/categories-holding node — see `capture`."""
-    return Store(presets=[capture(name, managed)], active=0)
+    return Store(presets=[capture(name, managed, main)], active=0)
 
 
 def matching_index(store: Store, managed: dict):
@@ -377,8 +398,8 @@ def matching_index(store: Store, managed: dict):
 
 def model_count(preset: Preset) -> int:
     """How many targets the preset actually assigns — agents, their ultrawork/compaction
-    sub-targets, and categories.  The `12 models` half of the pane's border subtitle."""
-    total = 0
+    sub-targets, categories, and a native preset's main model.  The `12 models` half of the pane's border subtitle."""
+    total = 1 if _as_main(preset.main) else 0
     for data in _as_map(preset.agents).values():
         if not isinstance(data, dict):
             continue
@@ -484,7 +505,8 @@ def store_fingerprint(store: Store) -> str:
         {
             "active": store.active,
             "presets": [
-                {"name": p.name, "assignments": fingerprint(p.agents, p.categories)}
+                {"name": p.name, "assignments": fingerprint(p.agents, p.categories),
+                 "main": _canon(_as_main(p.main) or {})}
                 for p in store.presets
             ],
         },

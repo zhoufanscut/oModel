@@ -48,6 +48,9 @@ class Suggestions:
     # OmO Native's {"agents", "categories"} (same requirement shape; DESIGN §Harnesses), or None
     # when the snapshot predates it. Reached through `for_harness("native")`.
     native: dict | None = None
+    # The native MAIN session model's suggestion — omo's model-profile lanes as one
+    # {"fallbackChain": [...]} — or None (opencode, or a snapshot without it). Set by `for_harness`.
+    main: dict | None = None
 
     def for_harness(self, harness: str) -> Suggestions | None:
         """This data as `harness` sees it: itself for opencode; for native, a copy whose
@@ -64,6 +67,7 @@ class Suggestions:
             families=self.families,
             known_variants=self.known_variants,
             native=self.native,
+            main=self.native.get("main") if isinstance(self.native.get("main"), dict) else None,
         )
 
     def detect_family(self, model_id: str) -> Family | None:

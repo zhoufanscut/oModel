@@ -119,6 +119,8 @@ class Resolver:
         happens to name none of them."""
         toks: set = set(_TIER_TOKENS)
         reqs = list(self.suggestions.agents.values()) + list(self.suggestions.categories.values())
+        if self.suggestions.main:
+            reqs.append(self.suggestions.main)
         for req in reqs:
             for entry in req.get("fallbackChain", []):
                 mid = entry.get("model") or ""
@@ -246,7 +248,7 @@ class Resolver:
         Rows are deduped by resolved 'provider/model' (higher-priority entry/provider wins).
         Every row is source 'omo'; warn ⊆ {'variant'}. Does NOT append `+ add model…`.
         `target` is a §Data-contracts id: 'agent:<n>' | 'agent:<n>.ultrawork' |
-        'agent:<n>.compaction' | 'cat:<n>'."""
+        'agent:<n>.compaction' | 'cat:<n>' | 'main' (native only)."""
         requirement = self._requirement_for(target)
         if requirement is None:
             return []
@@ -395,7 +397,10 @@ class Resolver:
     # ------------------------------------------------------------------
 
     def _requirement_for(self, target: str) -> dict | None:
-        """Look up the requirement dict for `target` in agents/categories."""
+        """Look up the requirement dict for `target` in agents/categories — or, for the native
+        `main` target, omo's model-profile lanes (`Suggestions.main`)."""
+        if target == "main":
+            return self.suggestions.main
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
             # Sub-target agent:<name>.ultrawork|.compaction inherits the PARENT agent's

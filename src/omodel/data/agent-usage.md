@@ -40,6 +40,7 @@ agent:<name>                 e.g. agent:sisyphus
 agent:<name>.ultrawork       only on agents where omo honors it (sisyphus)
 agent:<name>.compaction      valid on every agent
 cat:<name>                   e.g. cat:quick
+main                         --harness native only: the model omo's TUI starts on
 ```
 
 Do not guess names — enumerate them:
@@ -102,7 +103,8 @@ Failures also come back as JSON when you pass `--json`:
 
 `error` is a stable slug: `unknown_target`, `bad_value`, `unavailable`, `bad_variant`,
 `gpt_only`, `unknown_preset`, `active_preset`, `bad_input`, `write_failed`,
-`harness_unavailable` (`--harness native` on a config OmO Native never reads — exit 3), and
+`harness_unavailable` (`--harness native` on a config OmO Native never reads — exit 3),
+`main_unwritable` (omo's settings can't be edited for `main` — see §11), and
 `bad_config` (the config file could not be read or parsed — an exit 1, so stop and report it). A mistyped
 command line (unknown verb or flag, missing argument) is `bad_input` with exit 2.
 
@@ -273,5 +275,14 @@ Under `--harness native`:
   (`off` … `max`) — omo moves an unsupported level to the nearest one the model has. A model that
   doesn't think gets `[]`.
 - **Presets** are a separate list; `preset` verbs see only native's.
-- Not managed: the main session model (omo's `/model` and `model_profile`) — omodel sets the
-  helper agents and categories only.
+- **`main`** is the model the interactive `omo` starts a new session on. It is stored in omo's
+  `~/.omo/agent/settings.json` (and its reasoning level in `state.json`), not in `omo.jsonc`;
+  omodel changes only those keys. `candidates main` lists omo's model-profile lanes. Leave out
+  `--variant` to keep the level omo already remembers for that model. `main_unwritable` (exit 3)
+  means omo uses a `settings.jsonc` there or a file can't be read — tell the user. `omodel check`
+  reports `main_shadowed` when omo's `enabledModels` is set, because omo then starts on those
+  instead. omo itself changes `main` too; a preset switch sets it only when that preset has one.
+  Under `main_unwritable`, `preset use` still switches but leaves `main` alone, and its payload
+  says `main_skipped: true` with the reason in `main_skipped_reason`.
+  `show --json` carries the file paths as `main_settings`. omo's `model_profile` is not managed
+  (the TUI ignores it).

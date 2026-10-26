@@ -289,7 +289,7 @@ TUI's `t` key. Everything harness-specific hangs off that one choice:
 | | opencode | native |
 |---|---|---|
 | Managed block | `"[opencode]"` (or root on a legacy file) | `"[native]"` — unified file only |
-| Targets | `data` top level: 11 agents (+ ultrawork/compaction), 9 categories | `data.native`: 7 agents, 10 categories (`architect` is native-only); no sub-targets |
+| Targets | `data` top level: 11 agents (+ ultrawork/compaction), 9 categories | `main` (§Main model) + `data.native`: 7 agents, 10 categories (`architect` is native-only); no sub-targets |
 | What you have | `opencode models` | `omo --list-models` × your logins (below) |
 | Variants offered | opencode `--verbose` per model | omo's ladder when the engine lists the model as `thinking: yes` |
 | Presets file | `.omodel-presets.json` | `.omodel-presets-native.json` |
@@ -299,7 +299,7 @@ TUI's `t` key. Everything harness-specific hangs off that one choice:
 **Targets.** Native's chains live in `packages/senpi-task/src/{category,agents/builtin}/
 fallback-chains.ts`, not model-core, with native's own provider ids (`chatgpt-subscription`,
 `anthropic-subscription`, `zai`, `kimi-coding`). `tools/snapshot_omo.ts` extracts them into the
-same bundled JSON under `native: {agents, categories}`, in the same `{providers, model, variant}`
+same bundled JSON under `native: {agents, categories, main}` (`main`: §Main model), in the same `{providers, model, variant}`
 shape, so `resolve.py` runs unchanged on a `Suggestions` whose agents/categories are native's
 (`Suggestions.for_harness`). The three ulw reviewer agents (`omo-native-code-reviewer`,
 `-qa-executor`, `-gate-reviewer`) have no chain of their own — they resolve through the
@@ -375,8 +375,67 @@ only its own entry. And the opencode harness's first save into a document with n
 block yet (a native-only one, say) is the clean rewrite, so the file's comments go: the splice
 that inserts a missing block is native-only.
 
-**Out of scope (v1):** the main session model (the engine's `/model` + `settings.json`, and
-`model_profile`), `models` chains (omodel writes `model` + `reasoning`), project-level
+### Main model (native)
+
+The `main` target is the model the interactive `omo` TUI starts a fresh session on. It is not in
+`omo.jsonc`. Read from source (senpi `core/sdk.js` + `core/model-resolver.js` `findInitialModel`,
+omo-senpi `components/model-profile/index.ts`; omo-ai 5.1.48, 2026-10-26 — not observed at
+runtime), the startup model is the first of: `--provider/--model`; a resumed session's own model;
+scoped models (`--models`, or `enabledModels` in settings.json); `defaultProvider` +
+`defaultModel` from `<agent dir>/settings.json` when that provider is logged in; a per-provider
+default. Then omo's `model-profile` extension replaces it with `[native].model_profile` (or the
+default lane) — but **only** for a fresh desktop (rpc) or headless session whose model came from
+settings or the provider default. The interactive TUI skips it ("Lanes have no TUI surface yet").
+So `main` writes settings.json, not `model_profile`: the TUI is what users run.
+
+- **Files.** `defaultProvider` + `defaultModel` in `settings.json`, and the level in `state.json`
+  `modelThinkingLevels["provider/model"]` (plus `modelLastOnThinkingLevels` unless `off`, as
+  senpi's own setter does) — senpi reads that per-model level before `defaultThinkingLevel`, and
+  keeps it in `state.json` (`STATE_KEYS`), not settings.json. Every other key in both files is
+  kept; both are re-read at save time (omo writes them while it runs) and copied verbatim to the
+  config's `.backup/` as `settings-<ts>.json` / `state-<ts>.json` first (newest 20 each; not in
+  `--restore`'s list). Written as senpi writes them: `JSON.stringify(…, null, 2)`.
+- **Where.** The agent dir (`catalog.native_agent_dir`: `$OMO_CODING_AGENT_DIR`… else
+  `~/.omo/agent`) for the default `~/.omo/omo.jsonc`; `<config_dir>/agent` for any other
+  `--config`, so a temp-path test outside `~/.omo` never touches the real one (a config inside
+  `~/.omo` resolves to `~/.omo/agent` by the same rule).
+- **Levels.** omodel writes only a level you chose, and only when it differs from the remembered
+  one. Picking a model with no level shows the level omo already remembers for it
+  (`Session.set_model`); a level is never erased. Chain rows carry the lane's level, so picking
+  one writes it, as on any target; the remembered level is kept only via add-model or a CLI set
+  without `--variant`. `x` drops `defaultProvider`/`defaultModel` only. On a pre-migration agent
+  dir (the level maps still in settings.json, no state.json) the new state.json map starts from
+  the settings.json copy, since senpi migrates a map only when state.json lacks it.
+- **Refused** (`main_problem`, CLI `main_unwritable`, TUI error toast): a `settings.jsonc` in the
+  agent dir (senpi prefers it; a JSON rewrite would drop its comments), or an unreadable file.
+  A preset switch still goes ahead, leaving the main model as it is, and says so
+  (`Session.main_skipped`: a TUI warning toast, `main_skipped` + `main_skipped_reason` in
+  `preset use --json`). While blocked, existing presets' mains are frozen: the live main is
+  neither taken in at launch nor captured on save (a new or first-launch-seeded preset does take
+  the live one). Once the file can be written again the usual rule resumes: the ACTIVE preset
+  takes whatever settings.json says at that launch; the others keep theirs.
+- **Shadowed** (`omodel check` → `main_shadowed`): a non-empty `enabledModels`, which senpi
+  starts on first. Not visible to omodel: a project `.senpi/settings.json` (merged over the global
+  file per cwd), `--model`, a resumed session.
+- **Suggestions.** omo has no chain for the main model; its model-profile lanes are its
+  recommendation. `snapshot_omo.ts` writes `native.main.fallbackChain` = every builtin lane's rungs
+  in `DEFAULT_MODEL_PROFILE_ORDER` (first occurrence of a model kept), so `resolve.py` treats
+  `main` like any target (`Suggestions.main`).
+- **Presets, leniently.** A native preset may carry `main`. Switching to one that does writes it;
+  one that doesn't leaves the main model alone (and takes the live one on the next save). omo
+  rewrites `defaultModel` itself (senpi calls it "last used"), so `main` is **not** part of the
+  launch match: whatever settings.json says at launch becomes the active preset's main, in memory,
+  never a sync conflict and never dirty. The invariant stays strict for `omo.jsonc`; for `main` it
+  is "last applied".
+- **Save order** `config → settings.json/state.json → presets` (both surfaces). A main-write
+  failure leaves the config ahead; the CLI then reports `config_written: true` (when the config
+  landed in that call) naming the main files and the presets file, and a second save writes the
+  rest once the cause is gone (a transient failure — a lasting
+  `main_problem` is refused before anything is written). The TUI's confirm diff and the
+  CLI's `diff` include both files. Undo carries the main node inside each history snapshot
+  (`app._history_state`, under a NUL-prefixed key popped on restore).
+
+**Out of scope (v1):** `model_profile` (desktop/headless only, see §Main model), `models` chains (omodel writes `model` + `reasoning`), project-level
 `.omo/omo.jsonc`, copying an `[opencode]` setup into `[native]`, and `omo models discover` —
 which rewrites `models.json`, so omodel never runs it.
 
@@ -631,8 +690,9 @@ deliberately not restated here: this shape is the one seam both surfaces and the
 pinned to, and two copies of it in two files is exactly the drift this section exists to prevent.
 In summary:
 
-- `target` id (string): `"agent:<name>"`, `"agent:<name>.ultrawork"`, `"agent:<name>.compaction"`, or
-  `"cat:<name>"` — identical to the §Textual `OptionList#targets` option IDs.
+- `target` id (string): `"agent:<name>"`, `"agent:<name>.ultrawork"`, `"agent:<name>.compaction"`,
+  `"cat:<name>"`, or `"main"` (native only, §Main model) — identical to the §Textual
+  `OptionList#targets` option IDs.
 - `source` (string enum): `"omo"` (a `fallbackChain` entry — exact or same-line substitute) ·
   `"add"` (typed in the add-model modal). (`"mine"` retired — no connected-model dump.)
 - **candidate row** — the dict `candidates()` yields and `app.py` renders, one row per serving

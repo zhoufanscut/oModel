@@ -38,7 +38,7 @@ import os
 from dataclasses import dataclass, field
 
 from . import catalog as catalog_mod
-from . import config_io
+from . import config_io, main_model
 from . import presets as presets_mod
 from . import suggestions as suggestions_mod
 from .catalog import Catalog, CatalogUnavailable, normalize_variant
@@ -66,6 +66,10 @@ ULTRAWORK_AGENTS = frozenset({"sisyphus"})
 # legacy-category-names.ts`). We mirror that, so a config or preset written before 5.0 lands on
 # the target omo actually runs instead of vanishing as an unknown one.
 LEGACY_CATEGORY_ALIASES = {"deep": "deep-low"}
+
+# OmO Native's main-session model: a target of its own, stored in omo's settings.json/state.json
+# rather than the config (`main_model.py`, DESIGN §Main model). Native only.
+MAIN_TARGET = "main"
 
 
 class HarnessUnavailable(Exception):
@@ -252,7 +256,10 @@ def target_label(target: str) -> str:
 def split_target(target: str):
     """`(kind, name, subkind)` for a §Data-contracts target id, or None if it isn't one.
     kind is 'agent' | 'cat'; subkind is the ultrawork/compaction tail or None.
-    Validates only the SHAPE — whether the agent/category exists is `Session.known_targets`."""
+    Validates only the SHAPE — whether the agent/category exists is `Session.known_targets`.
+    `main` → ('main', 'main', None); only a native session knows it."""
+    if target == MAIN_TARGET:
+        return ("main", MAIN_TARGET, None)
     if target.startswith("agent:"):
         rest = target[len("agent:"):]
         if "." in rest:
@@ -301,6 +308,11 @@ class Session:
     saved_text: str = field(init=False, default="")
     saved_store_fp: str = field(init=False, default="")
     adopted_presets: int | None = field(init=False, default=None)
+    # Native only: what `main_model.load` read (path, `problem`, `shadowed_by`), the live main
+    # node — edited like an agent node — and its dirtiness baseline.
+    main: main_model.MainState | None = field(init=False, default=None)
+    main_node: dict = field(init=False, default_factory=dict)
+    saved_main_fp: str = field(init=False, default="")
 
     def __post_init__(self) -> None:
         # A pre-5.0 `deep` is read as `deep-low`, as omo reads it. Before the baseline, so the
@@ -311,6 +323,10 @@ class Session:
         # state reads clean and a structural-but-unserialized change (an empty sub-object) is
         # undoable yet never marks the file dirty.
         self.saved_text = config_io.serialize(self.cfg)
+        if self.harness == "native":
+            self.main = main_model.load(self.config_path)
+            self.main_node = dict(self.main.node)
+        self.saved_main_fp = main_model.fingerprint(self.main_node)
         # The presets store for THIS config (presets.py; decision #17). Read best-effort; a
         # missing or mangled file is SEEDED in memory from the config you already have, so there
         # is always at least one preset and the invariant holds from the first frame. NOTHING is
@@ -319,12 +335,22 @@ class Session:
             self._adopt_legacy_presets()  # the stranded store is an opencode one
         self.store = presets_mod.load(self.config_path, self.harness)
         if self.store.is_empty():
-            self.store = presets_mod.seeded(self.managed)
+            self.store = presets_mod.seeded(self.managed, main=self.live_main())
         # Presets captured before omo's reasoning rename carry `variant`; applied to a unified
         # config that spelling resolves behind `reasoning` and the switch would silently no-op.
         # Done BEFORE the dirtiness baseline below, so a rename alone never reads as unsaved.
         self._normalize_store_spelling()
         self._reconcile()
+        # The main model is omo's to change too (DESIGN §Main model): whatever settings.json says
+        # now is the active preset's main — taken in quietly, never a sync conflict. A preset
+        # that sets none keeps none.
+        # Not while omo's settings can't be written: omodel applies no main model then, so the
+        # presets keep the main they last had (DESIGN §Main model).
+        current = self.store.current()
+        if self.harness == "native" and current is not None and not self.main_problem and (
+            current.main is not None or self.live_main() is not None
+        ):
+            current.main = self.live_main()
         # Taken AFTER the reconcile, so a re-point alone reads clean.
         self.saved_store_fp = presets_mod.store_fingerprint(self.store)
 
@@ -482,7 +508,7 @@ class Session:
         (`subkinds_for`), then the categories. Sub-targets are included whether or not the config
         currently carries them — they are addressable, which is what a caller enumerating targets
         needs to know."""
-        out: list = []
+        out: list = [MAIN_TARGET] if self.harness == "native" else []
         for name in self.suggestions.agents:
             out.append(f"agent:{name}")
             for kind in subkinds_for(name, self.harness):
@@ -498,6 +524,8 @@ class Session:
         if parts is None:
             return False
         kind, name, sub = parts
+        if kind == "main":
+            return self.harness == "native"
         if kind == "cat":
             return name in self.suggestions.categories
         if name not in self.suggestions.agents:
@@ -521,7 +549,10 @@ class Session:
 
     def node_for(self, target: str):
         """The dict node holding {model, reasoning|variant} for `target` in cfg, or None if its
-        parent agent/category isn't present. Does NOT create nodes."""
+        parent agent/category isn't present. Does NOT create nodes.
+        `main` is the live main node (native only)."""
+        if target == MAIN_TARGET:
+            return self.main_node if self.harness == "native" else None
         managed = self.managed
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
@@ -543,6 +574,8 @@ class Session:
         object / sub-object are created on demand so edits can land. Every level goes through
         `coerce_dict`, so a hand-edited config's non-dict value anywhere along the path is coerced
         back to `{}` instead of crashing or handing back a non-dict node."""
+        if target == MAIN_TARGET:
+            return self.main_node
         root = config_io.managed_root_for_write(self.cfg, self.harness)
         if target.startswith("agent:"):
             rest = target[len("agent:"):]
@@ -646,8 +679,13 @@ class Session:
 
         The reasoning level is written under ONE spelling (`variant_key_for`) and the other two
         are removed from the node, so no stale key survives to outrank the one omodel just
-        wrote."""
+        wrote.
+
+        `main` with no level takes the level omo already remembers for that model, so the node
+        shows what omo will start with (omodel never erases a remembered level)."""
         variant = normalize_variant(variant)
+        if target == MAIN_TARGET and is_no_variant(variant) and self.main is not None:
+            variant = main_model.remembered_level(self.main.agent_dir, f"{provider}/{model}")
         node = self.ensure_node(target)
         node["model"] = f"{provider}/{model}"
         parsed = split_target(target)
@@ -685,6 +723,48 @@ class Session:
         if isinstance(agent, dict):
             agent.pop(kind, None)
 
+    # ----- the native main model ------------------------------------------------------
+
+    def live_main(self) -> dict | None:
+        """A copy of the live main node when it names a model, else None — what a preset stores."""
+        if self.main_node.get("model"):
+            return copy.deepcopy(self.main_node)
+        return None
+
+    def set_main_node(self, node: dict | None) -> None:
+        """Replace the live main node's content IN PLACE (callers hold it by identity)."""
+        self.main_node.clear()
+        self.main_node.update(copy.deepcopy(node or {}))
+
+    @property
+    def main_problem(self) -> str | None:
+        """Why the main model can't be written (a settings.jsonc, an unreadable file), or None."""
+        return self.main.problem if self.main is not None else None
+
+    def main_skipped(self, index: int) -> str | None:
+        """Why switching to preset `index` will leave the main model as it is although the preset
+        sets a different one (omo's settings can't be written), or None. The switch still goes
+        ahead — the surfaces only say so."""
+        preset = self.store.presets[index]
+        if not self.main_problem or preset.main is None or preset.main == self.live_main():
+            return None
+        return (
+            f"the main model stays as it is ({preset.name!r} sets "
+            f"{preset.main.get('model')}): {self.main_problem}"
+        )
+
+    def main_is_dirty(self) -> bool:
+        return main_model.fingerprint(self.main_node) != self.saved_main_fp
+
+    def save_main(self) -> list:
+        """Write the main model into settings.json/state.json and re-baseline; returns the files
+        written. Nothing to do → `[]`. Raises on failure (and on `main_problem`)."""
+        if self.main is None or not self.main_is_dirty():
+            return []
+        written = main_model.save(self.main, self.main_node, self.config_path)
+        self.saved_main_fp = main_model.fingerprint(self.main_node)
+        return written
+
     # ----- presets --------------------------------------------------------------------
 
     def projected_store(self) -> presets_mod.Store:
@@ -697,10 +777,21 @@ class Session:
         store = copy.deepcopy(self.store)
         current = store.current()
         if current is not None:
-            fresh = presets_mod.capture(current.name, self.managed)
+            # A preset without a main keeps none until a main model is actually set. While omo's
+            # settings can't be written the live main can't change, and is not taken in: the
+            # preset keeps its own for when they can.
+            if self.harness != "native":
+                main = None
+            elif self.main_problem:
+                main = current.main
+            else:
+                main = self.live_main()
+            fresh = presets_mod.capture(current.name, self.managed, main)
             same = presets_mod.fingerprint(
                 current.agents, current.categories
-            ) == presets_mod.fingerprint(fresh.agents, fresh.categories)
+            ) == presets_mod.fingerprint(fresh.agents, fresh.categories) and (
+                current.main == fresh.main
+            )
             if same:
                 fresh.saved_at = current.saved_at  # unchanged content keeps its stamp
             store.presets[store.active] = fresh
@@ -751,6 +842,11 @@ class Session:
         else:
             self.store = self.projected_store()  # bank the in-flight edits into the old preset
         self.store.active = index
+        # The main model follows a preset that sets one; one that doesn't leaves it as it is —
+        # and so does every switch while omo's settings can't be written (callers say so:
+        # `main_skipped`).
+        if self.harness == "native" and preset.main is not None and not self.main_problem:
+            self.set_main_node(preset.main)
         agents, categories = presets_mod.assignments(preset)  # deep-copied OUT: never alias
         if (
             self.harness == "native"
@@ -780,7 +876,7 @@ class Session:
             self.store = self.projected_store()  # bank the in-flight edits into the old preset
         at = len(self.store.presets)
         name = presets_mod.sanitize_name(name, at)
-        self.store.presets.append(presets_mod.capture(name, self.managed))
+        self.store.presets.append(presets_mod.capture(name, self.managed, self.live_main()))
         self.store.active = at
         return at
 
@@ -799,13 +895,20 @@ class Session:
         text last written/loaded) OR the presets file. Both, because a save writes both and
         quitting discards both. NB: an empty ultrawork/compaction sub-object serializes away, so
         adding one is undoable but does NOT count as dirty — there's nothing to save."""
-        return self.config_is_dirty() or self.store_is_dirty()
+        return self.config_is_dirty() or self.store_is_dirty() or self.main_is_dirty()
 
     def diff(self) -> str:
-        """Unified diff of what a save would write vs what's on disk."""
+        """Unified diff of what a save would write vs what's on disk — the config, then omo's
+        settings.json/state.json when the main model changed."""
         return config_io.diff_text(
             self.cfg, self.config_path, missing_base=self.scaffold_text, harness=self.harness
-        )
+        ) + self.main_diff()
+
+    def main_diff(self) -> str:
+        """The settings.json/state.json part of `diff`, or "" when the main model is unchanged."""
+        if self.main is None or not self.main_is_dirty():
+            return ""
+        return main_model.diff_text(self.main, self.main_node)
 
     # ----- publication ----------------------------------------------------------------
 
@@ -844,5 +947,6 @@ class Session:
         `app.py` deliberately does NOT call this: its save is interactive (diff → confirm) and it
         reports a config-landed-store-didn't failure differently. It calls the two halves."""
         result = self.save_config()
+        self.save_main()
         self.write_store()
         return result

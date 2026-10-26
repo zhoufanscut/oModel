@@ -13,6 +13,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the models you are logged into in omo. Native presets are a separate list. In the TUI, `t`
   switches between opencode and native when nothing is unsaved. Without the flag your config is
   edited as before (apart from the first fix below).
+- Native's main model: a `main` target sets the model `omo` starts a new session on, and its
+  reasoning level. It is stored in omo's `~/.omo/agent/settings.json` and `state.json` (only those
+  keys change, and both files are backed up first), not in `omo.jsonc`. Presets can hold it.
+  `omodel check` warns when omo's `enabledModels` setting would override it.
 
 ### Changed
 

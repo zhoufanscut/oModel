@@ -25,6 +25,10 @@ line when a new one does.
 - **sub-target** — `ultrawork` (model swapped in on an `ulw` message; **Sisyphus-only** — omo honors
   it on no other agent) or `compaction` (auto-summary model, any agent), nested under an agent.
   *Agents only; categories have none.* → DESIGN §Textual contract, session.py `ULTRAWORK_AGENTS`
+- **main (target)** — OmO Native only: the model the interactive `omo` TUI starts a session on.
+  Not an agent and not in `omo.jsonc` — it lives in omo's `settings.json` (`defaultModel`) and
+  `state.json` (its reasoning level). Not omo's `model_profile`, which the TUI ignores.
+  → DESIGN §Main model, main_model.py
 
 ## Recommendation → row
 

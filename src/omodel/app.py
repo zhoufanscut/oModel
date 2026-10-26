@@ -15,7 +15,8 @@ per-target row cache, `_custom_rows`, and all rendering. `cfg` / `_store` / `_sa
 STABLE WIDGET IDs (pilot tests in tests/test_app_pilot.py depend on these — do not rename):
   * Static#providers      — "oModel [<harness>]: <id · id · …>" from catalog.connected
                             (first-seen); on CatalogUnavailable the label + the banner + `r` retry.
-  * OptionList#targets     — AGENTS then CATEGORIES. Option IDs: 'agent:<name>',
+  * OptionList#targets     — (native: MAIN first) AGENTS then CATEGORIES. Option IDs: 'main'
+                            (native only), 'agent:<name>',
                             'agent:<name>.ultrawork' / '.compaction' (indented sub-rows),
                             'cat:<name>'.
   * OptionList#presets     — the named presets (decision #17 / presets.py), a card under
@@ -169,6 +170,10 @@ PRESET_NEW = "preset:new"
 # out-of-range int would do; a named sentinel keeps `_restore_state`'s "was deleted" branch
 # readable, and negative can never collide with a real index.
 _DELETED = -1
+
+# The key the native main model rides under inside an undo snapshot (`_history_state`). No JSON
+# config key can start with a NUL, so it never collides with one.
+_MAIN_KEY = "\0omodel-main"
 
 
 def _retarget_active(active, was: int, now: int):
@@ -1449,7 +1454,7 @@ class OModelApp(App):
         # Built last: entry 0's `aux` needs `_custom_rows` and the reconciled `_store` (see
         # _aux — the active preset index rides with every undo step). Reads self.cfg, not the
         # `cfg` parameter, which is None on the prebuilt-session path.
-        self._history = History(self.cfg, aux=self._aux())
+        self._history = History(self._history_state(), aux=self._aux())
         # The target id currently shown in the right pane.
         self._current_target: str | None = None
         # Per-target memory of the highlighted candidate, keyed by target id → the row's stable
@@ -1653,6 +1658,10 @@ class OModelApp(App):
                 prior = None
 
         targets.clear_options()
+        if self.session.harness == "native":
+            # The main session model (omo's settings.json, not the config — DESIGN §Main model).
+            targets.add_option(Option("MAIN", id="hdr:main", disabled=True))
+            targets.add_option(Option(_lit("  main"), id=session_mod.MAIN_TARGET))
         targets.add_option(Option("AGENTS", id="hdr:agents", disabled=True))
         for name in self.suggestions.agents:
             targets.add_option(Option(_lit(f"  {name}"), id=f"agent:{name}"))
@@ -1863,6 +1872,9 @@ class OModelApp(App):
         if index == self._store.active:
             self.notify(f"Already editing '{preset.name}'.")
             return
+        skipped = self.session.main_skipped(index)
+        if skipped is not None:
+            self.notify(skipped[:1].upper() + skipped[1:], severity="warning")  # not .capitalize(): it lowercases paths and ids
         came_from = self._store.active
         self.session.switch_preset(index)  # banks the in-flight edits into the preset you leave
         # `_record` no-ops when the two presets hold identical models; the active index has
@@ -2418,15 +2430,36 @@ class OModelApp(App):
         Returns whether a snapshot was actually pushed. `_switch_preset` needs that: a no-op
         push leaves the previous entry's aux in place, and restoring from it would undo the very
         switch that called this."""
-        pushed = self._history.push(self.cfg, label, aux=self._aux())
+        pushed = self._history.push(self._history_state(), label, aux=self._aux())
         # Your edits go into the preset you're on, and its row shows their model count — so the
         # pane follows every staged edit, through the one chokepoint they all pass through.
         self._populate_presets()
         return pushed
 
+    def _history_state(self) -> dict:
+        """What one undo step holds: a copy of cfg, plus — under native — the main model, which
+        lives outside cfg (omo's settings.json) but must undo with everything else. It rides
+        under `_MAIN_KEY`, which `_restore_state` pops before cfg is replaced, so it never
+        reaches a save."""
+        if self.session.harness != "native":
+            return self.cfg
+        return {**self.cfg, _MAIN_KEY: dict(self.session.main_node)}
+
+    def _main_blocked(self, target: str) -> bool:
+        """Refuse an edit to `main` when omo's settings can't be written — say why, and bell."""
+        if target == session_mod.MAIN_TARGET and self.session.main_problem:
+            self.notify(
+                f"The main model can't be written: {self.session.main_problem}",
+                severity="error",
+            )
+            return True
+        return False
+
     def _stage_row(self, target: str, row: dict, label: str) -> None:
         """Write the chosen candidate row into the cfg node, re-render, and record an undo
         snapshot under `label`."""
+        if self._main_blocked(target):
+            return
         self.session.set_row(target, row)
         # The assignment changed, so _build_rows' synthesized current-off-chain row may no longer
         # apply (picked a chain model) or now describes a different model — drop the cache so it
@@ -2551,6 +2584,8 @@ class OModelApp(App):
             name, kind = target[len("agent:"):].split(".", 1)
             self._delete_subtarget(target, name, kind)
             return
+        if self._main_blocked(target):
+            return
         self.session.clear(target)
         # Drop the cache so _build_rows stops synthesizing the now-cleared off-chain row.
         self._rows.pop(target, None)
@@ -2593,11 +2628,13 @@ class OModelApp(App):
         if len(keep) == len(customs):
             return False  # a chain row, or the synthesized off-chain one — not yours to delete
         ident = f"{row['provider']}/{row['model']}"
+        clears = self._current_assignment(target)[0] == ident
+        if clears and self._main_blocked(target):
+            return True  # before anything changes: the row and the assignment go together
         if keep:
             self._custom_rows[target] = keep
         else:
             self._custom_rows.pop(target, None)
-        clears = self._current_assignment(target)[0] == ident
         if clears:
             # Through `Session.clear`, never by hand: it is the one place that knows every
             # spelling of the reasoning key. Popping `"variant"` here left a live `reasoning`
@@ -2898,6 +2935,9 @@ class OModelApp(App):
             and not self.session.sync_conflict
         ):
             self._store = self._projected_store()
+        main = state.pop(_MAIN_KEY, None)
+        if self.session.harness == "native":
+            self.session.set_main_node(main)
         self.cfg = state
         self._custom_rows = aux.get("custom_rows") or {}
         # Pending `v` picks are NOT snapshotted into aux (they aren't cfg, and a `v` on a
@@ -2973,7 +3013,11 @@ class OModelApp(App):
         unreadable mid-session): surface it the same way, since an exception here would close
         the app and take every staged edit with it."""
         try:
-            diff = config_io.diff_text(self.cfg, self.config_path, harness=self.session.harness)
+            config_diff = config_io.diff_text(
+                self.cfg, self.config_path, harness=self.session.harness
+            )
+            # The native main model's settings.json/state.json change rides in the same confirm.
+            diff = config_diff + self.session.main_diff()
         except Exception as exc:
             self.notify(f"Save failed: {exc}", severity="error")
             return
@@ -2990,6 +3034,11 @@ class OModelApp(App):
             # a backup or touches the ring when the render matches disk, so this writes nothing.
             try:
                 self.session.save_config()
+                # Same for the main model: a node that differs from its baseline only in what
+                # omo already has (a level-less preset main over a remembered level) writes
+                # nothing, but must re-baseline, or `q`/`t` would see unsaved work forever.
+                if not self.session.main_problem:
+                    self.session.save_main()
             except Exception as exc:
                 self.notify(f"Save failed: {exc}", severity="error")
                 return
@@ -3007,7 +3056,7 @@ class OModelApp(App):
         original = os.path.join(
             os.path.dirname(os.path.abspath(self.config_path)), ".backup", "original.jsonc"
         )
-        if not os.path.exists(original):
+        if config_diff.strip() and not os.path.exists(original):
             body = (
                 "⚠ First save rewrites agents/categories clean, dropping their commented-out "
                 "palette. Everything outside those two (other keys, comments, commented-out "
@@ -3026,6 +3075,16 @@ class OModelApp(App):
             except Exception as exc:  # surface, don't crash the app
                 self.notify(f"Save failed: {exc}", severity="error")
                 return
+            # Then omo's settings.json/state.json (the main model). If that fails the config is
+            # ahead; the presets file waits too, and a second `s` writes both.
+            try:
+                main_written = bool(self.session.save_main())
+            except Exception as exc:
+                self.notify(
+                    f"Config saved — the main model (omo settings) was not: {exc}",
+                    severity="error",
+                )
+                return
             # Config first — it is the artifact with the backup and the diff you just approved,
             # so a failure there aborts before the presets file moves. If the presets write then
             # fails, the config is ahead of the store: `_write_store` says so plainly, and a
@@ -3039,7 +3098,7 @@ class OModelApp(App):
                     severity="warning",
                 )
             else:
-                self.notify("Saved." if result.changed else "Nothing to save.")
+                self.notify("Saved." if result.changed or main_written else "Nothing to save.")
             if wrote_store and then is not None:
                 then()
 

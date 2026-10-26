@@ -31,7 +31,9 @@ one without updating this file: both surfaces (`app.py`, `cli.py`) and the agent
 ## Shared shapes (the integration seam)
 
 **`target` id** (string): `"agent:<name>"` · `"agent:<name>.ultrawork"` ·
-`"agent:<name>.compaction"` · `"cat:<name>"` — identical to the `OptionList#targets` option IDs.
+`"agent:<name>.compaction"` · `"cat:<name>"` · `"main"` (native only — OmO Native's main session
+model, stored in omo's settings.json/state.json; DESIGN §Main model) — identical to the
+`OptionList#targets` option IDs.
 
 **`source` enum** (string): `"omo"` (a fallbackChain entry — exact or same-line substitute) ·
 `"add"` (an off-chain pick — typed in the add-model modal, or the target's current off-chain
@@ -223,7 +225,9 @@ commit.
   `can_undo`/`can_redo`/`undo_label`/`redo_label` properties. `aux` is an out-of-cfg companion
   snapshot (app.py stores `_custom_rows` + the active preset index). Pure data; snapshots
   deep-copied in and out. Consumed only by `app.py`.
-- `presets.py`: `@dataclass Preset(name, saved_at, agents, categories)`; `@dataclass
+- `presets.py`: `@dataclass Preset(name, saved_at, agents, categories, main=None)` (`main` =
+  `{"model", "reasoning"?}` or None; native only, written to the file only when set, never part
+  of `fingerprint` — but part of `store_fingerprint`); `@dataclass
   Store(presets, active)` with `.current()->Preset|None` and `.is_empty()->bool`;
   `load(config_path, harness="opencode")->Store` (a DENSE, unbounded list; missing/corrupt/wrong-version → empty
   store, never raises; `active` normalized into range; MIGRATES the original fixed-3 shape —
@@ -234,9 +238,9 @@ commit.
   the app would otherwise clobber; writes through a symlink); `adopt(src_config_path, dst_config_path)->int|None` (one-time hand-over of
   a pre-4.19.3 store to the unified location — writes, reads back, compares names, and only THEN
   deletes the original; any failure leaves it in place. `Session` calls it for the DEFAULT
-  unified path only). Pure helpers: `capture(name, managed)` /
+  unified path only). Pure helpers: `capture(name, managed, main=None)` /
   `assignments(preset)` (deep-copy IN / OUT — the live cfg and a stored Preset never alias),
-  `seeded(managed, name=DEFAULT_NAME)`, `matching_index(store, managed)`, `normalize_active(store)`,
+  `seeded(managed, name=DEFAULT_NAME, main=None)`, `matching_index(store, managed)`, `normalize_active(store)`,
   `fingerprint(agents, categories)` (does the config still reflect a preset? — comparison ONLY,
   never an input to what gets written, and deliberately **spelling-insensitive**: `variant` /
   `reasoning` / `reasoningEffort` fold to one key at both depths via `_canon`, because omodel
@@ -266,11 +270,14 @@ commit.
   `variant_key_for(cfg, subkind, harness="opencode")->str` (which spelling to WRITE — `reasoning`
   for agents/categories on a unified document and always under native, `variant` for legacy AND
   for `ultrawork`/`compaction` in both scopes); `class HarnessUnavailable(Exception)`;
-  `harness_problem(config_path, harness, suggestions=None)->str|None`.
+  `harness_problem(config_path, harness, suggestions=None)->str|None`; `MAIN_TARGET = "main"`.
   `@dataclass Session(catalog, suggestions, resolver, cfg, config_path, catalog_error=None,
   scaffold_text=None, harness="opencode")` with
   `__post_init__`-filled `store`, `sync_conflict`, `saved_text`, `saved_store_fp`,
-  `adopted_presets`; classmethod `build(config_path=None, scaffold=True, harness="opencode")`
+  `adopted_presets`, and (native) `main` (`main_model.MainState`), `main_node` (the live main
+  node, held by identity — replace it with `.set_main_node(node)`), `saved_main_fp`;
+  `.live_main()->dict|None`; `.main_problem` (property); `.main_is_dirty()`; `.main_diff()->str`;
+  `.save_main()->list` (RAISES); classmethod `build(config_path=None, scaffold=True, harness="opencode")`
   (the CLI passes scaffold=False; raises HarnessUnavailable);
   `.managed` (property, the agents/categories-holding node) and `.scope` (property,
   `"opencode"`/`"root"`, surfaced as `config_scope` by `show --json`);
@@ -283,8 +290,14 @@ commit.
   `.preset_index(ref)->int|None`; `.switch_preset(index)->Preset`; `.add_preset(name)->int`;
   `.is_dirty()`/
   `.config_is_dirty()`/`.store_is_dirty()`; `.diff()->str`; `.save_config()->SaveResult`; `.write_store(store=None)
-  ->Store` (RAISES); `.save()->SaveResult` (both files, config first — `app.py` calls the two
+  ->Store` (RAISES); `.save()->SaveResult` (all files, config → main → presets — `app.py` calls the two
   halves instead, since its save is interactive). **MUST NOT import textual or app.**
+- `main_model.py`: OmO Native's main model (DESIGN §Main model). `agent_dir_for(config_path)`,
+  `load(config_path)->MainState` (never raises; `.node`, `.problem`, `.shadowed_by`,
+  `.settings_path`, `.state_path`), `remembered_level(agent_dir, model)`, `fingerprint(node)`,
+  `diff_text(main, node)`, `save(main, node, config_path)->list` (RAISES; edits only
+  `defaultProvider`/`defaultModel` and the model's `modelThinkingLevels` /
+  `modelLastOnThinkingLevels` entries; backs both files up first). No Textual.
 - `cli.py`: `main(argv=None)->int` (console-script entrypoint). Constants `SCHEMA = 1`,
   `EXIT_OK/ERROR/USAGE/REJECTED = 0/1/2/3` — and those FOUR are the whole range: `main` flushes
   stdout itself and maps a closed one (`… | head`) to `EXIT_OK`, so the interpreter's shutdown

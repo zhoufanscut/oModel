@@ -137,6 +137,11 @@ data/omo-suggestions.json ──────────────► suggesti
   `is_no_variant`, `subkinds_for`), and reaches the rest through the module
   (`session_mod.gpt_only` / `read_map` / `target_label`) — **the two frozensets are never imported
   at all**, which is the point: they exist in exactly one place and can't fork.
+- **`main_model.py`** — OmO Native's `main` target (the model the `omo` TUI starts on). It lives
+  in omo's `~/.omo/agent/settings.json` + `state.json`, NOT the config: only
+  `defaultProvider`/`defaultModel` and that model's level are edited, re-read at save, backed up
+  to `.backup/`. A `--config` override uses `<config_dir>/agent/` so tests never reach the real
+  files. Presets hold it leniently (never a sync conflict). See DESIGN §Main model.
 - **`app.py`** — Textual two-pane App. Wraps a `Session` and keeps only what needs a UI (the undo
   `History`, the per-target row cache, `_custom_rows`, rendering); `cfg`/`_store`/`_saved_text`/
   `_saved_store_fp` are properties onto the session. Stable widget IDs (`#targets`, `#presets`, `#candidates`,

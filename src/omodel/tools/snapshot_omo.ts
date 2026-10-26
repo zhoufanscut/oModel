@@ -53,7 +53,7 @@ const native = await (async () => {
     Bun.plugin({
       name: "omo-model-core",
       setup(build: any) {
-        build.onLoad({ filter: /[\\/]senpi-task[\\/]src[\\/].*\.ts$/ }, (args: any) => ({
+        build.onLoad({ filter: /[\\/](senpi-task[\\/]src|omo-senpi[\\/]src[\\/]components[\\/]model-profile)[\\/].*\.ts$/ }, (args: any) => ({
           contents: readFileSync(args.path, "utf8")
             .replaceAll('"@oh-my-opencode/model-core/latest-models"', JSON.stringify(join(core, "latest-models.ts")))
             .replaceAll('"@oh-my-opencode/model-core"', JSON.stringify(join(core, "index.ts"))),
@@ -82,7 +82,23 @@ const native = await (async () => {
         viaCategories: via,
       }];
     }));
-    return { agents, categories };
+    // The MAIN session model has no chain of its own: omo-senpi's model profiles ("lanes") are
+    // omo's suggestions for it. The `main` pick list is every lane's rungs, in the order omo tries
+    // the lanes for an unset session, first occurrence of a model kept. Separate try: an omo
+    // without model profiles still gets its native agents/categories.
+    let main: any;
+    try {
+      const prof = await import(join(omo, "packages/omo-senpi/src/components/model-profile/builtin-profiles"));
+      const order: string[] = [...prof.DEFAULT_MODEL_PROFILE_ORDER];
+      for (const id of Object.keys(prof.BUILTIN_MODEL_PROFILES)) if (!order.includes(id)) order.push(id);
+      const seen = new Set<string>();
+      const chain = order.flatMap((id) => chainOut(prof.BUILTIN_MODEL_PROFILES[id].models))
+        .filter((e: any) => !seen.has(e.model) && seen.add(e.model));
+      main = { fallbackChain: chain, viaProfiles: order };
+    } catch (err) {
+      console.error(`snapshot_omo: no native main-model profiles (${(err as Error).message})`);
+    }
+    return { agents, categories, ...(main ? { main } : {}) };
   } catch (err) {
     console.error(`snapshot_omo: no native chains (${(err as Error).message})`);
     return undefined;

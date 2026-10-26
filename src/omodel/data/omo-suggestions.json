@@ -2,7 +2,7 @@
   "meta": {
     "omoVersion": "5.1.48",
     "omoCommit": "8706f468c3a891fd82189e0bac84fed2fe449688",
-    "generatedAt": "2026-10-26T07:32:14.875Z"
+    "generatedAt": "2026-10-26T10:37:56.221Z"
   },
   "agents": {
     "sisyphus": {
@@ -2179,6 +2179,93 @@
           }
         ]
       }
+    },
+    "main": {
+      "fallbackChain": [
+        {
+          "providers": [
+            "anthropic-subscription",
+            "anthropic",
+            "anthropic-api",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "claude-opus-5-5",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "kimi-coding",
+            "kimi-for-coding",
+            "moonshotai",
+            "opencode-go"
+          ],
+          "model": "kimi-k3",
+          "variant": "max"
+        },
+        {
+          "providers": [
+            "zai",
+            "zai-coding-cn",
+            "opencode-go"
+          ],
+          "model": "glm-5.3",
+          "variant": "max"
+        },
+        {
+          "providers": [
+            "anthropic-subscription",
+            "anthropic",
+            "anthropic-api",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "claude-fable-5-1",
+          "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "gpt-6-astra",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai"
+          ],
+          "model": "gpt-6.1-sol-fast",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai"
+          ],
+          "model": "gpt-6.1-sol",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "gpt-5.6-sol",
+          "variant": "medium"
+        }
+      ],
+      "viaProfiles": [
+        "daily-normal",
+        "daily-heavy",
+        "geeky-normal",
+        "geeky-heavy"
+      ]
     }
   }
 }

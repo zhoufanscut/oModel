@@ -379,7 +379,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "targets", parents=[common],
         help="List every target id you can set.",
         description="List every target id omo defines: agent:<name>, its valid "
-                    "agent:<name>.ultrawork / .compaction sub-targets, and cat:<name>. "
+                    "agent:<name>.ultrawork / .compaction sub-targets, and cat:<name> — plus "
+                    "`main` (the main session model) under --harness native. "
                     "Example: omodel targets --json",
     )
 
@@ -547,8 +548,9 @@ def _fail_write(exc: Exception, as_json: bool, **extra) -> int:
     message = f"could not write: {exc}"
     if config_written:
         message = (
-            f"the config was written but the presets file was not ({exc}) — "
-            "re-run the same command to bring them back in step"
+            f"the config was written but {getattr(exc, 'what', 'the presets file')} "
+            f"{'were' if ' and ' in getattr(exc, 'what', '') else 'was'} not "
+            f"({exc}) — re-run the same command to bring them back in step"
         )
     return _fail("write_failed", message, as_json, code=EXIT_ERROR,
                  config_written=config_written, **extra)
@@ -671,7 +673,8 @@ def _assignment_row(session, target: str) -> dict:
         available = bool(provider) and provider in session.catalog.providers_for(bare)
     return {
         "target": target,
-        "kind": "agent" if target.startswith("agent:") else "cat",
+        "kind": "main" if target == session_mod.MAIN_TARGET
+        else "agent" if target.startswith("agent:") else "cat",
         "name": session_mod.target_label(target),
         "model": model or None,
         "provider": provider or None,
@@ -760,6 +763,8 @@ def _unknown_target_message(target: str) -> str:
     from omodel import session as session_mod
 
     msg = f"{target!r} is not a target omo defines — run `omodel targets` for the list."
+    if target == session_mod.MAIN_TARGET:
+        msg += " `main` (the main session model) exists only under --harness native."
     name = target[len("cat:"):] if target.startswith("cat:") else None
     if name in session_mod.LEGACY_CATEGORY_ALIASES:
         msg += f" omo 5.0 renamed it to 'cat:{session_mod.LEGACY_CATEGORY_ALIASES[name]}'."
@@ -782,6 +787,8 @@ def _validate(session, target: str, value: str, variant, force: bool):
 
     if not session.is_known(target):
         return ("unknown_target", _unknown_target_message(target))
+    if target == session_mod.MAIN_TARGET and session.main_problem:
+        return ("main_unwritable", f"the main model cannot be written: {session.main_problem}")
 
     parts = _split_value(value)
     if parts is None:
@@ -817,13 +824,15 @@ def _validate(session, target: str, value: str, variant, force: bool):
 
 
 class _StoreWriteFailed(Exception):
-    """The presets file could not be written. `config_written` says whether the config already
-    landed — if it did, the two files are out of step and a retry heals it, which is exactly
+    """A file after the config could not be written — the presets file, or (native) omo's
+    settings for the main model (`what`). `config_written` says whether the config already
+    landed — if it did, the files are out of step and a retry heals it, which is exactly
     what the caller has to tell the agent (app.py tells a human the same thing)."""
 
-    def __init__(self, message: str, config_written: bool) -> None:
+    def __init__(self, message: str, config_written: bool, what: str = "the presets file") -> None:
         super().__init__(message)
         self.config_written = config_written
+        self.what = what
 
 
 def _publish(session, dry_run: bool):
@@ -848,7 +857,7 @@ def _publish(session, dry_run: bool):
     also reformats the managed spans and drops the comments inside them, so on a hand-formatted
     file the byte diff is never empty, and a `set` to the value already there rewrote the file,
     took a backup and deleted those comments."""
-    diff = session.diff() if session.config_is_dirty() else ""
+    diff = session.diff() if session.config_is_dirty() else session.main_diff()
     store_dirty = session.store_is_dirty()
     if dry_run:
         return {"changed": bool(diff.strip()) or store_dirty, "dry_run": True,
@@ -857,14 +866,21 @@ def _publish(session, dry_run: bool):
         return {"changed": False, "dry_run": False, "backup": None, "diff": ""}
 
     result = None
-    if diff.strip():
+    if session.config_is_dirty() and diff.strip():
         result = session.save_config()
+    # The native main model: omo's settings.json/state.json, after the config (DESIGN §Main
+    # model). A failure here leaves the config ahead; re-running the command heals it.
+    try:
+        main_written = bool(session.save_main())
+    except Exception as exc:
+        raise _StoreWriteFailed(str(exc), config_written=result is not None,
+                                what="the main model (omo's settings) and the presets file") from exc
     try:
         session.write_store()
     except Exception as exc:
         raise _StoreWriteFailed(str(exc), config_written=result is not None) from exc
     return {
-        "changed": bool(result.changed) if result is not None else store_dirty,
+        "changed": (bool(result.changed) if result is not None else store_dirty) or main_written,
         "dry_run": False,
         "backup": result.backup if result is not None else None,
         "diff": diff,
@@ -943,6 +959,14 @@ def _cmd_show(config_override, as_json: bool) -> int:
         "sync_conflict": session.sync_conflict,
         "targets": rows,
     }
+    if session.main is not None:
+        # Where `main` lives, and why it may not take effect or be written.
+        payload["main_settings"] = {
+            "settings_path": session.main.settings_path,
+            "state_path": session.main.state_path,
+            "problem": session.main_problem,
+            "shadowed_by": session.main.shadowed_by,
+        }
     if as_json:
         _emit(payload, True)
         return EXIT_OK
@@ -1014,6 +1038,20 @@ def _cmd_check_json(config_override, as_json: bool) -> int:
     # A present-but-not-a-dict `agents`/`categories` silently discards everything under it —
     # `read_map` keeps every surface from crashing, but "we survived it" is not "it's fine", and
     # check calling such a config healthy is how it stays broken.
+    # The main model lives in omo's settings.json, which can make it unwritable (a
+    # settings.jsonc) or shadow it (`enabledModels`, which senpi starts on first).
+    if session.main_problem:
+        problems.append({"target": session_mod.MAIN_TARGET, "problem": "main_unwritable",
+                         "message": session.main_problem})
+    if session.main is not None and session.main.shadowed_by and session.main_node.get("model"):
+        problems.append({
+            "target": session_mod.MAIN_TARGET, "problem": "main_shadowed",
+            "message": (
+                f"enabledModels in {session.main.settings_path} is set "
+                f"({', '.join(session.main.shadowed_by)}); omo starts on the first of those, "
+                "not on the main model"
+            ),
+        })
     for key in ("agents", "categories"):
         # `session.managed`, not `session.cfg`: on a unified document the maps live under
         # `"[opencode]"`, so reading the root both MISSED a malformed map there (check reporting
@@ -1140,6 +1178,10 @@ def _cmd_set(config_override, target, value, variant, dry_run, force, as_json) -
     provider, model = _split_value(value)
     before, _ = session.assignment(target)
     session.set_model(target, provider, model, variant)
+    from omodel import session as session_mod
+
+    if target == session_mod.MAIN_TARGET:
+        variant = session.assignment(target)[1]  # with no --variant: omo's remembered level
     try:
         published = _publish(session, dry_run)
     except Exception as exc:
@@ -1169,6 +1211,12 @@ def _cmd_clear(config_override, target, dry_run, as_json) -> int:
             "unknown_target", _unknown_target_message(target),
             as_json, target=target,
         )
+    from omodel import session as session_mod
+
+    if target == session_mod.MAIN_TARGET and session.main_problem:
+        return _fail("main_unwritable",
+                     f"the main model cannot be written: {session.main_problem}",
+                     as_json, target=target)
     before, _ = session.assignment(target)
     session.clear(target)
     try:
@@ -1251,6 +1299,8 @@ def _cmd_apply(config_override, dry_run, force, as_json) -> int:
         provider, model = _split_value(value)
         before, _ = session.assignment(target)
         session.set_model(target, provider, model, variant)
+        if target == session_mod.MAIN_TARGET:
+            variant = session.assignment(target)[1]  # with no "variant": omo's remembered level
         applied.append({"target": target, "from": before or None, "to": value,
                         "variant": variant if not _is_none_variant(variant) else None})
 
@@ -1324,6 +1374,7 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
                    "index": index, "changed": False},
                   as_json, lines=[f"already using '{session.store.presets[index].name}'"])
             return EXIT_OK
+        skipped = session.main_skipped(index)
         preset = session.switch_preset(index)
         # Through `_publish`, like `set`: a presets write that fails AFTER the config landed is
         # reported as such (`_fail_write`), not as a bare `write_failed` that leaves the agent
@@ -1333,9 +1384,15 @@ def _cmd_preset(config_override, args, as_json: bool) -> int:
             published = _publish(session, dry_run=False)
         except Exception as exc:
             return _fail_write(exc, as_json)
-        _emit({"ok": True, "action": "use", "name": preset.name, "index": index,
-               "changed": published["changed"], "backup": published["backup"]},
-              as_json, lines=[f"now using '{preset.name}'"])
+        payload = {"ok": True, "action": "use", "name": preset.name, "index": index,
+                   "changed": published["changed"], "backup": published["backup"]}
+        lines = [f"now using '{preset.name}'"]
+        if session.harness == "native":
+            payload["main_skipped"] = skipped is not None
+        if skipped is not None:
+            payload["main_skipped_reason"] = skipped
+            lines.append(f"[note] {skipped}")
+        _emit(payload, as_json, lines=lines)
         return EXIT_OK
 
     # rm — refused on the active preset, mirroring the TUI's `x`: the config equals the active
@@ -1744,6 +1801,15 @@ def _cmd_print(config_override: str | None, session=None) -> int:
         print(f"Providers: (none — {unavailable})")
     print()
 
+    if _harness == "native":
+        from omodel import main_model
+
+        node = session.main_node if session is not None else main_model.load(path).node
+        variant = read_variant(node)
+        suffix = f"  variant={variant}" if variant else ""
+        print(f"MAIN: {node.get('model', '(unset)')}{suffix}")
+        print()
+
     print("AGENTS:")
     for name, data in agents_cfg.items():
         model = data.get("model", "(unset)") if isinstance(data, dict) else "(unset)"
@@ -1818,7 +1884,7 @@ def _cmd_check(config_override: str | None) -> int:
     # append `.ultrawork` to all 11 agents, so it counted 41 targets where every other verb
     # offers 31 and resolved ten that `set` refuses with `unknown_target`.
     from omodel.session import subkinds_for
-    targets = []
+    targets = ["main"] if _harness == "native" else []
     for name in suggestions.agents:
         targets.append(f"agent:{name}")
         for kind in subkinds_for(name, _harness):
