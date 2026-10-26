@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-10-26
+
+Bundled suggestions now follow oh-my-openagent 5.1.48.
+
+### Changed
+
+- Bundled suggestions now come from omo 5.1.48. The unspecified-low category now tries
+  `glm-5.3` (reasoning `high`) after `grok-4.7` and before `gpt-6.1-sol`.
+
 ## [0.7.2] — 2026-10-19
 
 Bundled suggestions now follow oh-my-openagent 5.1.35.
