@@ -64,6 +64,9 @@ OPENCODE_BLOCK = "[opencode]"
 # refuses the legacy config PATH (`session.harness_problem`). DESIGN §Harnesses.
 NATIVE_BLOCK = "[native]"
 HARNESSES = ("opencode", "native")
+# omo's other harness blocks (omo-config-core `schema/config.ts`): `[senpi]` is native's
+# pre-rename name, `[codex]` is omo's Codex CLI plugin. Their presence marks a unified document.
+_OTHER_HARNESS_BLOCKS = (NATIVE_BLOCK, "[senpi]", "[codex]")
 
 
 def _home() -> Path:
@@ -116,9 +119,10 @@ def scope_of(cfg) -> str:
     Detection is CONTENT-based, never filename-based, so `--config <anywhere>` behaves correctly
     and a unified document opened by an explicit path is still edited in the right place. A
     document counts as unified when it has an `"[opencode]"` block, an engine-managed migration
-    key, omo's unified `$schema`, or a `"[native]"` block — the last three catch a document whose
-    `[opencode]` block has yet to be created. `[native]` exists only in the unified format, and
-    OmO Native folds the root in too, so writing opencode picks there would change native's."""
+    key, omo's unified `$schema`, or another harness block (`_OTHER_HARNESS_BLOCKS`) — the last
+    three catch a document whose `[opencode]` block has yet to be created. Harness blocks exist
+    only in the unified format, and omo folds the root into every harness, so writing opencode
+    picks there would change the others' too."""
     if not isinstance(cfg, dict):
         return "root"
     # PRESENCE of the key, not its type: a legacy document never has it at all, so a hand-edited
@@ -132,7 +136,7 @@ def scope_of(cfg) -> str:
     schema = cfg.get("$schema")
     if isinstance(schema, str) and "omo.schema.json" in schema:
         return "opencode"
-    if NATIVE_BLOCK in cfg:
+    if any(key in cfg for key in _OTHER_HARNESS_BLOCKS):
         return "opencode"
     return "root"
 

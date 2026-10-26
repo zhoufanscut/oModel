@@ -144,13 +144,13 @@ last wins (`omo-config-core/src/loader/resolution.ts`), so a top-level `agents` 
   when nothing exists — the legacy file is **never created**, because omo moved it aside and
   recreating it hands the user an empty config omo does not read.
 - **Detects the scope from CONTENT, not the filename** (`config_io.scope_of`: an `"[opencode]"`
-  block, `_migrations`/`legacy_migrations`, omo's unified `$schema`, or a `"[native]"` block), so
-  `--config <anywhere>` still edits the right node. `[native]` counts because OmO Native folds the
-  root in too: reading a native-only file as legacy would put opencode picks where native reads
-  them. Picks an earlier omodel wrote at the root of such a file stay there, still apply to both
-  harnesses wherever their own block does not set that target, and are no longer shown; move
-  them under `"[opencode]"` by hand. omo's other harness blocks (`"[senpi]"`, `"[codex]"`) are not
-  markers: a document holding only one of them still reads as legacy.
+  block, `_migrations`/`legacy_migrations`, omo's unified `$schema`, or one of omo's other harness
+  blocks — `"[native]"`, `"[senpi]"` (native's old name), `"[codex]"`), so `--config <anywhere>`
+  still edits the right node. The harness blocks count because omo folds the root into every
+  harness (`omo-config-core/src/loader/resolution.ts`): reading, say, a native-only file as legacy
+  would put opencode picks where native reads them. Picks an earlier omodel wrote at the root of
+  such a file stay there, still apply to every harness wherever its own block does not set that
+  target, and are no longer shown; move them under `"[opencode]"` by hand.
 - **Writes `"[opencode]"` unconditionally** on a unified document — no "edit in place where the
   key already lives" heuristic. omo has *no writer* that produces a top-level `agents`: both the
   migration (`transform-opencode.ts`) and a **fresh install** (`cli/config-manager/
