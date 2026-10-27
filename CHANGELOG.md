@@ -29,10 +29,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - On a `~/.omo/omo.jsonc` with no `[opencode]` section but an OmO Native section (`[native]`, or
   its old name `[senpi]`) or omo's Codex section (`[codex]`), plain `omodel` took the file for the
   pre-4.19.3 format: it wrote your picks at the top level, which those harnesses read too, and
-  showed a "pre-4.19.3 config path" notice. It now writes them into `[opencode]`, and
-  `show --json` reports `config_scope: "opencode"` for that file. Picks an earlier omodel wrote at
-  the top level stay there and still apply to every harness unless its own section sets the same
-  agent; move them under `[opencode]` by hand.
+  showed a "pre-4.19.3 config path" notice. It now writes them into `[opencode]` (adding that
+  section and keeping the file's comments), and `show --json` reports `config_scope: "opencode"`
+  for that file. Picks an earlier omodel wrote at the top level stay there and still apply to
+  every harness unless its own section sets the same agent; move them under `[opencode]` by hand.
+- The first save into an `omo.jsonc` whose `[opencode]` section had no agents or categories yet
+  (or that had no `[opencode]` section) rewrote the whole file and dropped its comments. It now
+  adds them in place.
 - `omodel show` printed a model-list problem twice (a `[note]` and a `[warn]`), and when
   `opencode` failed it ran it a second time.
 

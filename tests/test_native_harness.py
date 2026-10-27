@@ -287,12 +287,27 @@ class TestNativeRender:
         config_io.managed_root_for_write(cfg, "native")
         assert config_io.render(cfg, UNIFIED, "native") == UNIFIED
 
-    def test_opencode_missing_keys_still_clean_rewrite(self):
-        # The insert path is native-only; the opencode harness keeps its old fallback here.
+    def test_opencode_missing_keys_are_inserted(self):
         base = '// c\n{\n  "$schema": "x/omo.schema.json",\n  "[opencode]": {"claude_code": {}}\n}\n'
         cfg = json5.loads(base)
         config_io.managed_root_for_write(cfg)["agents"] = {"sisyphus": {"model": "a/b"}}
-        assert config_io.render(cfg, base) == config_io.serialize(cfg)
+        out = config_io.render(cfg, base)
+        assert out.startswith("// c\n")
+        assert json5.loads(out) == cfg
+
+    def test_opencode_block_inserted_into_a_native_only_file(self):
+        """The opencode harness's first save into a file with no `[opencode]` block (a native-only
+        one) adds the block at the end of the root and keeps the file's comments. It used to be
+        the clean rewrite, which dropped them."""
+        base = '// keep me\n{\n  "[native]": {\n    "agents": {"explore": {"model": "x/y"}} // n\n  }\n}\n'
+        cfg = json5.loads(base)
+        config_io.managed_root_for_write(cfg)["agents"] = {"sisyphus": {"model": "a/b"}}
+        out = config_io.render(cfg, base)
+        assert "// keep me" in out and "// n" in out
+        parsed = json5.loads(out)
+        assert parsed == cfg
+        assert list(parsed) == ["[native]", "[opencode]"]
+        assert "categories" not in parsed["[opencode]"]  # only what has content is written
 
     def test_presets_files_are_separate(self, tmp_path):
         p = str(tmp_path / "omo.jsonc")

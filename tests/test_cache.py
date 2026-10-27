@@ -176,3 +176,10 @@ class TestClear:
 
         remaining = set(os.listdir(d))
         assert remaining == {"README.txt"}
+
+    def test_keep_spares_the_named_keys(self):
+        cache.write("a", "data-a")
+        cache.write("native-models", "data-n")
+        cache.clear(keep=("native-models",))
+        assert cache.read("a") is None
+        assert cache.read("native-models") == "data-n"

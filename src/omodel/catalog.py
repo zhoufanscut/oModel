@@ -374,7 +374,7 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
     Same error contract as load(): not on PATH → empty Catalog (+ cache cleared);
     unrunnable / exit != 0 / zero lines → CatalogUnavailable."""
     if shutil.which(opencode_bin) is None:
-        cache.clear()
+        cache.clear(keep=(_NATIVE_CACHE_KEY,))
         return Catalog(available={}, connected=[])
 
     try:
@@ -386,7 +386,7 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
             check=False,   # returncode inspected below; a non-zero exit is a handled state
         )
     except FileNotFoundError:
-        cache.clear()
+        cache.clear(keep=(_NATIVE_CACHE_KEY,))
         return Catalog(available={}, connected=[])
     except subprocess.TimeoutExpired as exc:
         raise CatalogUnavailable(
@@ -408,9 +408,10 @@ def refresh(opencode_bin: str = "opencode") -> Catalog:
             f"`{opencode_bin} models --refresh` produced zero provider/model lines"
         )
 
-    # A refresh invalidates ALL opencode-derived cache (the model list + every verbose-*),
-    # then pre-warms the model list from this run's output so the next launch is instant.
-    cache.clear()
+    # A refresh invalidates ALL opencode-derived cache (the model list + every verbose-*) — but
+    # not native's model list, which is omo's and has its own refresh — then pre-warms the model
+    # list from this run's output so the next launch is instant.
+    cache.clear(keep=(_NATIVE_CACHE_KEY,))
     cache.write("models", result.stdout, [opencode_bin, "models"])
 
     return Catalog(available=available, connected=connected)

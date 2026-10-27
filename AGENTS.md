@@ -107,7 +107,8 @@ data/omo-suggestions.json ──────────────► suggesti
   the top-level `agents`/`categories` value spans are rewritten clean (`json.dumps`, no comments —
   dropping omo's commented palette *inside* them); **everything else — other keys, formatting, and any
   comments / commented-out config *outside* those two — is kept byte-for-byte** (a small JSONC-aware
-  span scanner locates the two spans; non-omo / hand-broken files fall back to a full clean rewrite).
+  span scanner locates the two spans, and inserts a missing harness block or key pair on a unified
+  file; non-omo / hand-broken files fall back to a full clean rewrite).
   `serialize()` is the canonical clean form (dirtiness `_is_dirty` + the from-scratch/fallback writer),
   never required to equal the on-disk bytes. Each save snapshots the prior file verbatim to
   `<config_dir>/.backup/<ts>.jsonc`; the very first save pins `original.jsonc` (never pruned, never

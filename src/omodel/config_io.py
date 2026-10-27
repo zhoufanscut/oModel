@@ -576,7 +576,8 @@ def render(cfg: dict, base_text: str, harness: str = "opencode") -> str:
     `categories` value spans replaced by their clean (comment-free) form; comments, commented-out
     config, other keys, key order, and formatting OUTSIDE those two objects are preserved
     byte-for-byte — omodel manages only those two keys. Falls back to serialize(cfg) when there is
-    no base text, or either key is missing from the managed node (can't splice safely).
+    no base text, when a key that has content has nowhere to go (see below), or when the splice
+    does not read back as cfg.
 
     On a unified document the managed node is `"[opencode]"`, so the spans are nested one level
     down and everything around them — `$schema`, `_migrations`, `profiles`, the rest of the
@@ -584,10 +585,11 @@ def render(cfg: dict, base_text: str, harness: str = "opencode") -> str:
     stays safe in both scopes because `cfg` is the whole document: it rewrites the file cleanly
     (losing comments) but never relocates agents/categories out of their scope.
 
-    `harness="native"` manages `"[native]"` instead (DESIGN §Harnesses). A block, or both keys,
-    absent from the file are INSERTED — the block as the root's last member, the keys as the
-    block's — rather than falling back to the clean rewrite: on a first native save the file has
-    no `[native]` block at all, and that must not cost the user every comment in it."""
+    `harness="native"` manages `"[native]"` instead (DESIGN §Harnesses). On a unified document a
+    harness block, or both its keys, absent from the file are INSERTED — the block as the root's
+    last member, the keys as the block's — rather than falling back to the clean rewrite: a first
+    native save meets a file with no `[native]` block, a first opencode save into a native-only
+    file one with no `[opencode]` block, and neither must cost the user every comment in it."""
     if not base_text or not base_text.strip():
         return serialize(cfg)
     newline = _newline_of(base_text)
@@ -604,14 +606,14 @@ def render(cfg: dict, base_text: str, harness: str = "opencode") -> str:
     edits = []  # (start, end, replacement), applied later-first so offsets stay valid
     keys = ("agents", "categories")
     if (
-        harness == "native"
+        block_key is not None
         and spans["agents"] is None
         and spans["categories"] is None
         and (values["agents"] or values["categories"])
     ):
-        # Neither key is in the file. Add them to the `[native]` block, or the whole block to the
-        # root when it is missing too; only what has content is written. Native only: on the
-        # opencode path this case keeps its clean rewrite (unchanged behaviour).
+        # Neither key is in the file. Add them to the harness block, or the whole block to the
+        # root when it is missing too; only what has content is written. Unified documents only:
+        # a legacy (root-scope) file with neither key keeps its clean rewrite.
         content = {k: v for k, v in values.items() if v}
         block_span = _span_for_path(base_text, prefix)
         edit = (
@@ -642,11 +644,11 @@ def render(cfg: dict, base_text: str, harness: str = "opencode") -> str:
             block = _reindent(json.dumps(values[key], indent=2, ensure_ascii=False), indent, nl)
             edits.append((spans[sibling][1], spans[sibling][1], f',{nl}{indent}"{key}": {block}'))
         elif values[key]:
-            # Something to write and nowhere to put it (non-omo / hand-broken file): degrade to a
-            # clean rewrite. The cost of that is every comment in the document, which on a unified
-            # config means omo's config and not just omodel's — so it is reserved for the case
-            # where splicing genuinely cannot express the change. The file's own line ending is
-            # the one thing about its formatting the rewrite can still honour.
+            # Something to write and nowhere to put it: a legacy (root-scope) file with neither key
+            # (non-omo / hand-broken) — a unified one took the insert above. Degrade to a clean
+            # rewrite. The cost of that is every comment in the document, so it is reserved for
+            # the case where splicing genuinely cannot express the change. The file's own line
+            # ending is the one thing about its formatting the rewrite can still honour.
             return serialize(cfg).replace("\n", newline)
         # else: the key is absent from the file AND empty in cfg — nothing to express. Leave the
         # file alone rather than reformatting it to add `"categories": {}`.

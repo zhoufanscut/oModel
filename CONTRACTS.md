@@ -154,7 +154,7 @@ commit.
   anthropic-subscription rules); `native_agent_dir(env=None)->str`.
 - `cache.py`: on-disk cache of opencode stdout (24h TTL, flat, under `~/.cache/omodel/`).
   `cache_dir()->str`; `read(key, ttl_seconds=None)->str|None`; `write(key, stdout, args=None)->None`;
-  `age_seconds(key)->float|None`; `clear()->None`; `CACHE_VERSION`. Best-effort: missing/corrupt/
+  `age_seconds(key)->float|None`; `clear(keep=())->None`; `CACHE_VERSION`. Best-effort: missing/corrupt/
   expired → miss; write errors swallowed (a non-writable cache never breaks the caller).
 - `suggestions.py`: `FAMILY_VENDOR` (frozen map, key set == bundled families); `@dataclass Family`; `@dataclass
   Suggestions(meta, agents, categories, families, known_variants, native=None)` with

@@ -230,12 +230,28 @@ class TestCatalogRefresh:
             "verbose-opencode", "stale verbose blob",
             ["opencode", "models", "opencode", "--verbose"],
         )
+        cache.write("native-models", "omo's list", ["omo", "--list-models"])
         with patch("shutil.which", return_value=None):
             cat = refresh()
         assert cat.available == {}
         assert cat.connected == []
         assert cache.read("models") is None
         assert cache.read("verbose-opencode") is None
+        assert cache.read("native-models") == "omo's list"  # omo's, not opencode's
+
+    def test_vanished_binary_clears_cache_but_keeps_native(self):
+        """`which` finds opencode but it is gone by the time it runs → empty Catalog, opencode's
+        entries cleared, native's `native-models` kept."""
+        cache.write("models", "opencode/stale-model\n", ["opencode", "models"])
+        cache.write("native-models", "omo's list", ["omo", "--list-models"])
+        with (
+            patch("subprocess.run", side_effect=FileNotFoundError),
+            patch("shutil.which", return_value="/usr/bin/opencode"),
+        ):
+            cat = refresh()
+        assert cat.available == {}
+        assert cache.read("models") is None
+        assert cache.read("native-models") == "omo's list"
 
     def test_timeout_raises_catalog_unavailable(self):
         timeout_exc = subprocess.TimeoutExpired(cmd=["opencode"], timeout=90)
@@ -273,12 +289,14 @@ class TestCatalogRefresh:
 
     def test_happy_path_returns_catalog_and_rebuilds_cache(self):
         """A successful refresh returns the parsed Catalog AND rewrites the cache: stale
-        verbose-* keys are gone, and a fresh `models` entry holds this run's stdout."""
+        verbose-* keys are gone, and a fresh `models` entry holds this run's stdout. Native's
+        `native-models` is omo's list, not opencode's, so it survives (it has its own refresh)."""
         cache.write("models", "opencode/old-stale-model\n", ["opencode", "models"])
         cache.write(
             "verbose-opencode", "old stale verbose blob",
             ["opencode", "models", "opencode", "--verbose"],
         )
+        cache.write("native-models", "omo's list", ["omo", "--list-models"])
 
         with (
             patch("subprocess.run", return_value=_mock_run(MOCK_MODELS_OUTPUT)),
@@ -290,6 +308,7 @@ class TestCatalogRefresh:
         assert "claude-opus-4-7" in cat.available["opencode"]
         assert cache.read("verbose-opencode") is None  # stale verbose-* cleared
         assert cache.read("models") == MOCK_MODELS_OUTPUT  # fresh models cache written
+        assert cache.read("native-models") == "omo's list"
 
 
 # ---------------------------------------------------------------------------

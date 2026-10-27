@@ -125,10 +125,12 @@ def age_seconds(key: str) -> float | None:
     return max(0.0, time.time() - fetched_at)
 
 
-def clear() -> None:
-    """Remove every cached entry (the *.json files we own) from the cache dir. Best-effort;
-    used by the explicit `--refresh-models` / `r` refresh. Never touches non-.json files."""
+def clear(keep: tuple = ()) -> None:
+    """Remove every cached entry (the *.json files we own) from the cache dir, except the keys in
+    `keep`. Best-effort; used by the explicit `--refresh-models` / `r` refresh. Never touches
+    non-.json files."""
     d = cache_dir()
+    kept = {os.path.basename(_path_for(key)) for key in keep}
     try:
         names = os.listdir(d)
     except OSError:
@@ -136,6 +138,8 @@ def clear() -> None:
     for name in names:
         # Our cache files, plus any orphaned atomic-write temp (`<name>.json.tmp-<pid>`) left
         # by a crash between open() and os.replace().
+        if name in kept:
+            continue
         if name.endswith(".json") or ".json.tmp-" in name:
             try:
                 os.remove(os.path.join(d, name))
