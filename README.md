@@ -5,11 +5,11 @@
 **what omo suggests + what you already have → pick one → save a clean config.**
 
 Per agent/category, oModel shows omo's fallback chain filtered to the models you can actually
-run (via `opencode models`) — each as one row per serving provider, dedicated providers before
-gateways. You pick one and it fills in the correct `provider/` prefix and a valid variant, then
-writes it back to omo's config: only the `agents`/`categories` blocks are rewritten
-clean — everything else in the file, including comments and commented-out config, is kept
-verbatim (timestamped backups each save).
+run (via `opencode models`, or omo's own model list for [OmO Native](#omo-native)) — each as one
+row per serving provider, dedicated providers before gateways. You pick one and it fills in the
+correct `provider/` prefix and a valid variant, then writes it back to omo's config: only the
+`agents`/`categories` blocks are rewritten clean — everything else in the file, including
+comments and commented-out config, is kept verbatim (timestamped backups each save).
 
 ```
  oModel [opencode]: opencode · anthropic · openai
