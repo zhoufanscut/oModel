@@ -684,10 +684,19 @@ def test_no_login_refresh_in_the_tui_warns_and_keeps_running(native_env, tmp_pat
     asyncio.run(_run())
 
 
+def _must_not_run(*_args, **_kwargs):
+    raise AssertionError("must not shell out")
+
+
 @pytest.mark.parametrize("block", ["[native]", "[senpi]", "[codex]"])
-def test_opencode_writes_into_a_native_only_file_go_to_the_opencode_block(tmp_path, block):
+def test_opencode_writes_into_a_native_only_file_go_to_the_opencode_block(
+    tmp_path, monkeypatch, block
+):
     """A document whose only harness block is another harness's is unified: plain omodel must
     not write at the root, which omo folds into every harness."""
+    # opencode absent: Session.build must not shell out to the real one (~3s / ~320 MB each).
+    monkeypatch.setattr(catalog.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(catalog.subprocess, "run", _must_not_run)
     cfg_path = tmp_path / "omo.jsonc"
     native = {"agents": {"explore": {"model": "zai/glm-5.3"}}}
     cfg_path.write_text(json.dumps({block: native}))

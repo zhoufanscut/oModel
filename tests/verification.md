@@ -3,6 +3,12 @@
 Maps the §Verification checks in DESIGN.md to the concrete command(s) to run, plus Check 10 for
 the agent surface (decision #18). All checks must pass before any release.
 
+**Which `omodel` runs.** A bare `omodel` on a normal PATH is the INSTALLED release
+(`~/.local/bin`), not the candidate, so the live steps below would quietly test the old version.
+Put the candidate first — `export PATH="$PWD/.venv/bin:$PATH"` from the repo root, or use
+`./dist/omodel` from Check 1 — except where a step says to copy the installed binary (Check 11's
+swap).
+
 ---
 
 ## Check 1 — Build / install
@@ -127,7 +133,7 @@ python -m pytest tests/test_detect_family.py -v
 ## Check 5 — Bundled suggestions load
 
 **Goal:** `importlib.resources` loads `omo-suggestions.json` with no omo checkout present;
-counts match the committed data (11 agents, 8 categories), and the agent/category *name*
+counts match the committed data (11 agents, 9 categories), and the agent/category *name*
 sets are pinned so a rename can't hide behind an unchanged count. Families and
 `knownVariants` are deliberately NOT counted — see CONTRACTS §Bundled data.
 
@@ -153,8 +159,10 @@ Chain *contents* are checked structurally, never by length — every agent/categ
 bumped `meta`; without them, non-fatal (prints current bundled meta, exits 0).
 
 ```sh
-# Non-fatal path (no omo src):
-python -m omodel --refresh-omo
+# Non-fatal path (no omo src). Pin OMO_SRC: without it, --refresh-omo falls back to
+# ~/source/oh-my-openagent, and if that checkout and bun exist it runs the LIVE path and
+# rewrites the tracked data file.
+OMO_SRC=/nonexistent python -m omodel --refresh-omo
 # Expected: prints current bundled meta, exits 0, data file unchanged.
 
 # Live path (requires omo checkout at ~/source/oh-my-openagent and bun):
@@ -219,7 +227,7 @@ opencode models | head -5    # confirm models visible
 python -m omodel --config /tmp/omodel-live-test.jsonc
 
 # Manual steps in the TUI:
-#   1. Verify oModel: header shows just the connected provider list (NO "cached … · r to refresh" suffix)
+#   1. Verify the header reads `oModel [opencode]:` + the connected provider list (NO "cached … · r to refresh" suffix)
 #   2. Verify the bottom hint bar shows "s save · q quit · ? help" (left) with the version "v<version>"
 #      right-aligned at the far right; press '?' — the key overlay opens, grouped by pane
 #      (Move / Models / Presets / Undo — there is deliberately no "In dialogs" group, each dialog
@@ -292,10 +300,12 @@ Manual (run inside the Check 8 live session, before quitting):
 #      one they were in is gone) — never silently into a different preset.
 #   7. Press 's', confirm → NOW both files land:
 #        cat <config_dir>/.omodel-presets.json    # version/active/presets, active = the ● row
-#        cat <config_dir>/oh-my-openagent.jsonc   # matches that preset's models exactly
+#        cat <the --config file>                  # matches that preset's models exactly
 #   8. Make one more change, press 'q' → three buttons. 'd' discards; relaunch and confirm BOTH
-#      files are exactly as step 7 left them. Then repeat and use "Save & quit" instead.
-#   9. Hand-edit the config's sisyphus model outside oModel, relaunch → the sync modal appears.
+#      files are exactly as step 7 left them. Then repeat and use "Save & quit" instead (it
+#      opens the save diff; confirm it with 'y').
+#   9. Hand-edit the config's sisyphus model outside oModel to one NO preset holds (an edit that
+#      matches another preset just switches to it, no modal), relaunch → the sync modal appears.
 #      Neither answer writes anything; press 's' afterwards to land your choice.
 #  10. With a very long / CJK preset name, every row still renders on ONE line (no wrap), at 9
 #      presets and again at 10+ where the row number takes a second digit.
@@ -341,7 +351,7 @@ for a in "set agent:nope opencode/gpt-5.5" \
 done
 
 # Degraded mode is LABELLED, not silently empty
-# NB resolve omodel's path FIRST — it lives in ~/.local/bin, so a bare `omodel` under the
+# NB resolve omodel's path FIRST — it lives in the venv or ~/.local/bin, so a bare `omodel` under the
 # stripped PATH would be "command not found" and this check would silently not run.
 OMODEL=$(command -v omodel); PATH=/usr/bin:/bin "$OMODEL" show $C --json | jq .degraded   # true
 
