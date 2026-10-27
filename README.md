@@ -51,6 +51,7 @@ the pane.)
 
 - Python ≥ 3.11 — only for the pipx / uv install; the prebuilt binary bundles its own
 - `opencode` CLI on `PATH` (degrades gracefully if absent)
+- `omo` on `PATH` — only for `--harness native` ([OmO Native](#omo-native))
 - `bun` — only for `omodel --refresh-omo` (regenerating bundled suggestion data)
 
 ## Installation
@@ -130,6 +131,7 @@ omodel --refresh-models         # force `opencode models --refresh` + rebuild th
 omodel --print                  # print current resolved models, no UI
 omodel --check                  # dry-run CI check (exit 0; degrades if opencode absent)
 omodel --update [--yes]         # update omodel itself to the latest GitHub release (asks first)
+omodel --harness native         # edit OmO Native, not the OpenCode plugin (also with --print/--check/--refresh-models)
 omodel --version
 ```
 
@@ -148,6 +150,7 @@ live re-fetch and rebuild the cache.
 | `v` | Pick a variant for the current candidate |
 | `a` | Add a custom model (candidates / category row), an `ultrawork` / `compaction` sub-target (agent row), or a new preset holding the current models (presets card) |
 | `r` | Refresh the model list — or, on a preset, rename it |
+| `t` | Switch between opencode and OmO Native (only when nothing is unsaved) |
 | `x` | Clear the current agent/category model (on a sub-target or a model row you added: delete the row; on a preset: delete it, after a confirm — never the one you're using) |
 | `u` / `Ctrl+r` | Undo / redo the last edit (in session) |
 | `s` | Save (diff + confirm modal) |
@@ -176,6 +179,25 @@ run seeds a `default` preset from the config you already have, so your config al
 of your presets — never a state you can't get back to. Nothing is written until you press `s`, and
 then both files are written together; presets live beside your config in `.omodel-presets.json`,
 so a `--config` override keeps its own set.
+
+## OmO Native
+
+omo comes in two editions that share `~/.omo/omo.jsonc`: the OpenCode plugin, which reads the
+`[opencode]` section, and OmO Native (the standalone `omo` command), which reads `[native]`.
+oModel edits the OpenCode one unless you ask for native:
+
+```sh
+omodel --harness native                 # the TUI, on native's agents and categories
+omodel --harness native --print         # also --check, --refresh-models, the JSON subcommands
+```
+
+Under `--harness native` you get native's own agents and categories, its suggested models, and
+the models you are logged into in omo (omo's model list, `omo --list-models`, limited to the
+providers you have a login for). There is also a `main` target: the model `omo` starts a new
+session on. It lives in omo's `~/.omo/agent/settings.json` and `state.json`, not in `omo.jsonc`;
+oModel changes only those keys and backs both files up first. Native has its own presets
+(`.omodel-presets-native.json`). In the TUI, `t` switches between opencode and native when
+nothing is unsaved; the top line shows which one you are editing.
 
 ## Using oModel from an agent
 
@@ -218,7 +240,8 @@ the backup and the preset invariant. Use the `omodel` CLI instead:
 
 Targets are `agent:<name>`, `agent:<name>.ultrawork`, `agent:<name>.compaction`, `cat:<name>`
 (`omodel targets --json` lists them). Exit 3 means the request was refused — read the message
-and pick another candidate. Exit 1 means omodel failed; stop and report.
+and pick another candidate. Exit 1 means omodel failed; stop and report. For OmO Native (the
+`omo` command), add `--harness native` to every command but `agent-guide`.
 ```
 
 One line of it does the real work: *never hand-edit the file*. Everything else the agent can
