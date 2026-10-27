@@ -460,11 +460,14 @@ cp ~/.omo/omo.jsonc /tmp/omo-native.jsonc
 omodel --harness native show --config /tmp/omo-native.jsonc --json
 omodel --harness native set cat:quick <value from candidates> --config /tmp/omo-native.jsonc --json
 omodel --harness native --check --config /tmp/omo-native.jsonc
+omodel --harness native set main <value from candidates main> --config /tmp/omo-native.jsonc --json
 ```
 
 **Expected:** `harness: "native"`, `providers` = the providers in `~/.omo/agent/auth.json` (plus
 any whose API-key env var is set), the set lands inside `"[native]"` with `[opencode]` and every
-comment byte-for-byte unchanged, and a `.omodel-presets-native.json` appears beside the copy. To
+comment byte-for-byte unchanged, and a `.omodel-presets-native.json` appears beside the copy.
+`main` lands in `/tmp/agent/settings.json` (a `--config` copy keeps `main` beside it; logins still
+come from the real `~/.omo/agent`), and `~/.omo/agent/settings.json` is unchanged. To
 cross-check availability against omo's own resolver, `omo doctor --models --json` marks each
 chain rung `no-login` vs runnable; the two must agree on which providers are logged in.
 
@@ -476,7 +479,7 @@ chain rung `no-login` vs runnable; the two must agree on which providers are log
 python -m pytest tests/ -x -q
 ```
 
-Expected outcome — every one of the 15 test files passes:
+Expected outcome — every one of the 16 test files passes:
 - `test_detect_family.py`, `test_catalog_parse.py`, `test_resolve.py`, `test_config_io.py`
 - `test_app_pilot.py` (the full Textual pilot suite — much the slowest; it dominates wall clock)
 - `test_cache.py`, `test_cli.py`, `test_history.py`, `test_presets.py`, `test_refresh.py`
@@ -484,6 +487,7 @@ Expected outcome — every one of the 15 test files passes:
   `test_agent_surface_integration.py` (the CLI verbs end-to-end over a real temp config)
 - `test_update.py` (`omodel --update` — the swap, and every failure path leaving the binary alone)
 - `test_native_harness.py` (`--harness native` — logins, the `[native]` splice, presets, `t`)
+- `test_main_model.py` (native's `main` target — omo's `settings.json` / `state.json`)
 - `test_unified_config.py` (the `[opencode]` scope of `~/.omo/omo.jsonc`)
 
 The Lead's gate is: every test file passes (or is explicitly waived with documented reason),
