@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Linux binary is about half the size: the release build now strips debug info from the
+  libraries it packs (0.8.0 was 28.5 MB on Linux against 14.3 MB on macOS).
+
 ## [0.8.1] — 2026-11-02
 
 ### Changed

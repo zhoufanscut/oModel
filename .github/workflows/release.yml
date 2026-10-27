@@ -62,11 +62,22 @@ jobs:
         run: pip install pyinstaller==6.22.3
 
       - name: Build one-file binary
+        # --strip on Linux only: CI's Python (actions/setup-python) ships libpython and its
+        # extension modules with debug info, which doubled the Linux binary (0.8.0: 28.5 MB vs
+        # 14.3 MB on macOS). PyInstaller strips every shared library it packs, not the
+        # bootloader; a missing strip(1) is only a warning there, so fail the build instead.
+        # macOS is left alone (small already; stripping there is untested).
         run: |
+          strip_flag=""
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            command -v strip > /dev/null || { echo "::error::no strip on the PATH; install binutils"; exit 1; }
+            strip_flag="--strip"
+          fi
           pyinstaller \
             --onefile \
             --name omodel \
             --collect-data omodel \
+            $strip_flag \
             src/omodel/__main__.py
 
       - name: Smoke test binary
