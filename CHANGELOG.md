@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-11-02
+
 ### Changed
 
 - Bundled suggestions now follow omo 5.1.57, adding Kimi K3.1 Pro on the providers that serve

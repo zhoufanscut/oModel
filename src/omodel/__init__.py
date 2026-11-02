@@ -1,3 +1,3 @@
 """oModel — a TUI to quickly set OMO (oh-my-openagent) models."""
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
