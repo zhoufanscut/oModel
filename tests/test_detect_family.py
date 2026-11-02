@@ -187,6 +187,11 @@ ACCEPTED_VARIANT_DRIFT = {
     ("grok-4.7", "xhigh"),
     ("deepseek-flash", "off"),
     ("kimi-for-coding-highspeed", "off"),
+
+    # omo 5.1.57: Kimi 3.1 Pro's chains request max, as Kimi 3's do, while the shared kimi
+    # heuristic still stops at high. Preserve the upstream recommendation; this acknowledgment
+    # does not assert provider support (the runtime checks use the provider's variant data).
+    ("kimi-k3.1-pro", "max"),
 }
 
 

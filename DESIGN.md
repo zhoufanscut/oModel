@@ -1359,8 +1359,11 @@ It also extracts OmO Native's chains from `packages/senpi-task/src` into a `nati
 `bun install` would resolve, so the script rewrites the two specifiers to model-core source paths
 as the files load (a bun `onLoad` plugin — a runtime `onResolve` does not fire for bare
 specifiers under bun 1.4). The weekly refresh's sparse checkout therefore includes
-`packages/senpi-task`; an omo without it yields no `native` section, which leaves oModel without
-the native harness rather than failing. `tools/snapshot_native_auth.ts` is the separate, manual
+`packages/senpi-task` and `packages/omo-senpi/src/components/model-profile` (the main-model
+recommendations). The bundled-data tests require native main-model recommendations so an
+incomplete checkout cannot silently drop them. An omo without senpi-task yields no `native`
+section, which leaves oModel without the native harness rather than failing.
+`tools/snapshot_native_auth.ts` is the separate, manual
 extractor for `data/native-auth.json`.
 
 ### `update.py` — `omodel --update` (self-update from GitHub Releases)

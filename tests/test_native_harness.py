@@ -199,6 +199,12 @@ class TestBundledNativeData:
         assert native.families is data.families
         assert data.for_harness("opencode") is data
 
+    def test_main_recommendations_are_bundled(self):
+        native = suggestions.load().for_harness("native")
+        assert native.main, "refresh dropped native main-model profiles"
+        assert native.main["fallbackChain"], "native main-model recommendations are empty"
+        assert native.main["viaProfiles"], "native main-model profile order is empty"
+
     def test_reviewer_agents_borrow_their_categories_chains(self):
         native = suggestions.load().for_harness("native")
         reviewer = native.agents["omo-native-code-reviewer"]

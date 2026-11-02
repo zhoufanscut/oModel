@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now follow omo 5.1.57, adding Kimi K3.1 Pro on the providers that serve
+  it while keeping Kimi K3 fallbacks for the others.
+
+### Fixed
+
+- The weekly suggestion refresh accepts omo 5.1.57's `kimi-k3.1-pro@max` recommendation and
+  keeps Native main-model recommendations instead of dropping them from the generated data.
+
 ## [0.8.0] — 2026-10-27
 
 ### Added

@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.48",
-    "omoCommit": "8706f468c3a891fd82189e0bac84fed2fe449688",
-    "generatedAt": "2026-10-26T10:37:56.221Z"
+    "omoVersion": "5.1.57",
+    "omoCommit": "be42382865d81d5151d17646ff835917bcbac47d",
+    "generatedAt": "2026-11-02T06:28:30.542Z"
   },
   "agents": {
     "sisyphus": {
@@ -21,9 +21,14 @@
             "opencode-go",
             "kimi-for-coding",
             "moonshotai",
+            "moonshotai-cn"
+          ],
+          "model": "kimi-k3.1-pro"
+        },
+        {
+          "providers": [
             "opencode",
             "bailian-coding-plan",
-            "moonshotai-cn",
             "firmware",
             "ollama-cloud",
             "aihubmix"
@@ -262,7 +267,7 @@
           "providers": [
             "opencode-go"
           ],
-          "model": "kimi-k3"
+          "model": "kimi-k3.1-pro"
         },
         {
           "providers": [
@@ -308,7 +313,13 @@
           "providers": [
             "opencode-go",
             "kimi-for-coding",
-            "moonshotai",
+            "moonshotai"
+          ],
+          "model": "kimi-k3.1-pro",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "opencode"
           ],
           "model": "kimi-k3",
@@ -343,7 +354,13 @@
           "providers": [
             "opencode-go",
             "kimi-for-coding",
-            "moonshotai",
+            "moonshotai"
+          ],
+          "model": "kimi-k3.1-pro",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "opencode"
           ],
           "model": "kimi-k3",
@@ -432,7 +449,7 @@
           "providers": [
             "opencode-go"
           ],
-          "model": "kimi-k3"
+          "model": "kimi-k3.1-pro"
         },
         {
           "providers": [
@@ -482,7 +499,7 @@
           "providers": [
             "opencode-go"
           ],
-          "model": "kimi-k3"
+          "model": "kimi-k3.1-pro"
         },
         {
           "providers": [
@@ -561,7 +578,13 @@
           "providers": [
             "kimi-for-coding",
             "moonshotai",
-            "opencode-go",
+            "opencode-go"
+          ],
+          "model": "kimi-k3.1-pro",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "opencode"
           ],
           "model": "kimi-k3",
@@ -711,7 +734,13 @@
           "providers": [
             "kimi-for-coding",
             "moonshotai",
-            "opencode-go",
+            "opencode-go"
+          ],
+          "model": "kimi-k3.1-pro",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "opencode"
           ],
           "model": "kimi-k3",
@@ -916,7 +945,13 @@
           "providers": [
             "kimi-for-coding",
             "moonshotai",
-            "opencode-go",
+            "opencode-go"
+          ],
+          "model": "kimi-k3.1-pro",
+          "variant": "max"
+        },
+        {
+          "providers": [
             "opencode"
           ],
           "model": "kimi-k3",
@@ -1452,7 +1487,13 @@
             "providers": [
               "opencode-go",
               "kimi-for-coding",
-              "moonshotai",
+              "moonshotai"
+            ],
+            "model": "kimi-k3.1-pro",
+            "variant": "max"
+          },
+          {
+            "providers": [
               "opencode"
             ],
             "model": "kimi-k3",
@@ -1551,7 +1592,7 @@
               "moonshotai",
               "opencode-go"
             ],
-            "model": "kimi-k3",
+            "model": "kimi-k3.1-pro",
             "variant": "max"
           }
         ],
@@ -1732,7 +1773,7 @@
               "moonshotai",
               "opencode-go"
             ],
-            "model": "kimi-k3",
+            "model": "kimi-k3.1-pro",
             "variant": "max"
           }
         ],
@@ -1783,7 +1824,7 @@
               "moonshotai",
               "opencode-go"
             ],
-            "model": "kimi-k3",
+            "model": "kimi-k3.1-pro",
             "variant": "max"
           }
         ]
@@ -1938,7 +1979,7 @@
               "moonshotai",
               "opencode-go"
             ],
-            "model": "kimi-k3",
+            "model": "kimi-k3.1-pro",
             "variant": "max"
           }
         ]
@@ -2139,7 +2180,7 @@
               "moonshotai",
               "opencode-go"
             ],
-            "model": "kimi-k3",
+            "model": "kimi-k3.1-pro",
             "variant": "max"
           }
         ]
@@ -2200,7 +2241,7 @@
             "moonshotai",
             "opencode-go"
           ],
-          "model": "kimi-k3",
+          "model": "kimi-k3.1-pro",
           "variant": "max"
         },
         {
