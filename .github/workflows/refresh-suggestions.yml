@@ -65,14 +65,15 @@ jobs:
           repository: code-yeongyu/oh-my-openagent
           ref: ${{ steps.ref.outputs.ref }}
           path: oh-my-openagent
-          # The extractor only reads packages/model-core/src (a self-contained
-          # closure, ~240 KB), OmO Native's chains in packages/senpi-task/src, and
-          # the root package.json. Sparse-checkout (cone mode also keeps root files)
+          # The extractor reads model-core, OmO Native's chains in senpi-task,
+          # its main-model profiles in omo-senpi, and the root package.json.
+          # Sparse-checkout (cone mode also keeps root files)
           # avoids materializing the whole repo on the runner; the default depth=1
           # already skips history.
           sparse-checkout: |
             packages/model-core
             packages/senpi-task
+            packages/omo-senpi/src/components/model-profile
 
       - name: Set up bun
         uses: oven-sh/setup-bun@v2
