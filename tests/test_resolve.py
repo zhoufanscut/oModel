@@ -559,6 +559,38 @@ class TestK2p5Alias:
 
 
 # ---------------------------------------------------------------------------
+# Hardcoded available-id alias: k3.1-pro ≡ kimi-k3.1-pro
+# ---------------------------------------------------------------------------
+
+class TestAvailableModelAliases:
+    """Kimi's Native coding plans omit the vendor prefix from this model id."""
+
+    def test_short_kimi_id_fills_native_main_exactly(self, sugg):
+        native = sugg.for_harness("native")
+        res = Resolver.build(_make_catalog(["kimi-code-plan-cn/k3.1-pro"]), native)
+        req = {"fallbackChain": [
+            {"providers": ["kimi-coding"], "model": "kimi-k3.1-pro", "variant": "max"},
+        ]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("main")
+        assert [(r["provider"], r["model"], r["substitute_for"], r["variant"]) for r in rows] == [
+            ("kimi-code-plan-cn", "k3.1-pro", None, "max"),
+        ]
+
+    def test_short_kimi_id_joins_the_kimi_family(self, sugg):
+        res = Resolver.build(_make_catalog(["kimi-coding/k3.1-pro"]), sugg)
+        assert res._same_line_match("kimi-k3") == "k3.1-pro"
+        req = {"fallbackChain": [{"providers": ["kimi-coding"], "model": "kimi-k3"}]}
+        with patch.object(res, "_requirement_for", return_value=req):
+            rows = res.candidates("agent:explore")
+        assert [(r["provider"], r["model"], r["substitute_for"]) for r in rows] == [
+            ("kimi-coding", "k3.1-pro", "kimi-k3"),
+        ]
+        assert res.vendors_served("kimi-coding") == 1
+        assert not res._matches_omo_id("k3.1-pro-highspeed", "kimi-k3.1-pro")
+
+
+# ---------------------------------------------------------------------------
 # Synthetic top-level variant tier (DESIGN: "presently always empty in omo")
 # ---------------------------------------------------------------------------
 

@@ -36,9 +36,14 @@ line when a new one does.
 - **candidate / candidate-row** — the dict `resolve.candidates()` yields and `app.py` renders, **one
   row per serving provider.** *The integration seam.* → CONTRACTS.md (frozen), resolve.py
 - **exact vs same-line substitute** — *exact* = a connected provider serves the model, allowing a
-  trailing date stamp / sub-version tag (see *noise suffix*); *substitute* = no exact, so the
-  **newest** connected model of the same family (`glm-5` → `glm-5.1`) — but never across a Claude
-  *line* (haiku ≠ sonnet ≠ fable ≠ mythos). → resolve.py `candidates`
+  resolver alias, `.`/`-` spelling, or a trailing date stamp / sub-version tag (see *noise suffix*);
+  *substitute* = no exact, so the **newest** connected model of the same family (`glm-5` → `glm-5.1`)
+  — but never across a Claude *line* (haiku ≠ sonnet ≠ fable ≠ mythos). → resolve.py `candidates`
+- **omo-id alias vs available-id alias** — the first canonicalizes a chain entry (`k2p5` →
+  `kimi-k2.5`); the second canonicalizes a provider's id for matching and family detection only
+  (`k3.1-pro` → `kimi-k3.1-pro`), leaving the row and saved id unchanged. Neither changes omo's
+  shared `detect_family` / `normalize_model_id` heuristic. → resolve.py `_OMO_MODEL_ALIASES` /
+  `_AVAILABLE_MODEL_ALIASES`
 - **noise suffix vs real modifier** — a trailing id token an available id carries that the bare omo
   id lacks. *Noise* (stripped when matching) = a date/build stamp (`…-20251001`) or an unknown
   sub-version tag (`…-jibao`). *Real modifier* (kept; a distinct model) = a token omo itself uses

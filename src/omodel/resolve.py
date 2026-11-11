@@ -21,6 +21,21 @@ from .suggestions import Suggestions, normalize_model_id, vendor
 # normalize_model_id() stay a faithful port of omo.
 _OMO_MODEL_ALIASES = {"k2p5": "kimi-k2.5"}
 
+# Hardcoded AVAILABLE-id aliases, also oModel-only. Kimi's coding-plan providers
+# (`kimi-code-plan-cn` and `kimi-coding`) serve K3.1 Pro as `k3.1-pro`, while omo's chains name
+# `kimi-k3.1-pro`. The short spelling also falls outside omo's family heuristic, so canonicalize
+# it for exact matching and family detection alike. The row and the saved config keep the real
+# available id; detect_family() and normalize_model_id() stay faithful ports.
+# Keys and values are normalized (`normalize_model_id`) spellings.
+_AVAILABLE_MODEL_ALIASES = {"k3-1-pro": "kimi-k3-1-pro"}
+
+
+def _canonical_available_id(model_id: str) -> str:
+    """Apply an available-id alias for matching only; never rewrite what the provider serves."""
+    normalized = normalize_model_id(model_id)
+    return _AVAILABLE_MODEL_ALIASES.get(normalized, normalized)
+
+
 # A trailing pure-digit token of >= this many digits is a compact date/build STAMP (provider
 # noise, e.g. claude-haiku-4-5-20251001), not a version number (real versions are 1-2 digits) —
 # so it is stripped when matching an available id to an omo chain id. The floor keeps `glm-5.1`
@@ -98,12 +113,13 @@ class Resolver:
         return resolver
 
     def vendors_served(self, provider: str) -> int:
-        """len({ vendor(suggestions.detect_family(m)) for m in catalog.available[provider] } - {None}).
+        """len({ vendor(suggestions.detect_family(_canonical_available_id(m)))
+                 for m in catalog.available[provider] } - {None}).
         Data-driven gateway test: >= 2 distinct vendors ⇒ gateway, else dedicated."""
         models = self.catalog.available.get(provider, [])
         vendors = set()
         for m in models:
-            v = vendor(self.suggestions.detect_family(m))
+            v = vendor(self.suggestions.detect_family(_canonical_available_id(m)))
             if v is not None:
                 vendors.add(v)
         return len(vendors)
@@ -164,7 +180,7 @@ class Resolver:
         plus a trailing date stamp and/or sub-version tag? `claude-haiku-4-5-20251001` and
         `claude-sonnet-4-8-jibao` match `claude-haiku-4-5` / `claude-sonnet-4-8`; but `glm-5.1`
         does NOT match `glm-5`, and `gpt-5.4-mini-fast` does NOT match `gpt-5.4-mini`."""
-        a = normalize_model_id(available_id)
+        a = _canonical_available_id(available_id)
         c = normalize_model_id(omo_id)
         if a == c:
             return True
@@ -190,7 +206,7 @@ class Resolver:
                        if self._matches_omo_id(m, omo_id)]
             if not matches:
                 continue
-            exact = [m for m in matches if normalize_model_id(m) == c]
+            exact = [m for m in matches if _canonical_available_id(m) == c]
             found.append((prov, exact[0] if exact else max(matches, key=self._version_key)))
         dedicated = [pair for pair in found if pair[0] not in self.gateways]
         gateways = [pair for pair in found if pair[0] in self.gateways]
@@ -297,7 +313,9 @@ class Resolver:
                 if resolved_model is None or resolved_model in exact_chain_models:
                     continue
                 substitute_for = model_id
-                fills = self._fills_by_provider(resolved_model)
+                # resolved_model is an AVAILABLE id; refill by its canonical omo-style spelling,
+                # while _fills_by_provider still returns the provider's real id for the row.
+                fills = self._fills_by_provider(_canonical_available_id(resolved_model))
 
             # One row per serving provider, dedicated (single-vendor) before aggregator
             # (gateway). You pick the prefix by choosing the row — no `p` cycling.
@@ -343,7 +361,7 @@ class Resolver:
         # against it, omo's own picks were flagged ⚠ on every cold cache.
         if v in _LADDER_CONTROLS:
             return []
-        fam = self.suggestions.detect_family(model)
+        fam = self.suggestions.detect_family(_canonical_available_id(model))
         if fam is not None and v not in [x.lower() for x in fam.variants]:
             return ["variant"]
         return []
@@ -369,7 +387,7 @@ class Resolver:
             for m in self.catalog.available.get(prov, []):
                 if m in seen:
                     continue
-                fam = self.suggestions.detect_family(m)
+                fam = self.suggestions.detect_family(_canonical_available_id(m))
                 if fam is not None and fam.family == target_fam.family:
                     if guard_line and _claude_line(m) != target_line:
                         continue  # different Claude line (haiku/sonnet/fable/…): not same-line

@@ -820,8 +820,8 @@ In summary:
 
 ### `resolve.py` — core logic
 - **Gateway detection (`vendors_served`):** for each connected provider `p`,
-  `vendors_served(p) = len({ vendor(detect_family(m)) for m in available[p] } - {None})` using the
-  complete `FAMILY_VENDOR` map (§suggestions.py). `p` is a **gateway** iff `vendors_served(p) ≥ 2`,
+  `vendors_served(p) = len({ vendor(detect_family(_canonical_available_id(m))) for m in available[p] } - {None})`
+  using the complete `FAMILY_VENDOR` map (§suggestions.py). `p` is a **gateway** iff `vendors_served(p) ≥ 2`,
   else **dedicated**; `gateways = {p for p in connected if vendors_served(p) >= 2}` is computed once at
   load. Data-driven, no hardcoded provider list — `opencode`/`openrouter`/`vercel`/`github-copilot`
   (and any future) self-classify; `openai`'s families all map to vendor `openai` so it counts as
@@ -877,7 +877,15 @@ In summary:
   dot-free spelling of kimi-k2.5) is treated as **exactly `kimi-k2.5`**, overriding omo's heuristic
   that would file the `p<digit>` suffix under the kimi-*thinking* family and pull in a kimi-k2-thinking
   model. The alias acts only here in `candidates()`; `detect_family`/`normalize_model_id` stay a
-  faithful port. Each resolved model **expands to one row per serving provider** (dedicated-first,
+  faithful port. Available ids have a separate, match-only alias table (`_AVAILABLE_MODEL_ALIASES`):
+  Kimi's `kimi-code-plan-cn` and `kimi-coding` providers list `k3.1-pro` for omo's
+  `kimi-k3.1-pro`, a spelling the shared family heuristic does not recognize. Canonicalizing that
+  exact available id before exact matching and family detection makes it an exact row and a Kimi
+  same-line candidate, while the row and saved config keep the provider's real `k3.1-pro` id. It is
+  an exact alias, not general vendor-prefix stripping — `k3.1-pro-highspeed` does not fill the
+  base model's slot. A same-line match returns that real available id, so `candidates()` canonicalizes
+  it again before `_fills_by_provider` (which expects an omo-style id) and still emits the real id.
+  Each resolved model **expands to one row per serving provider** (dedicated-first,
   `_fills_by_provider`); rows are then **deduped by resolved `provider/model`** (higher-priority
   entry/provider wins). **Variant precedence:** entry `variant` → requirement top-level
   `variant` → **none** (the family registry only *validates* variants — designates no default — so an

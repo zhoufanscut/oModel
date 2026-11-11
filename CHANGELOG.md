@@ -10,6 +10,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Linux binary is about half the size: the release build now strips debug info from the
   libraries it packs (0.8.0 was 28.5 MB on Linux against 14.3 MB on macOS).
 
+### Fixed
+
+- Native now recommends Kimi K3.1 Pro on `kimi-code-plan-cn` and `kimi-coding`, whose catalog id
+  is `k3.1-pro`; selecting it saves that provider-specific id unchanged.
+
 ## [0.8.1] — 2026-11-02
 
 ### Changed
