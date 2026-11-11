@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-11-11
+
 ### Changed
 
 - The Linux binary is about half the size: the release build now strips debug info from the
