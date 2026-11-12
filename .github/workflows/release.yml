@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          # Keep the Linux glibc floor stable instead of following ubuntu-latest.
+          - runner: ubuntu-24.04
             os-name: linux
             arch: x64
             asset-name: omodel-linux-x64
@@ -81,9 +82,11 @@ jobs:
             src/omodel/__main__.py
 
       - name: Smoke test binary
+        # The headless flags deliberately skip Textual; start the real TUI in a pty too.
         run: |
           ./dist/omodel --version
           ./dist/omodel --check
+          python tests/smoke_tui.py ./dist/omodel
 
       - name: Create tarball
         run: |

@@ -31,14 +31,17 @@ pyinstaller --onefile --name omodel \
     src/omodel/__main__.py
 ./dist/omodel --version
 ./dist/omodel --check
+python tests/smoke_tui.py ./dist/omodel
 ```
 
 **Real-config safety:** `--check` degrades to suggestions-only when `opencode` is absent;
 it never writes the live config. Use `--config /tmp/omodel-test.jsonc` if `--check`
-requires a config path.
+requires a config path. The TUI smoke script supplies its own temporary config, HOME and cache.
 
-**Pass criteria:** exit 0 for both `--version` and `--check`; no ImportError or
-`importlib.resources` error for the bundled `omo-suggestions.json`.
+**Pass criteria:** exit 0 for `--version`, `--check` and the TUI smoke; no ImportError or
+`importlib.resources` error for the bundled `omo-suggestions.json`. The smoke must capture the
+`oModel [opencode]:` header and quit cleanly with `q`; the headless flags alone do not import
+Textual's platform driver.
 
 ---
 

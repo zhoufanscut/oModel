@@ -70,9 +70,9 @@ The installer checks the download against the release's published sha256 and sto
 can't (set `OMODEL_SKIP_VERIFY=1` to install unverified, for example on a machine with neither
 `sha256sum` nor `shasum`). It also runs the new binary once before installing it.
 
-The prebuilt `linux-x64` binary needs a glibc at least as new as whatever the `ubuntu-latest`
-GitHub Actions runner ships at build time. On older distros the installer stops because the
-binary won't start; use the pipx/uvx install path below instead.
+The prebuilt `linux-x64` binary needs a glibc at least as new as the Ubuntu 24.04 GitHub Actions
+runner used to build it. On older distros the installer stops because the binary won't start; use
+the pipx/uvx install path below instead.
 
 ### pipx / uvx (from GitHub, no PyPI)
 

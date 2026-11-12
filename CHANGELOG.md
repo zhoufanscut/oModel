@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The 0.8.2 standalone Linux binary failed to open the TUI on Debian 13 with `GLIBC_2.42` not
+  found. Linux release builds now use Ubuntu 24.04, and the release smoke test opens and quits
+  the TUI instead of checking only headless commands.
+
 ## [0.8.2] — 2026-11-11
 
 ### Changed

@@ -1703,11 +1703,13 @@ dependency added here would ship inside the very binary this replaces.
 - **Primary — standalone binary + installer (GitHub Releases):** PyInstaller **one-file** build,
   `pyinstaller --onefile --name omodel --collect-data omodel src/omodel/__main__.py` (bundles
   `data/` + `tools/`; `importlib.resources` reads them from the frozen package). CI `release.yml`
-  builds on tag push (matrix: **linux-x64** `ubuntu-latest`, **darwin-arm64** `macos-latest`),
+  builds on tag push (matrix: **linux-x64** `ubuntu-24.04`, **darwin-arm64** `macos-latest`),
   gated by: a **tag↔version check** (tag must equal `__init__.__version__` and pyproject's
-  `version`), the **full pytest suite**, and a smoke test running `--version` **and `--check`**
-  (`--check` imports the data-loading path, so a broken `--collect-data` bundle fails the release
-  — `--version` alone returns before touching bundled data and can't catch it). It attaches
+  `version`), the **full pytest suite**, and smoke tests running `--version`, `--check` and
+  `tests/smoke_tui.py`. `--check` imports the data-loading path, so a broken `--collect-data`
+  bundle fails the release; the pseudo-terminal smoke starts the real TUI, waits for its header
+  and quits with `q`, covering the platform-driver import that the two headless flags skip.
+  It attaches
   `omodel-<os>-<arch>` (bare binary), `omodel-<os>-<arch>.tar.gz` (**binary + LICENSE + NOTICE**
   — the tarball is the canonical asset; NOTICE must ship with the omo-derived bundled data), and
   `….tar.gz.sha256` to the Release. (Intel-mac `macos-13` was dropped — GitHub is retiring those
@@ -1716,7 +1718,7 @@ dependency added here would ship inside the very binary this replaces.
   present (hard-fails on mismatch; warns-and-continues when absent, e.g. an older release),
   extracts, and installs `omodel` to `~/.local/bin`:
   `curl -fsSL https://raw.githubusercontent.com/zhoufanscut/oModel/main/install.sh | sh`.
-  The linux binary needs a glibc ≥ the `ubuntu-latest` builder's (documented in README; older
+  The linux binary needs a glibc ≥ the `ubuntu-24.04` builder's (documented in README; older
   distros → pipx/uvx path).
 - **Staying current — `omodel --update`:** the standalone binary updates itself from the same
   Release assets `install.sh` reads (tarball + `.sha256`, `releases/latest`), which is why the
@@ -1742,7 +1744,8 @@ dependency added here would ship inside the very binary this replaces.
 
 1. **Build/install:** `pipx install .` (and `pipx install git+https://…` once pushed); `omodel
    --version`; `omodel --check` runs with no omo source. Then a PyInstaller one-file build → run the
-   **binary's** `omodel --version`/`--check` to confirm bundled `data/` loads via `importlib.resources`;
+   **binary's** `omodel --version`/`--check` to confirm bundled `data/` loads via `importlib.resources`,
+   and `tests/smoke_tui.py` to start its TUI in a pseudo-terminal and quit with `q`;
    `install.sh` places it on PATH.
 2. **Availability + prefix (unit, mocked `opencode models`):** `vendors_served` classifies
    `opencode`/`openrouter`→gateway and `openai`/`zhipuai`/`moonshotai-cn`/`deepseek`→dedicated.
