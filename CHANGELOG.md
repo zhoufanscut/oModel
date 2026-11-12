@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-11-12
+
 ### Fixed
 
 - The 0.8.2 standalone Linux binary failed to open the TUI on Debian 13 with `GLIBC_2.42` not
