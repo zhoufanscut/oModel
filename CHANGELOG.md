@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-11-16
+
 ### Changed
 
 - Bundled suggestions now follow omo 5.1.72, adding Claude Fable 5.2 recommendations for
