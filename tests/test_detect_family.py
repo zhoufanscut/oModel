@@ -192,6 +192,12 @@ ACCEPTED_VARIANT_DRIFT = {
     # heuristic still stops at high. Preserve the upstream recommendation; this acknowledgment
     # does not assert provider support (the runtime checks use the provider's variant data).
     ("kimi-k3.1-pro", "max"),
+
+    # omo 5.1.72: Fable 5.2's chains request the same max/xhigh levels as Fable 5.1,
+    # while claude-non-opus still lists low/medium/high. Keep the upstream recommendations;
+    # this acknowledgment does not assert provider support.
+    ("claude-fable-5-2", "max"),
+    ("claude-fable-5-2", "xhigh"),
 }
 
 
