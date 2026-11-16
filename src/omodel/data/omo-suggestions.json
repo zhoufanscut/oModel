@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.57",
-    "omoCommit": "be42382865d81d5151d17646ff835917bcbac47d",
-    "generatedAt": "2026-11-02T06:28:30.542Z"
+    "omoVersion": "5.1.72",
+    "omoCommit": "3e4a2eff0a9852998efeb63aad8cfde5b8786be2",
+    "generatedAt": "2026-11-16T06:19:25.435Z"
   },
   "agents": {
     "sisyphus": {
@@ -297,6 +297,15 @@
             "github-copilot",
             "opencode"
           ],
+          "model": "claude-fable-5-2",
+          "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "anthropic",
+            "github-copilot",
+            "opencode"
+          ],
           "model": "claude-fable-5-1",
           "variant": "xhigh"
         },
@@ -332,6 +341,15 @@
     },
     "metis": {
       "fallbackChain": [
+        {
+          "providers": [
+            "anthropic",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "claude-fable-5-2",
+          "variant": "max"
+        },
         {
           "providers": [
             "anthropic",
@@ -561,6 +579,16 @@
             "github-copilot",
             "opencode"
           ],
+          "model": "claude-fable-5-2",
+          "variant": "max"
+        },
+        {
+          "providers": [
+            "anthropic",
+            "anthropic-api",
+            "github-copilot",
+            "opencode"
+          ],
           "model": "claude-fable-5-1",
           "variant": "max"
         },
@@ -710,6 +738,16 @@
     },
     "artistry": {
       "fallbackChain": [
+        {
+          "providers": [
+            "anthropic",
+            "anthropic-api",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "claude-fable-5-2",
+          "variant": "max"
+        },
         {
           "providers": [
             "anthropic",
@@ -1470,6 +1508,16 @@
               "github-copilot",
               "opencode"
             ],
+            "model": "claude-fable-5-2",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "github-copilot",
+              "opencode"
+            ],
             "model": "claude-fable-5-1",
             "variant": "max"
           },
@@ -1803,6 +1851,17 @@
               "github-copilot",
               "opencode"
             ],
+            "model": "claude-fable-5-2",
+            "variant": "max"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
             "model": "claude-fable-5-1",
             "variant": "max"
           },
@@ -1839,8 +1898,19 @@
               "github-copilot",
               "opencode"
             ],
+            "model": "claude-fable-5-2",
+            "variant": "xhigh"
+          },
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
             "model": "claude-fable-5-1",
-            "variant": "max"
+            "variant": "xhigh"
           }
         ]
       },
@@ -1950,6 +2020,17 @@
       },
       "artistry": {
         "fallbackChain": [
+          {
+            "providers": [
+              "anthropic-subscription",
+              "anthropic",
+              "anthropic-api",
+              "github-copilot",
+              "opencode"
+            ],
+            "model": "claude-fable-5-2",
+            "variant": "max"
+          },
           {
             "providers": [
               "anthropic-subscription",
@@ -2236,21 +2317,23 @@
         },
         {
           "providers": [
+            "anthropic-subscription",
+            "anthropic",
+            "anthropic-api",
+            "github-copilot",
+            "opencode"
+          ],
+          "model": "claude-fable-5-2",
+          "variant": "medium"
+        },
+        {
+          "providers": [
             "kimi-coding",
             "kimi-for-coding",
             "moonshotai",
             "opencode-go"
           ],
           "model": "kimi-k3.1-pro",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "zai",
-            "zai-coding-cn",
-            "opencode-go"
-          ],
-          "model": "glm-5.3",
           "variant": "max"
         },
         {

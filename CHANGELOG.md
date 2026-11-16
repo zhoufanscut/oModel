@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now follow omo 5.1.72, adding Claude Fable 5.2 recommendations for
+  OpenCode and Native. The weekly refresh accepts its `max` and `xhigh` recommendations.
+
 ## [0.8.3] — 2026-11-12
 
 ### Fixed

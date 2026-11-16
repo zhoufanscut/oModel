@@ -1371,6 +1371,10 @@ specifiers under bun 1.4). The weekly refresh's sparse checkout therefore includ
 recommendations). The bundled-data tests require native main-model recommendations so an
 incomplete checkout cannot silently drop them. An omo without senpi-task yields no `native`
 section, which leaves oModel without the native harness rather than failing.
+Chain variants missing from omo's heuristic family registry require review of the generated
+diff, then acknowledgment of the exact `(model, variant)` pair in the bundled-data test's
+`ACCEPTED_VARIANT_DRIFT`. This preserves the upstream recommendation without asserting provider
+support or broadening the registry; runtime variant checks still use provider data (decision #14).
 `tools/snapshot_native_auth.ts` is the separate, manual
 extractor for `data/native-auth.json`.
 
