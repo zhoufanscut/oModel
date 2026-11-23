@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-11-23
+
 ### Changed
 
 - Bundled suggestions now follow omo 5.1.81. The refresh adds GPT-6.2 Astra and Sol
