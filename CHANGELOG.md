@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled suggestions now follow omo 5.1.81. The refresh adds GPT-6.2 Astra and Sol
+  recommendations for OpenCode and Native, and oModel recognizes both as OpenAI models
+  when ordering providers.
+
 ## [0.8.4] — 2026-11-16
 
 ### Changed

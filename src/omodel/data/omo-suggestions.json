@@ -1,8 +1,8 @@
 {
   "meta": {
-    "omoVersion": "5.1.72",
-    "omoCommit": "3e4a2eff0a9852998efeb63aad8cfde5b8786be2",
-    "generatedAt": "2026-11-16T06:19:25.435Z"
+    "omoVersion": "5.1.81",
+    "omoCommit": "5835a98e88438f28a8ae0ee18039fad4d5fd415b",
+    "generatedAt": "2026-11-23T06:18:15.644Z"
   },
   "agents": {
     "sisyphus": {
@@ -396,6 +396,14 @@
             "openai",
             "chatgpt-subscription"
           ],
+          "model": "gpt-6.2-astra",
+          "variant": "xhigh"
+        },
+        {
+          "providers": [
+            "openai",
+            "chatgpt-subscription"
+          ],
           "model": "gpt-6-astra",
           "variant": "xhigh"
         },
@@ -404,6 +412,15 @@
             "github-copilot"
           ],
           "model": "gpt-6-astra",
+          "variant": "high"
+        },
+        {
+          "providers": [
+            "openai",
+            "chatgpt-subscription",
+            "opencode"
+          ],
+          "model": "gpt-6.2-astra",
           "variant": "high"
         },
         {
@@ -628,55 +645,16 @@
         {
           "providers": [
             "openai",
-            "chatgpt-subscription"
-          ],
-          "model": "gpt-6-astra",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "github-copilot"
-          ],
-          "model": "gpt-6-astra",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "openai",
             "chatgpt-subscription",
             "opencode"
           ],
-          "model": "gpt-6-astra",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "openai",
-            "chatgpt-subscription"
-          ],
-          "model": "gpt-5.6-sol",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "github-copilot"
-          ],
-          "model": "gpt-5.6-sol",
-          "variant": "max"
-        },
-        {
-          "providers": [
-            "openai",
-            "chatgpt-subscription",
-            "opencode"
-          ],
-          "model": "gpt-5.6-sol",
+          "model": "gpt-6.2-astra",
           "variant": "max"
         }
       ],
       "requiresProvider": [],
       "requiresModel": "",
-      "requiresAnyModel": false
+      "requiresAnyModel": true
     },
     "deep-low": {
       "fallbackChain": [
@@ -685,39 +663,13 @@
             "openai",
             "chatgpt-subscription"
           ],
-          "model": "gpt-6.1-sol",
-          "variant": "medium"
-        },
-        {
-          "providers": [
-            "openai",
-            "chatgpt-subscription"
-          ],
-          "model": "gpt-6.1-sol-fast",
-          "variant": "medium"
-        },
-        {
-          "providers": [
-            "openai",
-            "chatgpt-subscription",
-            "github-copilot",
-            "opencode"
-          ],
-          "model": "gpt-5.6-sol",
-          "variant": "medium"
-        },
-        {
-          "providers": [
-            "openai",
-            "chatgpt-subscription"
-          ],
-          "model": "gpt-5.6-sol-fast",
+          "model": "gpt-6.2-sol",
           "variant": "medium"
         }
       ],
       "requiresProvider": [],
       "requiresModel": "",
-      "requiresAnyModel": false
+      "requiresAnyModel": true
     },
     "deep-high": {
       "fallbackChain": [
@@ -725,16 +677,15 @@
           "providers": [
             "openai",
             "chatgpt-subscription",
-            "github-copilot",
             "opencode"
           ],
-          "model": "gpt-6-astra",
+          "model": "gpt-6.2-astra",
           "variant": "high"
         }
       ],
       "requiresProvider": [],
       "requiresModel": "",
-      "requiresAnyModel": false
+      "requiresAnyModel": true
     },
     "artistry": {
       "fallbackChain": [
@@ -899,6 +850,14 @@
           ],
           "model": "glm-5.3",
           "variant": "high"
+        },
+        {
+          "providers": [
+            "openai",
+            "chatgpt-subscription"
+          ],
+          "model": "gpt-6.2-sol",
+          "variant": "medium"
         },
         {
           "providers": [
@@ -1135,6 +1094,30 @@
     {
       "family": "gpt-6.1-sol",
       "pattern": "gpt-6-1-sol",
+      "includes": [],
+      "variants": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningEffortAliases": {
+        "none": "low",
+        "minimal": "low"
+      },
+      "supportsThinking": false
+    },
+    {
+      "family": "gpt-6.2",
+      "pattern": "gpt-6-2-(?:astra|sol)",
       "includes": [],
       "variants": [
         "low",
@@ -1556,6 +1539,14 @@
               "chatgpt-subscription",
               "openai"
             ],
+            "model": "gpt-6.2-astra",
+            "variant": "xhigh"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
             "model": "gpt-6-astra",
             "variant": "xhigh"
           },
@@ -1564,6 +1555,15 @@
               "github-copilot"
             ],
             "model": "gpt-6-astra",
+            "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai",
+              "opencode"
+            ],
+            "model": "gpt-6.2-astra",
             "variant": "high"
           },
           {
@@ -1655,33 +1655,7 @@
               "chatgpt-subscription",
               "openai"
             ],
-            "model": "gpt-6.1-sol",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-6.1-sol-fast",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai",
-              "github-copilot",
-              "opencode"
-            ],
-            "model": "gpt-5.6-sol",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-5.6-sol-fast",
+            "model": "gpt-6.2-sol",
             "variant": "medium"
           },
           {
@@ -1720,6 +1694,14 @@
             ],
             "model": "glm-5.3",
             "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.2-sol",
+            "variant": "medium"
           },
           {
             "providers": [
@@ -1788,10 +1770,9 @@
             "providers": [
               "chatgpt-subscription",
               "openai",
-              "github-copilot",
               "opencode"
             ],
-            "model": "gpt-6-astra",
+            "model": "gpt-6.2-astra",
             "variant": "high"
           },
           {
@@ -1919,49 +1900,10 @@
           {
             "providers": [
               "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-6-astra",
-            "variant": "max"
-          },
-          {
-            "providers": [
-              "github-copilot"
-            ],
-            "model": "gpt-6-astra",
-            "variant": "max"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
               "openai",
               "opencode"
             ],
-            "model": "gpt-6-astra",
-            "variant": "max"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-5.6-sol",
-            "variant": "max"
-          },
-          {
-            "providers": [
-              "github-copilot"
-            ],
-            "model": "gpt-5.6-sol",
-            "variant": "max"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai",
-              "opencode"
-            ],
-            "model": "gpt-5.6-sol",
+            "model": "gpt-6.2-astra",
             "variant": "max"
           }
         ]
@@ -1973,33 +1915,7 @@
               "chatgpt-subscription",
               "openai"
             ],
-            "model": "gpt-6.1-sol",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-6.1-sol-fast",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai",
-              "github-copilot",
-              "opencode"
-            ],
-            "model": "gpt-5.6-sol",
-            "variant": "medium"
-          },
-          {
-            "providers": [
-              "chatgpt-subscription",
-              "openai"
-            ],
-            "model": "gpt-5.6-sol-fast",
+            "model": "gpt-6.2-sol",
             "variant": "medium"
           }
         ]
@@ -2010,10 +1926,9 @@
             "providers": [
               "chatgpt-subscription",
               "openai",
-              "github-copilot",
               "opencode"
             ],
-            "model": "gpt-6-astra",
+            "model": "gpt-6.2-astra",
             "variant": "high"
           }
         ]
@@ -2174,6 +2089,14 @@
             ],
             "model": "glm-5.3",
             "variant": "high"
+          },
+          {
+            "providers": [
+              "chatgpt-subscription",
+              "openai"
+            ],
+            "model": "gpt-6.2-sol",
+            "variant": "medium"
           },
           {
             "providers": [
@@ -2351,10 +2274,35 @@
           "providers": [
             "chatgpt-subscription",
             "openai",
+            "opencode"
+          ],
+          "model": "gpt-6.2-astra",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai",
             "github-copilot",
             "opencode"
           ],
           "model": "gpt-6-astra",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai"
+          ],
+          "model": "gpt-6.2-sol-fast",
+          "variant": "medium"
+        },
+        {
+          "providers": [
+            "chatgpt-subscription",
+            "openai"
+          ],
+          "model": "gpt-6.2-sol",
           "variant": "medium"
         },
         {

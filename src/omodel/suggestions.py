@@ -19,7 +19,8 @@ from importlib.resources import files
 FAMILY_VENDOR = {
     "claude-opus": "anthropic", "claude-non-opus": "anthropic",
     "openai-deep-research": "openai", "openai-reasoning": "openai",
-    "gpt-6-astra": "openai", "gpt-6.1-sol": "openai", "gpt-6": "openai", "gpt-5": "openai", "gpt-legacy": "openai",
+    "gpt-6-astra": "openai", "gpt-6.1-sol": "openai", "gpt-6.2": "openai",
+    "gpt-6": "openai", "gpt-5": "openai", "gpt-legacy": "openai",
     "gemini": "google", "grok": "xai",
     "kimi-thinking": "moonshot", "kimi": "moonshot",
     "glm": "zhipu", "minimax": "minimax", "deepseek": "deepseek",

@@ -4709,8 +4709,8 @@ def test_pilot_undo_after_a_fork_does_not_move_the_marker(pilot_config):
     async def _run():
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
-            await _select_target(pilot, "cat:deep-low")
-            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _add_offchain_model(pilot)
+            assert _sisyphus_model(pilot) == "deepseek/deepseek-v4-pro"
             await _new_preset(pilot, "forked")
             assert _active_row(pilot.app) == 1
 
@@ -4738,8 +4738,8 @@ def test_pilot_undo_into_a_deleted_preset_says_so(pilot_config):
             )[1]
 
             await _new_preset(pilot, "cheap")
-            await _select_target(pilot, "cat:deep-low")
-            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _add_offchain_model(pilot)
+            assert _sisyphus_model(pilot) == "deepseek/deepseek-v4-pro"
             await _switch_preset(pilot, 0)
             await _focus_preset(pilot, 1)
             await pilot.press("x")
@@ -4766,17 +4766,18 @@ def test_pilot_switch_to_an_identical_preset_drops_the_redo_tail(pilot_config):
         app = _build_app(cfg_path)
         async with app.run_test() as pilot:
             await _new_preset(pilot, "twin")  # identical to preset 1 by construction
-            await _select_target(pilot, "cat:deep-low")
-            await _select_candidate(pilot, "openai/gpt-5.5")
+            await _add_offchain_model(pilot)
+            assert _sisyphus_model(pilot) == "deepseek/deepseek-v4-pro"
             await pilot.press("u")  # creates a redo tail
             await pilot.pause()
+            assert pilot.app._history.can_redo
             await _switch_preset(pilot, 0)
             assert not pilot.app._history.can_redo, "a switch must invalidate the redo tail"
 
             await pilot.press("ctrl+r")
             await pilot.pause()
             assert _active_row(pilot.app) == 0
-            assert "deep-low" not in pilot.app.cfg.get("categories", {})
+            assert _sisyphus_model(pilot) == "opencode/claude-opus-4-7"
 
     asyncio.run(_run())
 
